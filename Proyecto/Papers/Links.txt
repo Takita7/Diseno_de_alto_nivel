@@ -1,0 +1,9 @@
+1)
+RISC-V GPU Architectures: https://www.emergentmind.com/topics/risc-v-based-gpus
+
+Inside VOLT: Designing an Open-Source GPU Compiler: https://arxiv.org/html/2511.13751v1
+
+2)
+RISC-V-Based GPGPU With Vector Capabilities for High-Performance Computing (Lo podemos buscar con la cuenta del tec porque está en IEEE): https://ieeexplore.ieee.org/document/11048708
+
+e-GPU: An Open-Source and Configurable RISC-V Graphic Processing Unit for TinyAI Applications: https://arxiv.org/html/2505.08421v1
