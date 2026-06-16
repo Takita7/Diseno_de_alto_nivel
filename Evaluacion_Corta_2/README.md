@@ -393,21 +393,3 @@ Espacio de direcciones del Bus (32 bits)
   Reference Manual"*, IEEE, 2023.
 - Accellera Systems Initiative, *SystemC Reference Implementation*,
   https://github.com/accellera-official/systemc
-
----
-
-## Declaración de Uso de IA
-
-Se utilizó **Claude (Anthropic)** como apoyo en las siguientes tareas:
-
-| Tarea                                                          | Tipo de uso                  |
-|------------------------------------------------------------------|---------------------------------|
-| Diseño de la arquitectura de módulos y conexiones                  | Consulta y validación            |
-| Generación del código de los módulos SystemC                       | Generación con revisión manual   |
-| Explicación de conceptos TLM 2.0 (b_transport, sockets, payloads)   | Consulta de conceptos            |
-| Selección y justificación de la fórmula ITU-R BT.709                | Consulta de concepto             |
-| Generación del README y diagramas                                  | Generación de documentación      |
-
-Todo el código fue revisado y comprendido por el equipo. Los errores
-tipográficos identificados durante el desarrollo fueron corregidos
-manualmente como parte del proceso de aprendizaje.
