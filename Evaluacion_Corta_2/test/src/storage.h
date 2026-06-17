@@ -5,7 +5,6 @@
 // El CPU accede directamente vía llamadas de método, NO por sockets TLM,
 // porque el disco no vive en el espacio de direcciones del bus.
 //
-// MP6160 – EC2 | Diseño de Alto Nivel
 // =============================================================================
 #pragma once
 
