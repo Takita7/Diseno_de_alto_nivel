@@ -31,7 +31,7 @@ private:
             trans.set_response_status(tlm::TLM_ADDRESS_ERROR_RESPONSE);
             return;
         }
-
+        
         if (cmd == tlm::TLM_WRITE_COMMAND)
             std::memcpy(&mem_[addr], data, len);
         else
@@ -50,8 +50,8 @@ private:
 
         if (addr + len > RAM_SIZE) return 0;
 
-        if (trans.get_command() == tlm:TLM_WRITE_COMMAND)
-            std::memcpy(data, &mem_[addr], len);
+        if (trans.get_command() == tlm::TLM_WRITE_COMMAND)
+            std::memcpy(&mem_[addr], data, len);
         else
             std::memcpy(data, &mem_[addr], len);
 

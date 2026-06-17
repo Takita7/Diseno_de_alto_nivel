@@ -63,7 +63,7 @@ private:
             return;
         }
 
-        if (trans.get_command() = tlm::TLM_WRITE_COMMAND) {
+        if (trans.get_command() == tlm::TLM_WRITE_COMMAND) {
             // leer el valor en el payload
             uint32_t val = 0;
             std::memcpy(&val, data, 4);
@@ -75,8 +75,8 @@ private:
                 case REG_CTRL:
                     reg_ctrl_ = val;
                     // Si recibe 1 cambiar a STATUS_BUSY
-                    if (val = 1) {
-                        reg_status_ STATUS_BUSY;
+                    if (val == 1) {
+                        reg_status_ = STATUS_BUSY;
                         start_ev_.notify();
                     }
                     break;
@@ -112,7 +112,7 @@ private:
             trans.set_address (addr);
             trans.set_data_ptr (buf);
             trans.set_data_length (len);
-            trans.set_streaming_witdh(len);
+            trans.set_streaming_width(len);
             trans.set_byte_enable_ptr(nullptr);
             trans.set_dmi_allowed (false);
             trans.set_response_status (tlm::TLM_INCOMPLETE_RESPONSE);
@@ -121,16 +121,16 @@ private:
         }
 
         void mem_write(uint64_t addr, uint8_t* buf, uint32_t len) {
-            tlm:tlm_generic_payload trans;
+            tlm::tlm_generic_payload trans;
             sc_core::sc_time delay = sc_core::SC_ZERO_TIME;
             trans.set_command (tlm::TLM_WRITE_COMMAND);
             trans.set_address (addr);
             trans.set_data_ptr (buf);
             trans.set_data_length (len);
-            trans.set_streaming_witdh (len);
+            trans.set_streaming_width (len);
             trans.set_byte_enable_ptr (nullptr);
             trans.set_dmi_allowed (false);
-            trans.set_response_status(tlm:TLM_INCOMPLETE_RESPONSE);
+            trans.set_response_status(tlm::TLM_INCOMPLETE_RESPONSE);
             init_socket -> b_transport (trans, delay);
             wait (delay);
         }
@@ -143,7 +143,7 @@ private:
              wait (start_ev_);
 
              std::cout << "[ACCEL] Iniciando RGB -> Gray \n"
-                       << "   src=0x" << st::hex << reg_src_
+                       << "   src=0x" << std::hex << reg_src_
                        << "   dst=0x" << reg_dst_
                        << "   pixeles=" << std::dec << reg_cnt_ << "\n";
 
@@ -152,13 +152,13 @@ private:
 
             uint32_t done = 0;
             while (done < reg_cnt_) {
-                uint32_t chunk = std::main(CHUNK_SIZE, reg_cnt_ - done);
+                uint32_t chunk = std::min(CHUNK_SIZE, reg_cnt_ - done);
 
                 // 1) Leer bloque RGB desde RAM
-                mem_read (reg_src_ + done * 3, reg_buf.data(), chunk * 3);
+                mem_read (reg_src_ + done * 3, rgb_buf.data(), chunk * 3);
 
                 // 2) Convertir a escala de grises - ITU-R BT.709
-                for (uint32 i =0; i < chunk; i++) {
+                for (uint32_t i =0; i < chunk; i++) {
                     uint8_t r = rgb_buf [i * 3 + 0];
                     uint8_t g = rgb_buf [i * 3 + 1];
                     uint8_t b = rgb_buf [i * 3 + 2];
@@ -178,6 +178,7 @@ private:
             reg_ctrl_ = 0;
             std::cout << "[ACCEL] Conversion terminada t="
                       << sc_core::sc_time_stamp() << "\n";
+            
         }
     }
 };

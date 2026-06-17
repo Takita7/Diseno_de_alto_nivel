@@ -18,7 +18,7 @@ SC_MODULE(Bus) {
         : cpu_socket("cpu_socket"),
           accel_in_socket("accel_in_socket"),
           ram_socket("ram_socket"),
-          accel_out_socket("acell_out_socket")
+          accel_out_socket("accel_out_socket")
     {
         cpu_socket.register_b_transport (this, &Bus::b_transport_cpu);
         accel_in_socket.register_b_transport (this, &Bus::b_transport_accel);
@@ -26,7 +26,7 @@ SC_MODULE(Bus) {
 
 private:
     void route(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) {
-        uint64_t addr = trans.get_addres();
+        uint64_t addr = trans.get_address();
 
         if (addr <= 0x03FFFFFF) {
             ram_socket -> b_transport(trans, delay);
@@ -39,12 +39,12 @@ private:
         } else {
             std::cerr << "[BUS] Direccion desconocida: 0x"
                       << std::hex << addr << std::dec << "\n";
-            trans.set_reponse_status(tlm::TLN_ADDRESS_ERROR_RESPONSE);
+            trans.set_response_status(tlm::TLM_ADDRESS_ERROR_RESPONSE);
         }
 
     }
 
-    void b_transport_cpu(tlm::tlm_generic_payload& trans, sc_coreL::sc_time& delay) {
+    void b_transport_cpu(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) {
         route(trans, delay);
     }
 
