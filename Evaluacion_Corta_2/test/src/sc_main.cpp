@@ -59,14 +59,15 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     std::cout << CLR_INFO << "\n[VERIFY] Verificando salida y memoria final..." << CLR_RST << "\n";
 
     std::vector<uint8_t> output = storage.load_image("images/output.raw");
-    std::cout << "  Archivo de salida cargado: images/output.raw\n";
+    std::cout << "  Archivo de salida cargado: images/output.raw (grayscale 1080p)\n";
     std::cout << "  Tamaño archivo salida = " << output.size() << " bytes\n";
     assert(output.size() == ImageConfig::GRAY_SIZE && "Tamaño de salida incorrecto");
 
     uint8_t ram_head[4] = {};
     ram.peek(ImageMap::OUTPUT_BASE, ram_head, 4);
-    std::cout << "  Primeros 4 bytes de salida en RAM [0x" << std::hex << ImageMap::OUTPUT_BASE << "] ="
-              << std::dec << " (" << (int)ram_head[0] << ", " << (int)ram_head[1] << ", "
+    std::cout << "  Primeros 4 bytes en RAM (output grayscale region) [0x" << std::hex
+              << ImageMap::OUTPUT_BASE << "] =" << std::dec
+              << " (" << (int)ram_head[0] << ", " << (int)ram_head[1] << ", "
               << (int)ram_head[2] << ", " << (int)ram_head[3] << ")\n";
 
     bool start_ok = std::memcmp(ram_head, output.data(), 4) == 0;
@@ -76,7 +77,8 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     ram.peek(ImageMap::OUTPUT_BASE + ImageConfig::GRAY_SIZE - 4, ram_tail, 4);
     uint8_t* out_tail = output.data() + ImageConfig::GRAY_SIZE - 4;
     bool tail_ok = std::memcmp(ram_tail, out_tail, 4) == 0;
-    std::cout << "  Últimos 4 bytes RAM vs archivo salida: " << (tail_ok ? "OK" : "ERROR") << "\n";
+    std::cout << "  Últimos 4 bytes en RAM (output grayscale tail) vs archivo salida: "
+              << (tail_ok ? "OK" : "ERROR") << "\n";
 
     std::cout << "  Salida [0..3] = (" << (int)output[0] << ", " << (int)output[1] << ", "
               << (int)output[2] << ", " << (int)output[3] << ")\n";

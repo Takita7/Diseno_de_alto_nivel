@@ -121,7 +121,8 @@ private:
         sc_assert(rgb.size() == ImageConfig::RGB_SIZE);
 
         // ── PASO 2: Escribir imagen RGB en RAM ───────────────────────────────
-        std::cout << "[CPU] PASO 2: Escribiendo imagen RGB en RAM\n"; 
+        std::cout << "[CPU] PASO 2: Escribiendo imagen RGB en RAM desde Storage a RAM base "
+                  << std::hex << ImageMap::INPUT_BASE << std::dec << "\n";
         uint32_t offset = 0;
         while (offset < rgb.size()) {
             uint32_t sz = std::min(CPU_CHUNK,
@@ -130,11 +131,11 @@ private:
                       rgb.data() + offset, sz);                
             offset += sz;
         }
-        std::cout << "[CPU] PASO 2: " << offset << " bytes escritos en RAM[0x"
+        std::cout << "[CPU] PASO 2: " << offset << " bytes escritos en RAM (RGB source) at 0x"
                   << std::hex << ImageMap::INPUT_BASE << "]\n" << std::dec;
 
         // ── PASO 3: Configurar Acelerador ────────────────────────────────────
-        std::cout << "[CPU] PASO 3: Configurar Acelerador\n";
+        std::cout << "[CPU] PASO 3: Configurar Acelerador (RGB source -> grayscale dest)\n";
         write_reg(AccelReg::SRC, static_cast<uint32_t>(ImageMap::INPUT_BASE));
         write_reg(AccelReg::DST, static_cast<uint32_t>(ImageMap::OUTPUT_BASE));
         write_reg(AccelReg::CNT, ImageConfig::WIDTH * ImageConfig::HEIGHT);
@@ -146,7 +147,8 @@ private:
             wait(sc_core::sc_time(500, sc_core::SC_NS));
 
         // ── PASO 5: Leer imagen gris desde RAM ───────────────────────────────
-        std::cout << "[CPU] PASO 5: Leyendo imagen gris desde RAM\n";
+        std::cout << "[CPU] PASO 5: Leyendo imagen grayscale desde RAM base 0x"
+                  << std::hex << ImageMap::OUTPUT_BASE << std::dec << "\n";
         std::vector<uint8_t> gray(ImageConfig::GRAY_SIZE);
         offset = 0;
         while (offset < gray.size()) {
@@ -157,7 +159,7 @@ private:
         }
 
         // ── PASO 6: Guardar imagen gris en disco ─────────────────────────────
-        std::cout << "[CPU] PASO 6: Guardando imagen de salida\n";
+        std::cout << "[CPU] PASO 6: Guardando imagen grayscale de salida en images/output.raw\n";
         storage_ptr->save_image("images/output.raw", gray);
 
         std::cout << "\n[CPU] Stage 4 completado en "

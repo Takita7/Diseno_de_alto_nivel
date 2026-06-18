@@ -140,10 +140,12 @@ void Accelerator::process_thread()
         status_ = STATUS_BUSY;
 
         std::ostringstream start_msg;
-        start_msg << "Inicio procesamiento | input=0x" << std::hex << input_addr_
-                  << " output=0x" << output_addr_
-                  << " pixels=" << std::dec << num_pixels_
-                  << " | t=" << sc_core::sc_time_stamp();
+        start_msg << "Inicio procesamiento | input_base=0x" << std::hex << input_addr_
+                  << " (RGB source)\n  output_base=0x" << output_addr_
+                  << " (grayscale dest) pixels=" << std::dec << num_pixels_
+                  << "\n  rgb_bytes=" << (num_pixels_ * 3)
+                  << "\n  gray_bytes=" << num_pixels_
+                  << "\n  t=" << sc_core::sc_time_stamp();
         SC_REPORT_INFO("Accelerator", start_msg.str().c_str());
 
         if (num_pixels_ == 0) {
@@ -205,6 +207,7 @@ void Accelerator::process_thread()
 
             std::ostringstream done_msg;
             done_msg << "Procesamiento terminado | pixels=" << num_pixels_
+                     << " gray_bytes=" << num_pixels_
                      << " | t=" << sc_core::sc_time_stamp();
             SC_REPORT_INFO("Accelerator", done_msg.str().c_str());
         }
