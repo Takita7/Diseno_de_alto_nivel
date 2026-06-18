@@ -1,0 +1,27 @@
+# Compiled object files and executables
+*.o
+*.out
+*.exe
+*.obj
+
+# Build directories
+/build/
+/test/build/
+
+# SystemC binary and runtime artifacts
+tlm_image
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Generated image files and temporary previews
+#images/*.raw
+#images/*_preview.png
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.DS_Store
