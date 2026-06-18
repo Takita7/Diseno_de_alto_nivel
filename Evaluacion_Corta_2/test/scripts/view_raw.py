@@ -13,14 +13,24 @@ import os
 
 W, H = 1920, 1080
 
-def view_raw(path: str, channels: int = 3) -> None:
+def view_raw(path: str, channels: int = None) -> None:
     if not os.path.exists(path):
         print(f"[ERROR] Archivo no encontrado: {path}")
         sys.exit(1)
 
     data = np.fromfile(path, dtype=np.uint8)
-    expected = W * H * channels
 
+    # Detectar automáticamente según el tamaño del archivo si no se pasa el número de canales
+    if channels is None:
+        if data.size == W * H * 3:
+            channels = 3
+        elif data.size == W * H:
+            channels = 1
+        else:
+            print(f" Tamaño no soportado: {data.size} bytes")
+            channels = 3
+
+    expected = W * H * channels
     if data.size != expected:
         print(f"[WARN] Tamaño inesperado: {data.size} bytes (esperado {expected})")
 
@@ -56,5 +66,5 @@ def view_raw(path: str, channels: int = 3) -> None:
 
 if __name__ == "__main__":
     path     = sys.argv[1] if len(sys.argv) > 1 else "images/input.raw"
-    channels = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    channels = int(sys.argv[2]) if len(sys.argv) > 2 else None
     view_raw(path, channels)
