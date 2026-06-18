@@ -19,7 +19,7 @@
 #include <cstring>
 #include <iostream>
 #include "storage.h"                              
-#include "Bus.h"                                  
+#include "bus.h"                                  
 
 // -----------------------------------------------------------------------------
 // Mapa de regiones de imagen dentro de la RAM

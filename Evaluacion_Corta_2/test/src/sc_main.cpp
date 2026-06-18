@@ -13,10 +13,10 @@
 #include <systemc.h>
 #include <tlm_utils/simple_target_socket.h>
 #include "storage.h"
-#include "RAM.h"
-#include "Bus.h"
-#include "CPU.h"
-#include "Accelerator.h"
+#include "ram.h"
+#include "bus.h"
+#include "cpu.h"
+#include "accelerator.h"
 
 #include <cassert>
 #include <iostream>

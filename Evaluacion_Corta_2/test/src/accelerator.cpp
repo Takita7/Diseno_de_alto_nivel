@@ -1,4 +1,4 @@
-#include "Accelerator.h"
+#include "accelerator.h"
 
 #include <cstring>
 #include <sstream>

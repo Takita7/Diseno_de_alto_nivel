@@ -18,7 +18,7 @@ LIBS := -L$(LIBDIR) \
 # ── Fuentes (agregar aquí cada nuevo módulo) ───────────────────────────────────
 SRCS := src/sc_main.cpp \
         src/storage.cpp \
-        src/Accelerator.cpp
+        src/accelerator.cpp
 
 # Los .o van a la carpeta build/ para no ensuciar src/
 OBJS := $(patsubst src/%.cpp, build/%.o, $(SRCS))

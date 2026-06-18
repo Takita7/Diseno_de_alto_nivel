@@ -12,7 +12,7 @@
 #include <tlm.h>
 #include <tlm_utils/simple_initiator_socket.h>
 #include "storage.h"
-#include "RAM.h"
+#include "ram.h"
 
 #include <cassert>
 #include <iomanip>
