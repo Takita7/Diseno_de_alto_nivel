@@ -22,11 +22,21 @@ std::vector<uint8_t> PersistentStorage::load_image(const std::string& path) {
     size_t file_size = static_cast<size_t>(file.tellg());
     file.seekg(0, std::ios::beg);
 
-    // Verificar tamaño esperado para 1080p RGB
-    if (file_size != ImageConfig::RGB_SIZE) {
+    // Determinar tamaño esperado según el tipo de archivo
+    size_t expected_size = ImageConfig::RGB_SIZE;
+    if (path.find("output.raw") != std::string::npos) {
+        expected_size = ImageConfig::GRAY_SIZE;
+    } else if (path.find("input.raw") != std::string::npos) {
+        expected_size = ImageConfig::RGB_SIZE;
+    } else if (file_size == ImageConfig::GRAY_SIZE) {
+        expected_size = ImageConfig::GRAY_SIZE;
+    }
+
+    if (file_size != expected_size) {
         std::ostringstream oss;
         oss << "Tamaño inesperado: " << file_size
-            << " B (esperado " << ImageConfig::RGB_SIZE << " B para 1080p RGB)";
+            << " B (esperado " << expected_size
+            << " B para " << (expected_size == ImageConfig::RGB_SIZE ? "1080p RGB" : "1080p grayscale") << ")";
         SC_REPORT_WARNING("Storage", oss.str().c_str());
     }
 
