@@ -121,7 +121,7 @@ SC_MODULE(Tester) {
     // ── SC_THREAD con los tests ───────────────────────────────────────────────
     void run() {
         std::cout << CLR_INFO
-                  << "\n=== TLM Image Processor – Stage 3: Bus ==="
+                  << "\n=== TLM Image Processor  Stage 3: Bus ==="
                   << CLR_RST << "\n";
 
         // ── TEST 1: Write/read a RAM a través del Bus ─────────────────────────

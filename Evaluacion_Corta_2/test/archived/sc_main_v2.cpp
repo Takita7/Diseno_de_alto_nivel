@@ -75,7 +75,7 @@ SC_MODULE(Tester) {
     // ─────────────────────────────────────────────────────────────────────────
     void run() {
         std::cout << CLR_INFO
-                  << "\n=== TLM Image Processor – Stage 2: RAM ==="
+                  << "\n=== TLM Image Processor  Stage 2: RAM ==="
                   << CLR_RST << "\n";
 
         // ── TEST 1: escribir y leer patrón de 4 bytes ────────────────────────

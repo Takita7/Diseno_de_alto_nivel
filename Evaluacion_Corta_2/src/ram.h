@@ -27,10 +27,8 @@ SC_MODULE(RAM) {
         SC_REPORT_INFO("RAM", "Módulo RAM creado (64 MB)");
     }
 
-    // -------------------------------------------------------------------------
+
     // peek  –  lectura directa para verificación en tests (sin TLM)
-    // No avanza el tiempo de simulación. No usar en módulos productivos.
-    // -------------------------------------------------------------------------
     void peek(uint64_t addr, uint8_t* out, unsigned int len) const {
         if (addr + len <= RAM_SIZE)
             std::memcpy(out, mem_.data() + addr, len);
@@ -39,9 +37,8 @@ SC_MODULE(RAM) {
 private:
     std::vector<uint8_t> mem_;
 
-    // -------------------------------------------------------------------------
+
     // b_transport  –  transacción TLM bloqueante (la usan CPU y Acelerador)
-    // -------------------------------------------------------------------------
     void b_transport(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) {
         tlm::tlm_command cmd  = trans.get_command();
         uint64_t         addr = trans.get_address();
@@ -63,15 +60,14 @@ private:
         else
             std::memcpy(data, &mem_[addr], len);   // RAM -> host
 
-        // Delay sintético: 1 ns por byte accedido
+        // Delay artificial: 1 ns por byte accedido
         delay += sc_core::sc_time(static_cast<double>(len), sc_core::SC_NS);
         trans.set_response_status(tlm::TLM_OK_RESPONSE);
     }
 
-    // -------------------------------------------------------------------------
+
     // transport_dbg  –  acceso de debug (sin modificar el tiempo de simulación)
     // Lo usa el simulador para inspección interna; no genera eventos de tiempo.
-    // -------------------------------------------------------------------------
     unsigned int transport_dbg(tlm::tlm_generic_payload& trans) {
         uint64_t     addr = trans.get_address();
         uint8_t*     data = trans.get_data_ptr();

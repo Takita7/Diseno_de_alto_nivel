@@ -1,11 +1,5 @@
 # =============================================================================
-# Makefile – TLM Image Processor (test stage)
-# =============================================================================
-# Mejoras:
-#   - Dependency tracking automático (.d files)
-#   - Variables organizadas por categoría
-#   - Targets específicos (clean-build, rebuild, etc.)
-#   - Mejor documentación interna
+# Makefile – TLM Image Processor 
 # =============================================================================
 
 # ── CONFIGURACIÓN ──────────────────────────────────────────────────────────────
@@ -65,7 +59,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | dirs
 # Incluir .d files si existen (usado después de compilar)
 -include $(DEPS)
 
-# ── TARGETS ÚTILES ────────────────────────────────────────────────────────────
+# TARGETS ÚTILES 
 gen:
 	@echo "[Gen] Generando imagen de prueba..."
 	python3 scripts/gen_raw.py
@@ -105,10 +99,10 @@ clean-all: clean-build
 
 clean: clean-build
 
-# ── INFORMACIÓN ────────────────────────────────────────────────────────────────
+# INFORMACIÓN 
 info:
 	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║ TLM Image Processor – Configuración                           ║"
+	@echo "║ TLM Image Processor Configuración                           ║"
 	@echo "╠════════════════════════════════════════════════════════════════╣"
 	@echo "║ SYSTEMC_HOME    = $(SYSTEMC_HOME)"
 	@echo "║ CXX             = $(CXX)"
@@ -122,19 +116,19 @@ info:
 
 help:
 	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║ Targets disponibles                                           ║"
+	@echo "║ Targets disponibles                                            ║"
 	@echo "╠════════════════════════════════════════════════════════════════╣"
-	@echo "║ make all         – Compilar (default)                         ║"
-	@echo "║ make gen         – Generar imagen de prueba                   ║"
-	@echo "║ make run         – Compilar, simular y generar comparación    ║"
-	@echo "║ make exec        – Ejecutar (imagen existente)                ║"
-	@echo "║ make view        – Ver salida en escala de grises             ║"
-	@echo "║ make compare     – Generar figura: input.raw vs output.raw    ║"
-	@echo "║ make view-show   – Mostrar figura de comparación              ║"
-	@echo "║ make rebuild     – Limpiar y compilar todo                    ║"
-	@echo "║ make clean       – Eliminar objetos y binario                 ║"
-	@echo "║ make clean-build – Alias para clean                          ║"
-	@echo "║ make clean-all   – Eliminar todo (incluyendo imágenes)        ║"
-	@echo "║ make info        – Mostrar configuración                      ║"
-	@echo "║ make help        – Este mensaje                               ║"
+	@echo "║ make all          Compilar (default)                           ║"
+	@echo "║ make gen          Generar imagen de prueba                     ║"
+	@echo "║ make run          Compilar, simular y generar comparación      ║"
+	@echo "║ make exec         Ejecutar (imagen existente)                  ║"
+	@echo "║ make view         Ver salida en escala de grises               ║"
+	@echo "║ make compare      Generar figura: input.raw vs output.raw      ║"
+	@echo "║ make view-show    Mostrar figura de comparación                ║"
+	@echo "║ make rebuild      Limpiar y compilar todo                      ║"
+	@echo "║ make clean        Eliminar objetos y binario                   ║"
+	@echo "║ make clean-build  Alias para clean                             ║"
+	@echo "║ make clean-all    Eliminar todo (incluyendo imágenes)          ║"
+	@echo "║ make info         Mostrar configuración                        ║"
+	@echo "║ make help         Este mensaje                                 ║"
 	@echo "╚════════════════════════════════════════════════════════════════╝"

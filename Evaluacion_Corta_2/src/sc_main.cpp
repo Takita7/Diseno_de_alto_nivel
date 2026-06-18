@@ -1,14 +1,10 @@
 // =============================================================================
-// sc_main.cpp  –  Stage 4: Prueba del CPU (pasos 1 y 2)
+// sc_main.cpp  –  Sistema Completo: CPU + Bus + RAM + Acelerador
 //
 // Topología:
 //   CPU.socket → Bus.cpu_socket → Bus.ram_socket    → RAM.socket
-//                               → Bus.accel_out_socket → AccelStub.socket
+//              → Bus.accel_out_socket → AccelStub.socket
 //
-// Tests:
-//   El CPU corre su SC_THREAD completo (pasos 1 y 2 reales, 3-6 stubs).
-//   Tras sc_stop(), sc_main verifica los datos en RAM usando ram.peek()
-//   (acceso de debug directo, sin necesidad de socket ni SC_THREAD).
 // =============================================================================
 #include <systemc.h>
 #include <tlm_utils/simple_target_socket.h>
@@ -33,7 +29,7 @@
 int sc_main(int /*argc*/, char* /*argv*/[]) {
 
     std::cout << CLR_INFO
-              << "\n=== TLM Image Processor – Stage 4: CPU (pasos 1 y 2) ==="
+              << "\n=== TLM Image Processor ==="
               << CLR_RST << "\n";
 
     // ── Instanciar módulos ────────────────────────────────────────────────────
@@ -56,7 +52,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     sc_core::sc_start();
 
     // Verificación post-simulación con ram.peek() y archivo de salida
-    std::cout << CLR_INFO << "\n[VERIFY] Verificando salida y memoria final..." << CLR_RST << "\n";
+    std::cout << CLR_INFO << "\n[VERIF] Verificando salida y memoria final..." << CLR_RST << "\n";
 
     std::vector<uint8_t> output = storage.load_image("images/output.raw");
     std::cout << "  Archivo de salida cargado: images/output.raw (grayscale 1080p)\n";
@@ -91,7 +87,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
               << "Salida verificada en RAM y archivo de salida.\n";
 
     std::cout << CLR_INFO
-              << "\n=== Stage 4 COMPLETO | t=" << sc_core::sc_time_stamp()
+              << "\n=== Sistema Completo, Procesamiento Terminado t=" << sc_core::sc_time_stamp()
               << " ===" << CLR_RST << "\n\n";
 
     return 0;

@@ -16,7 +16,6 @@
 #include <cassert>
 #include <iomanip>
 
-// Colores para la consola (opcional, ignora si no funciona en tu terminal)
 #define CLR_OK   "\033[32m"
 #define CLR_ERR  "\033[31m"
 #define CLR_INFO "\033[36m"
@@ -26,7 +25,7 @@
 int sc_main(int /*argc*/, char* /*argv*/[]) {
 
     std::cout << CLR_INFO
-              << "\n=== TLM Image Processor – Stage 1: PersistentStorage ==="
+              << "\n=== TLM Image Processor Stage 1: PersistentStorage ==="
               << CLR_RST << "\n";
 
     // ── Verificar que existe el archivo de entrada ────────────────────────────

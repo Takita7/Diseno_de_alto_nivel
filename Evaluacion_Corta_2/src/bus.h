@@ -5,12 +5,12 @@
 //   0x00000000 – 0x03FFFFFF  →  RAM       (64 MB)
 //   0x04000000 – 0x040000FF  →  Acelerador (registros de config)
 //
-// El Bus tiene DOS target sockets de entrada:
-//   cpu_socket   – conectado al initiator del CPU
+// El Bus tiene 2 target sockets de entrada:
+//   cpu_socket      – conectado al initiator del CPU
 //   accel_in_socket – conectado al initiator del Acelerador (para que
 //                     el Acelerador pueda leer/escribir en la RAM)
 //
-// Y DOS initiator sockets de salida:
+// Y 2 initiator sockets de salida:
 //   ram_socket       – conectado al target de la RAM
 //   accel_out_socket – conectado al target del Acelerador (config regs)
 //

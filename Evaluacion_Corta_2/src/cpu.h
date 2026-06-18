@@ -4,11 +4,10 @@
 // Controla el flujo completo del sistema:
 //   1. Carga imagen RGB desde Storage
 //   2. Escribe imagen en RAM vía Bus
-//   3. Configura registros del Acelerador vía Bus   (stub por ahora)
-//   4. Espera que el Acelerador termine             (stub por ahora)
-//   5. Lee imagen gris desde RAM vía Bus            (stub por ahora)
-//   6. Guarda imagen gris en Storage               (stub por ahora)
-//
+//   3. Configura registros del Acelerador vía Bus   
+//   4. Espera que el Acelerador termine             
+//   5. Lee imagen gris desde RAM vía Bus            
+//   6. Guarda imagen gris en Storage              
 // =============================================================================
 #pragma once
 
@@ -37,7 +36,7 @@ namespace AccelReg {
     constexpr uint64_t CNT    = MemoryMap::ACCEL_BASE + 0x08; // num. píxeles
     constexpr uint64_t CTRL   = MemoryMap::ACCEL_BASE + 0x0C; // write 1 = start
     constexpr uint64_t STATUS = MemoryMap::ACCEL_BASE + 0x10; // read  2 = done
-    constexpr uint32_t DONE   = 2u;
+    constexpr uint32_t DONE   = 2;
 }
 
 // Tamaño de bloque por transacción TLM (64 KB)
@@ -110,18 +109,18 @@ private:
     // run  –  SC_THREAD con el flujo principal del sistema
     // -------------------------------------------------------------------------
     void run() {
-        wait(sc_core::sc_time(10, sc_core::SC_NS)); // FIX 11: faltaba ;
+        wait(sc_core::sc_time(10, sc_core::SC_NS)); 
 
         SC_REPORT_INFO("CPU", "Iniciando flujo de procesamiento");
 
-        // ── PASO 1: Cargar imagen RGB desde Storage ───────────────────────────
+        // PASO 1: Cargar imagen RGB desde Storage 
         std::cout << "\n[CPU] PASO 1: Cargando imagen desde disco\n";
         sc_assert(storage_ptr != nullptr);
         std::vector<uint8_t> rgb = storage_ptr->load_image("images/input.raw");
         sc_assert(rgb.size() == ImageConfig::RGB_SIZE);
 
-        // ── PASO 2: Escribir imagen RGB en RAM ───────────────────────────────
-        std::cout << "[CPU] PASO 2: Escribiendo imagen RGB en RAM desde Storage a RAM base "
+        // PASO 2: Escribir imagen RGB en RAM 
+        std::cout << "[CPU] PASO 2: Escribiendo imagen RGB en RAM desde Storage a RAM dir "
                   << std::hex << ImageMap::INPUT_BASE << std::dec << "\n";
         uint32_t offset = 0;
         while (offset < rgb.size()) {
@@ -131,23 +130,23 @@ private:
                       rgb.data() + offset, sz);                
             offset += sz;
         }
-        std::cout << "[CPU] PASO 2: " << offset << " bytes escritos en RAM (RGB source) at 0x"
+        std::cout << "[CPU] PASO 2: " << offset << " bytes escritos en RAM (RGB source) en dir 0x"
                   << std::hex << ImageMap::INPUT_BASE << "]\n" << std::dec;
 
-        // ── PASO 3: Configurar Acelerador ────────────────────────────────────
+        // PASO 3: Configurar Acelerador 
         std::cout << "[CPU] PASO 3: Configurar Acelerador (RGB source -> grayscale dest)\n";
         write_reg(AccelReg::SRC, static_cast<uint32_t>(ImageMap::INPUT_BASE));
         write_reg(AccelReg::DST, static_cast<uint32_t>(ImageMap::OUTPUT_BASE));
         write_reg(AccelReg::CNT, ImageConfig::WIDTH * ImageConfig::HEIGHT);
         
-        // ── PASO 4: Iniciar Acelerador y esperar ─────────────────────────────
+        // PASO 4: Iniciar Acelerador y esperar 
         std::cout << "[CPU] PASO 4: Iniciar acelerador y esperar\n";
         write_reg(AccelReg::CTRL, 1);
         while (read_reg(AccelReg::STATUS) != AccelReg::DONE)
             wait(sc_core::sc_time(500, sc_core::SC_NS));
 
-        // ── PASO 5: Leer imagen gris desde RAM ───────────────────────────────
-        std::cout << "[CPU] PASO 5: Leyendo imagen grayscale desde RAM base 0x"
+        // PASO 5: Leer imagen gris desde RAM
+        std::cout << "[CPU] PASO 5: Leyendo imagen grayscale desde RAM dir 0x"
                   << std::hex << ImageMap::OUTPUT_BASE << std::dec << "\n";
         std::vector<uint8_t> gray(ImageConfig::GRAY_SIZE);
         offset = 0;
@@ -158,11 +157,11 @@ private:
             offset += sz;
         }
 
-        // ── PASO 6: Guardar imagen gris en disco ─────────────────────────────
+        // PASO 6: Guardar imagen gris en disco 
         std::cout << "[CPU] PASO 6: Guardando imagen grayscale de salida en images/output.raw\n";
         storage_ptr->save_image("images/output.raw", gray);
 
-        std::cout << "\n[CPU] Stage 4 completado en "
+        std::cout << "\n[CPU] Todo el procesamiento del CPU ha terminado. Deteniendo simulación"
                   << sc_core::sc_time_stamp() << "\n";
         sc_core::sc_stop();
     }
