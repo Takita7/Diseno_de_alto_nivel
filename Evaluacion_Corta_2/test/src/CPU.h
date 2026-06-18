@@ -36,7 +36,8 @@ namespace AccelReg {
     constexpr uint64_t DST    = MemoryMap::ACCEL_BASE + 0x04; // dir. salida
     constexpr uint64_t CNT    = MemoryMap::ACCEL_BASE + 0x08; // num. píxeles
     constexpr uint64_t CTRL   = MemoryMap::ACCEL_BASE + 0x0C; // write 1 = start
-    constexpr uint64_t STATUS = MemoryMap::ACCEL_BASE + 0x0C; // read  1 = done
+    constexpr uint64_t STATUS = MemoryMap::ACCEL_BASE + 0x10; // read  2 = done
+    constexpr uint32_t DONE   = 2u;
 }
 
 // Tamaño de bloque por transacción TLM (64 KB)
@@ -133,35 +134,31 @@ private:
                   << std::hex << ImageMap::INPUT_BASE << "]\n" << std::dec;
 
         // ── PASO 3: Configurar Acelerador ────────────────────────────────────
-        // TODO (Stage 5): activar cuando el Acelerador esté implementado
-        std::cout << "[CPU] PASO 3: (stub) Configurar Acelerador\n";
-        // write_reg(AccelReg::SRC, static_cast<uint32_t>(ImageMap::INPUT_BASE));
-        // write_reg(AccelReg::DST, static_cast<uint32_t>(ImageMap::OUTPUT_BASE));
-        // write_reg(AccelReg::CNT, ImageConfig::WIDTH * ImageConfig::HEIGHT); 
+        std::cout << "[CPU] PASO 3: Configurar Acelerador\n";
+        write_reg(AccelReg::SRC, static_cast<uint32_t>(ImageMap::INPUT_BASE));
+        write_reg(AccelReg::DST, static_cast<uint32_t>(ImageMap::OUTPUT_BASE));
+        write_reg(AccelReg::CNT, ImageConfig::WIDTH * ImageConfig::HEIGHT);
         
         // ── PASO 4: Iniciar Acelerador y esperar ─────────────────────────────
-        // TODO (Stage 5): activar cuando el Acelerador esté implementado
-        std::cout << "[CPU] PASO 4: (stub) Esperar Acelerador\n";
-        // write_reg(AccelReg::CTRL, 1);
-        // while (read_reg(AccelReg::STATUS) != 1u)   
-        //     wait(sc_core::sc_time(500, sc_core::SC_NS));
+        std::cout << "[CPU] PASO 4: Iniciar acelerador y esperar\n";
+        write_reg(AccelReg::CTRL, 1);
+        while (read_reg(AccelReg::STATUS) != AccelReg::DONE)
+            wait(sc_core::sc_time(500, sc_core::SC_NS));
 
         // ── PASO 5: Leer imagen gris desde RAM ───────────────────────────────
-        // TODO (Stage 5): activar cuando el Acelerador esté implementado
-        std::cout << "[CPU] PASO 5: (stub) Leer imagen gris\n";
-        // std::vector<uint8_t> gray(ImageConfig::GRAY_SIZE);  
-        // offset = 0;
-        // while (offset < gray.size()) {
-        //     uint32_t sz = std::min(CPU_CHUNK,
-        //                   static_cast<uint32_t>(gray.size() - offset));
-        //     tlm_read(ImageMap::OUTPUT_BASE + offset, gray.data() + offset, sz);
-        //     offset += sz;
-        // }
+        std::cout << "[CPU] PASO 5: Leyendo imagen gris desde RAM\n";
+        std::vector<uint8_t> gray(ImageConfig::GRAY_SIZE);
+        offset = 0;
+        while (offset < gray.size()) {
+            uint32_t sz = std::min(CPU_CHUNK,
+                          static_cast<uint32_t>(gray.size() - offset));
+            tlm_read(ImageMap::OUTPUT_BASE + offset, gray.data() + offset, sz);
+            offset += sz;
+        }
 
         // ── PASO 6: Guardar imagen gris en disco ─────────────────────────────
-        // TODO (Stage 5): activar cuando el Acelerador esté implementado
-        std::cout << "[CPU] PASO 6: (stub) Guardar imagen\n";
-        // storage_ptr->save_image("images/output.raw", gray); 
+        std::cout << "[CPU] PASO 6: Guardando imagen de salida\n";
+        storage_ptr->save_image("images/output.raw", gray);
 
         std::cout << "\n[CPU] Stage 4 completado en "
                   << sc_core::sc_time_stamp() << "\n";

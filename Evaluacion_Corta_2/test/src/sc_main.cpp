@@ -16,6 +16,7 @@
 #include "RAM.h"
 #include "Bus.h"
 #include "CPU.h"
+#include "Accelerator.h"
 
 #include <cassert>
 #include <iostream>
@@ -27,18 +28,7 @@
 #define CLR_RST  "\033[0m"
 
 // =============================================================================
-// AccelStub  –  placeholder hasta Stage 5
-// =============================================================================
-SC_MODULE(AccelStub) {
-    tlm_utils::simple_target_socket<AccelStub> socket;
-    SC_CTOR(AccelStub) : socket("socket") {
-        socket.register_b_transport(this, &AccelStub::b_transport);
-    }
-    void b_transport(tlm::tlm_generic_payload& trans, sc_core::sc_time& /*delay*/) {
-        trans.set_response_status(tlm::TLM_OK_RESPONSE);
-    }
-};
-
+// Test del sistema completo
 // =============================================================================
 int sc_main(int /*argc*/, char* /*argv*/[]) {
 
@@ -50,7 +40,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     PersistentStorage storage  ("storage");
     RAM               ram      ("ram");
     Bus               bus      ("bus");
-    AccelStub         accel_stub("accel_stub");
+    Accelerator       accel    ("accelerator");
     CPU               cpu      ("cpu");
 
     cpu.set_storage(&storage);
@@ -58,53 +48,45 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     // ── Conectar sockets ─────────────────────────────────────────────────────
     cpu.socket           .bind(bus.cpu_socket);
     bus.ram_socket       .bind(ram.socket);
-    bus.accel_out_socket .bind(accel_stub.socket);
+    bus.accel_out_socket .bind(accel.cfg_socket);
+    accel.mem_socket     .bind(bus.accel_in_socket);
 
     // ── Ejecutar simulación ───────────────────────────────────────────────────
     // El CPU corre su SC_THREAD y llama sc_stop() al terminar los pasos 1 y 2
     sc_core::sc_start();
 
-    // ── Verificación post-simulación con ram.peek() ───────────────────────────
-    // peek() es un acceso directo al vector interno de RAM, sin TLM ni socket.
-    // Perfecto para verificar el contenido final sin perturbar la simulación.
-    std::cout << CLR_INFO << "\n[VERIFY] Verificando contenido de RAM..." << CLR_RST << "\n";
+    // Verificación post-simulación con ram.peek() y archivo de salida
+    std::cout << CLR_INFO << "\n[VERIFY] Verificando salida y memoria final..." << CLR_RST << "\n";
 
-    // Cargar imagen original para comparar
-    std::vector<uint8_t> original = storage.load_image("images/input.raw");
+    std::vector<uint8_t> output = storage.load_image("images/output.raw");
+    std::cout << "  Archivo de salida cargado: images/output.raw\n";
+    std::cout << "  Tamaño archivo salida = " << output.size() << " bytes\n";
+    assert(output.size() == ImageConfig::GRAY_SIZE && "Tamaño de salida incorrecto");
 
-    // Leer los primeros 12 bytes de RAM (4 píxeles) con peek() directo
-    uint8_t head_ram[12] = {};
-    ram.peek(0, head_ram, 12);
+    uint8_t ram_head[4] = {};
+    ram.peek(ImageMap::OUTPUT_BASE, ram_head, 4);
+    std::cout << "  Primeros 4 bytes de salida en RAM [0x" << std::hex << ImageMap::OUTPUT_BASE << "] ="
+              << std::dec << " (" << (int)ram_head[0] << ", " << (int)ram_head[1] << ", "
+              << (int)ram_head[2] << ", " << (int)ram_head[3] << ")\n";
 
-    std::cout << "  Primeros 4 píxeles en RAM vs original:\n";
-    bool head_ok = true;
-    for (int i = 0; i < 4; i++) {
-        uint8_t r_ram  = head_ram[i*3],   g_ram  = head_ram[i*3+1], b_ram  = head_ram[i*3+2];
-        uint8_t r_orig = original[i*3], g_orig = original[i*3+1], b_orig = original[i*3+2];
-        bool match = (r_ram==r_orig && g_ram==g_orig && b_ram==b_orig);
-        if (!match) head_ok = false;
-        std::cout << "    px[" << i << "] RAM=("
-                  << (int)r_ram  << "," << (int)g_ram  << "," << (int)b_ram  << ")  orig=("
-                  << (int)r_orig << "," << (int)g_orig << "," << (int)b_orig << ")  "
-                  << (match ? "✓" : "✗") << "\n";
-    }
+    bool start_ok = std::memcmp(ram_head, output.data(), 4) == 0;
+    std::cout << "  Primeros 4 bytes RAM vs archivo salida: " << (start_ok ? "OK" : "ERROR") << "\n";
 
-    // Leer los últimos 3 bytes (último píxel)
-    uint8_t tail_ram[3] = {};
-    ram.peek(ImageConfig::RGB_SIZE - 3, tail_ram, 3);
-    uint8_t* tail_orig = original.data() + ImageConfig::RGB_SIZE - 3;
-    bool tail_ok = std::memcmp(tail_ram, tail_orig, 3) == 0;
-    std::cout << "  Último píxel: RAM=("
-              << (int)tail_ram[0]  << "," << (int)tail_ram[1]  << "," << (int)tail_ram[2]  << ")"
-              << "  orig=("
-              << (int)tail_orig[0] << "," << (int)tail_orig[1] << "," << (int)tail_orig[2] << ")"
-              << "  " << (tail_ok ? "✓" : "✗") << "\n";
+    uint8_t ram_tail[4] = {};
+    ram.peek(ImageMap::OUTPUT_BASE + ImageConfig::GRAY_SIZE - 4, ram_tail, 4);
+    uint8_t* out_tail = output.data() + ImageConfig::GRAY_SIZE - 4;
+    bool tail_ok = std::memcmp(ram_tail, out_tail, 4) == 0;
+    std::cout << "  Últimos 4 bytes RAM vs archivo salida: " << (tail_ok ? "OK" : "ERROR") << "\n";
 
-    assert(head_ok && tail_ok && "Datos en RAM no coinciden con imagen original");
+    std::cout << "  Salida [0..3] = (" << (int)output[0] << ", " << (int)output[1] << ", "
+              << (int)output[2] << ", " << (int)output[3] << ")\n";
+    std::cout << "  Salida [end-4..end-1] = (" << (int)out_tail[0] << ", " << (int)out_tail[1] << ", "
+              << (int)out_tail[2] << ", " << (int)out_tail[3] << ")\n";
+
+    assert(start_ok && tail_ok && "La salida en RAM no coincide con el archivo guardado");
 
     std::cout << CLR_OK << "\n  [OK] " << CLR_RST
-              << "RAM[0.." << ImageConfig::RGB_SIZE-1
-              << "] verificado. CPU pasos 1 y 2 correctos.\n";
+              << "Salida verificada en RAM y archivo de salida.\n";
 
     std::cout << CLR_INFO
               << "\n=== Stage 4 COMPLETO | t=" << sc_core::sc_time_stamp()

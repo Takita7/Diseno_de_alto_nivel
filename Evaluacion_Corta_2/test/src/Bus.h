@@ -38,7 +38,7 @@ SC_MODULE(Bus) {
 
     // Sockets de entrada (targets) — reciben transacciones
     tlm_utils::simple_target_socket<Bus> cpu_socket;
-    // accel_in_socket se agrega cuando se integre el Acelerador
+    tlm_utils::simple_target_socket<Bus> accel_in_socket;  // recibe accesos de memoria del acelerador
 
     // Sockets de salida (initiators) — reenvían transacciones
     tlm_utils::simple_initiator_socket<Bus> ram_socket;
@@ -46,10 +46,12 @@ SC_MODULE(Bus) {
 
     SC_CTOR(Bus)
         : cpu_socket("cpu_socket"),
+          accel_in_socket("accel_in_socket"),
           ram_socket("ram_socket"),
           accel_out_socket("accel_out_socket")
     {
         cpu_socket.register_b_transport(this, &Bus::b_transport_cpu);
+        accel_in_socket.register_b_transport(this, &Bus::b_transport_accel);
         SC_REPORT_INFO("Bus", "Módulo Bus creado");
     }
 
@@ -84,5 +86,16 @@ private:
     void b_transport_cpu(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) {
         route(trans, delay);
     }
-    // b_transport_accel se agrega junto con accel_in_socket
+
+    void b_transport_accel(tlm::tlm_generic_payload& trans, sc_core::sc_time& delay) {
+        uint64_t addr = trans.get_address();
+        if (addr >= MemoryMap::RAM_BASE && addr <= MemoryMap::RAM_END) {
+            ram_socket->b_transport(trans, delay);
+        } else {
+            std::ostringstream oss;
+            oss << "Dirección fuera de mapa desde Accelerator: 0x" << std::hex << addr;
+            SC_REPORT_WARNING("Bus", oss.str().c_str());
+            trans.set_response_status(tlm::TLM_ADDRESS_ERROR_RESPONSE);
+        }
+    }
 };
