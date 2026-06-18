@@ -15,7 +15,7 @@ DEPFLAGS      := -MMD -MP                     # Genera .d files con dependencias
 TARGET        := tlm_image
 
 # ── RUTAS ──────────────────────────────────────────────────────────────────────
-SRC_DIR       := src
+SRC_DIR       := ../src
 BUILD_DIR     := build
 IMG_DIR       := images
 
