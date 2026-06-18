@@ -6,9 +6,10 @@ TARGET   := tlm_image
 # Se puede sobreescribir desde la terminal:  make SYSTEMC_HOME=/mi/ruta
 SYSTEMC_HOME := /usr
 
-INCLUDES := -I$(SYSTEMC_HOME)/include
+SYSTEMC_HOME := /usr/local
 
-LIBDIR := /usr/lib/x86_64-linux-gnu
+INCLUDES := -I$(SYSTEMC_HOME)/include
+LIBDIR := $(SYSTEMC_HOME)/lib-linux64
 
 LIBS := -L$(LIBDIR) \
         -lsystemc \
@@ -16,7 +17,8 @@ LIBS := -L$(LIBDIR) \
 
 # ── Fuentes (agregar aquí cada nuevo módulo) ───────────────────────────────────
 SRCS := src/sc_main.cpp \
-        src/storage.cpp
+        src/storage.cpp \
+        src/Accelerator.cpp
 
 # Los .o van a la carpeta build/ para no ensuciar src/
 OBJS := $(patsubst src/%.cpp, build/%.o, $(SRCS))
