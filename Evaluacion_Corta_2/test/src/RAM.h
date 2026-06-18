@@ -1,7 +1,7 @@
 // =============================================================================
 // RAM.h  –  Módulo de memoria RAM (64 MB)
 //
-// TLM 2.0 simple_target_socket. Responde a transacciones de lectura y
+// TLM 2.0 simple_target_socket — responde a transacciones de lectura y
 // escritura del CPU y del Acelerador a través del Bus.
 //
 // =============================================================================
@@ -25,6 +25,15 @@ SC_MODULE(RAM) {
         socket.register_b_transport (this, &RAM::b_transport);
         socket.register_transport_dbg(this, &RAM::transport_dbg);
         SC_REPORT_INFO("RAM", "Módulo RAM creado (64 MB)");
+    }
+
+    // -------------------------------------------------------------------------
+    // peek  –  lectura directa para verificación en tests (sin TLM)
+    // No avanza el tiempo de simulación. No usar en módulos productivos.
+    // -------------------------------------------------------------------------
+    void peek(uint64_t addr, uint8_t* out, unsigned int len) const {
+        if (addr + len <= RAM_SIZE)
+            std::memcpy(out, mem_.data() + addr, len);
     }
 
 private:
