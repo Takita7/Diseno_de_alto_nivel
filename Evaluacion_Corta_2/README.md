@@ -161,8 +161,7 @@ Evaluacion_Corta_2/
 │   │   ├── view_raw.py      # Visualiza un archivo .raw como imagen
 │   │   └── compare_raw.py   # Genera comparación entrada vs salida
 │   └── archived/            # Versiones previas del sc_main durante desarrollo
-├── README.md
-└── Declaración_de_Uso_de_Inteligencia_Artificial.md
+└── README.md
 ```
 
 > **Nota:** El `Makefile` se encuentra dentro de `test/` y referencia las fuentes
