@@ -93,7 +93,7 @@ ls /usr/local/systemc/include/systemc.h
 
 ```bash
 # 1. Clonar el repositorio
-git clone <url-del-repo>
+git clone https://github.com/Takita7/Diseno_de_alto_nivel/tree/main/Evaluacion_Corta_2
 cd Evaluacion_Corta_2/test
 
 # 2. Compilar (ajustar la ruta si SystemC está en otro lugar)
