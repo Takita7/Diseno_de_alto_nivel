@@ -1,0 +1,32 @@
+@startuml
+title Proposed Architecture
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Software Stack" {
+
+rectangle "CUDA/HIP\nApplication" as APP <<Existing>>
+
+rectangle "LLVM\nFrontend" as LLVM <<Existing>>
+
+rectangle "Backend" as BACK <<Adapted>>
+
+rectangle "Runtime\nDriver" as RT <<Adapted>>
+
+APP --> LLVM
+LLVM --> BACK
+BACK --> RT
+
+}
+
+package "Hardware Stack" {
+
+rectangle "RISC-V\nGPGPU" as GPU <<Designed>>
+
+}
+
+RT --> GPU
+
+@enduml

@@ -1,0 +1,60 @@
+@startuml
+title Proposed System
+
+skinparam rectangle {
+    RoundCorner 10
+}
+
+left to right direction
+
+package "Software" {
+
+rectangle "CUDA/HIP"
+
+rectangle LLVM
+
+rectangle Backend
+
+rectangle Runtime
+
+}
+
+package "Design Flow" {
+
+rectangle SystemC
+
+rectangle HLS
+
+package Hardware {
+
+rectangle "RISC-V\nGPU"
+
+}
+}
+
+
+package Validation {
+
+rectangle FPGA
+
+rectangle Benchmarks
+
+}
+
+"CUDA/HIP" --> LLVM
+
+LLVM --> Backend
+
+Backend --> Runtime
+
+Runtime --> "Hardware"
+
+SystemC --> HLS
+
+HLS --> "RISC-V\nGPU"
+
+"RISC-V\nGPU" --> FPGA
+
+FPGA --> Benchmarks
+
+@enduml

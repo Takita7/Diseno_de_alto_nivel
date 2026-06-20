@@ -1,0 +1,40 @@
+@startuml
+title Proposed HW/SW Co-Design Methodology
+
+left to right direction
+skinparam shadowing false
+
+package "Software Domain" {
+  rectangle "CUDA/HIP\nApplication"
+  rectangle "LLVM\nToolchain"
+  rectangle "Adapted Backend"
+  rectangle "Runtime"
+}
+
+package "Co-Design Interface" {
+  rectangle "Execution Model\n(SIMT/RVV)"
+  rectangle "ISA Extensions"
+  rectangle "Memory Model"
+}
+
+package "Hardware Design Domain" {
+  rectangle "SystemC\nArchitectural Model"
+  rectangle "HLS\nImplementation"
+  rectangle "RTL + FPGA"
+}
+
+"CUDA/HIP\nApplication" --> "LLVM\nToolchain"
+"LLVM\nToolchain" --> "Adapted Backend"
+"Adapted Backend" --> "ISA Extensions"
+
+Runtime --> "Execution Model\n(SIMT/RVV)"
+Runtime --> "Memory Model"
+
+"ISA Extensions" --> "SystemC\nArchitectural Model"
+"Execution Model\n(SIMT/RVV)" --> "SystemC\nArchitectural Model"
+"Memory Model" --> "SystemC\nArchitectural Model"
+
+"SystemC\nArchitectural Model" --> "HLS\nImplementation"
+"HLS\nImplementation" --> "RTL + FPGA"
+
+@enduml

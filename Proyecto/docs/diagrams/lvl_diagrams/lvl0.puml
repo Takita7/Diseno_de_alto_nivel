@@ -1,0 +1,29 @@
+@startuml
+title System Context
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor Developer
+
+package "Host PC" {
+
+rectangle "CUDA/HIP\nApplication" as APP
+rectangle "LLVM\nToolchain" as LLVM
+rectangle "Runtime\n+ Driver" as RT
+
+}
+
+package "FPGA" {
+
+rectangle "RISC-V\nGPGPU" as GPU
+
+}
+
+Developer --> APP
+APP --> LLVM
+LLVM --> RT
+RT --> GPU
+
+@enduml

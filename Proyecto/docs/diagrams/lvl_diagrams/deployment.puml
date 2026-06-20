@@ -1,0 +1,34 @@
+@startuml
+title Deployment
+
+left to right direction
+
+node "Host PC" {
+
+artifact Application
+
+artifact LLVM
+
+artifact Runtime
+
+artifact Driver
+
+}
+
+node FPGA {
+
+
+artifact "RISC-V GPGPU"
+
+artifact Memory
+
+}
+
+Runtime --> Driver
+
+Driver <--> "RISC-V GPGPU"
+
+"RISC-V GPGPU" <--> Memory
+
+
+@enduml

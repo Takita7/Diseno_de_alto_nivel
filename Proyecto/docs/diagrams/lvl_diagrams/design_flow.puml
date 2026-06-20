@@ -1,0 +1,32 @@
+@startuml
+title Proposed Design Flow
+
+left to right direction
+
+rectangle Requirements
+
+rectangle Architecture
+
+rectangle SystemC
+
+rectangle Validation
+
+rectangle HLS
+
+rectangle RTL
+
+rectangle FPGA
+
+Requirements --> Architecture
+
+Architecture --> SystemC
+
+SystemC --> Validation
+
+Validation --> HLS
+
+HLS --> RTL
+
+RTL --> FPGA
+
+@enduml

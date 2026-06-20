@@ -1,0 +1,27 @@
+@startuml
+title Kernel Execution
+
+actor User
+
+participant App
+participant Runtime
+participant Driver
+participant GPU
+
+User -> App : Launch Kernel
+
+App -> Runtime : Execute
+
+Runtime -> Driver : Load Binary
+
+Driver -> GPU : Configure
+
+GPU -> GPU : Execute
+
+GPU --> Driver : Finished
+
+Driver --> Runtime
+
+Runtime --> App
+
+@enduml

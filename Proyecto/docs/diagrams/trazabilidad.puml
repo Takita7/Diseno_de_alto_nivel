@@ -1,0 +1,58 @@
+@startuml
+title Challenge Traceability
+
+left to right direction
+
+package "Challenges" {
+
+usecase "D1\nIncomplete\nToolchain"
+
+usecase "D2\nSIMT\nExecution"
+
+usecase "D3\nFPGA\nImplementation"
+
+usecase "D4\nHigh-Level\nDesign"
+
+usecase "D5\nCUDA/HIP\nSupport"
+
+}
+
+package "Proposed Solution" {
+
+component "LLVM Backend"
+
+component "Runtime"
+
+component "Driver"
+
+component "Warp Scheduler"
+
+component "SIMT Controller"
+
+component "Compute Units"
+
+component "SystemC Model"
+
+component "HLS"
+
+}
+
+"D1\nIncomplete\nToolchain" --> "LLVM Backend"
+
+"D5\nCUDA/HIP\nSupport" --> Runtime
+
+"D5\nCUDA/HIP\nSupport" --> Driver
+
+"D2\nSIMT\nExecution" --> "Warp Scheduler"
+
+"D2\nSIMT\nExecution" --> "SIMT Controller"
+
+"D2\nSIMT\nExecution" --> "Compute Units"
+
+"D4\nHigh-Level\nDesign" --> "SystemC Model"
+
+"D4\nHigh-Level\nDesign" --> HLS
+
+"D3\nFPGA\nImplementation" --> HLS
+
+@enduml

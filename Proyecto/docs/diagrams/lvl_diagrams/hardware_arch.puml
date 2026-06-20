@@ -1,0 +1,63 @@
+@startuml
+title RISC-V GPGPU
+
+skinparam rectangle {
+    RoundCorner 10
+}
+
+package "Front-End" {
+
+rectangle Fetch
+rectangle Decode
+
+}
+
+package "Control" {
+
+rectangle "Warp\nScheduler" as WS
+
+rectangle "SIMT\nController" as SIMT
+
+rectangle "Barrier"
+
+}
+
+package "Execution" {
+
+rectangle "Compute\nUnits" as CU
+
+rectangle "RVV Unit"
+
+rectangle "Register\nFile"
+
+}
+
+package "Memory" {
+
+rectangle LSU
+
+rectangle "Memory\nController"
+
+rectangle "Shared\nMemory"
+
+}
+
+Fetch --> Decode
+
+Decode --> WS
+
+WS --> SIMT
+
+SIMT --> CU
+
+CU --> LSU
+
+LSU --> "Memory\nController"
+
+"Memory\nController" --> "Shared\nMemory"
+
+CU --> "Register\nFile"
+
+CU --> "RVV Unit"
+
+@enduml
