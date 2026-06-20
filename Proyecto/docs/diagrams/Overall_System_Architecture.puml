@@ -1,0 +1,32 @@
+@startuml
+title Overall System Architecture
+
+skinparam componentStyle rectangle
+
+package "Host System" {
+
+component "CUDA/HIP\nApplication" as APP
+
+component "LLVM Toolchain\n(Clang + LLVM IR)" as LLVM
+
+component "Adapted Backend\n(RISC-V GPU)" as BACKEND <<Adapted>>
+
+component "Runtime\n(POCL/HIP)" as RUNTIME <<Adapted>>
+
+component "FPGA Driver" as DRIVER <<Adapted>>
+
+}
+
+package "FPGA" {
+
+component "RISC-V GPGPU" as GPU <<Designed>>
+
+}
+
+APP --> LLVM
+LLVM --> BACKEND
+BACKEND --> RUNTIME
+RUNTIME --> DRIVER
+DRIVER --> GPU
+
+@enduml

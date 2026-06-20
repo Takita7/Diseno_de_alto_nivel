@@ -1,0 +1,26 @@
+@startuml
+title Kernel Execution Flow
+
+start
+
+:User writes CUDA/HIP code;
+
+:Compile with Clang;
+
+:Generate LLVM IR;
+
+:Adapted Backend;
+
+:Generate RISC-V GPU Binary;
+
+:Runtime loads Kernel;
+
+:Driver transfers Kernel to FPGA;
+
+:GPU executes Kernel;
+
+:Return results;
+
+stop
+
+@enduml

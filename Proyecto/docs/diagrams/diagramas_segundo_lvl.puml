@@ -1,0 +1,48 @@
+@startuml
+title RISC-V GPGPU Internal Architecture
+
+skinparam componentStyle rectangle
+
+package "RISC-V GPGPU" {
+
+component "Instruction Fetch" as IF
+
+component "Instruction Decode" as ID
+
+component "Warp Scheduler" as WS
+
+component "SIMT Controller" as SIMT
+
+component "Compute Units" as CU
+
+component "RVV Execution Unit" as RVV
+
+component "Register File" as RF
+
+component "Load/Store Unit" as LSU
+
+component "Memory Controller" as MEM
+
+component "Barrier / Synchronization" as BAR
+
+}
+
+IF --> ID
+
+ID --> WS
+
+WS --> SIMT
+
+SIMT --> CU
+
+CU --> RVV
+
+RVV --> RF
+
+CU --> LSU
+
+LSU --> MEM
+
+SIMT --> BAR
+
+@enduml

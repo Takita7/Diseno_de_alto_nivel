@@ -1,0 +1,26 @@
+@startuml
+title Deployment Diagram
+
+node "Host PC" {
+
+artifact "CUDA/HIP Application"
+
+artifact "LLVM"
+
+artifact "Runtime"
+
+artifact "Driver"
+
+}
+
+node "FPGA Board" {
+
+artifact "RISC-V GPGPU"
+
+artifact "Local Memory"
+
+}
+
+"Driver" --> "RISC-V GPGPU"
+
+@enduml
