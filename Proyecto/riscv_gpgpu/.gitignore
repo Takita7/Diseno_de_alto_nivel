@@ -10,6 +10,6 @@
 Thumbs.db
 
 # Speckit internal artifacts (managed by tooling)
-.specify/memory/
+.specify/*
 .specify/scripts/bash/check-prerequisites.sh
-.github/prompts/speckit.*.prompt.md
+.github/*
