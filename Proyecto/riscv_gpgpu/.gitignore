@@ -1,0 +1,15 @@
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Speckit internal artifacts (managed by tooling)
+.specify/memory/
+.specify/scripts/bash/check-prerequisites.sh
+.github/prompts/speckit.*.prompt.md
