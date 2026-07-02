@@ -14,7 +14,10 @@ Prerequisites
 - A C++17-capable compiler (GCC/Clang)
 - SystemC development headers and libraries (SystemC 2.3.x)
 - Python 3.10+ (for scripts)
-- Optional: Google Test for C++ unit tests
+- Google Test (`libgtest-dev`, `libgmock-dev`) for C++ unit tests
+- LLVM/Clang tools (`clang`, `lld`, `llvm-dev`, `llvm-tools`) for compiler/runtime development
+- OpenCL ICD headers (`ocl-icd-opencl-dev`, `opencl-c-headers`, `opencl-clhpp-headers`) for runtime integration
+- Host dev packages: `libhwloc-dev`, `libnuma-dev`, `libelf-dev`, `libfdt-dev`, `libxml2-dev`, `libssl-dev`
 
 Quick setup
 
@@ -73,6 +76,8 @@ Run benchmarks (placeholder harness)
 ./scripts/benchmark.sh
 ```
 
+Benchmark results are written to `results/benchmarks/summary.json` by default.
+
 Simulation scenarios (environment variables)
 
 The `scripts/scenarios/` directory contains example scenario scripts:
@@ -96,4 +101,45 @@ Notes & troubleshooting
 Contributing
 
 Please follow the project's contribution guidelines and keep changes traceable to `docs/traceability/`.
+
+Contributing — Software development setup
+
+ - **Create a local Python virtualenv:** preferred to avoid system package conflicts (PEP 668).
+
+	 ```bash
+	 # From project root (recommended for local contribs)
+	 python3 -m venv .venv
+	 source .venv/bin/activate
+	 python -m pip install --upgrade pip
+	 python -m pip install pyyaml jinja2 lit numpy
+	 ```
+
+ - **Use the project helper script to create a system-wide venv and install host packages** (requires sudo):
+
+	 ```bash
+	 # Run as root to install system packages and create a shared venv under /opt
+	 sudo ./scripts/setup-software-dev.sh
+	 # Activate the shared venv
+	 source /opt/riscv-gpgpu-venv/bin/activate
+	 ```
+
+ - **Cloning recommended source repos (manual):**
+
+	 ```bash
+	 mkdir -p /opt/riscv-src && cd /opt/riscv-src
+	 git clone https://github.com/llvm/llvm-project.git
+	 git clone https://github.com/riscv/riscv-gnu-toolchain.git
+	 git clone https://github.com/pocl/pocl.git
+	 ```
+
+ - **Build notes:** prefer `ninja` and an out-of-tree build for large projects (LLVM). Example:
+
+	 ```bash
+	 mkdir -p /opt/riscv-src/llvm-project/build && cd /opt/riscv-src/llvm-project/build
+	 cmake -G Ninja ../llvm -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=RISCV
+	 ninja -j$(nproc)
+	 ```
+
+ - **If pip fails with "externally-managed-environment":** use a virtualenv as shown above, or install OS-packaged python libs via apt (not recommended for development).
+
 

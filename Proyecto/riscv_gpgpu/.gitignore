@@ -82,3 +82,6 @@ core
 docs/html/
 docs/latex/
 docs/pdf/
+
+# Generated results
+results/
