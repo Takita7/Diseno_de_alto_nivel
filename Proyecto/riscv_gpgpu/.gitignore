@@ -13,3 +13,72 @@ Thumbs.db
 .specify/*
 .specify/scripts/bash/check-prerequisites.sh
 .github/*
+.opencode/*
+
+# C++ Build Artifacts
+build/
+debug/
+release/
+*.o
+*.a
+*.so
+*.exe
+*.dll
+*.dylib
+*.lib
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.venv/
+venv/
+env/
+ENV/
+
+# SystemC and ModelSim
+work/
+*.wdb
+*.vcd
+*.vvp
+*.vho
+systemc_objs/
+
+# HLS and Vivado
+*.hls/
+*.runs/
+*.srcs/
+*.ip_user_files/
+*.hw/
+*.jou
+*.log
+vivado_pid*.txt
+hls_prj/
+solution*/
+
+# CMake
+CMakeCache.txt
+cmake-build-debug/
+cmake-build-release/
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+.#*
+core
+*.core
+
+# Generated documentation
+docs/html/
+docs/latex/
+docs/pdf/
