@@ -11,7 +11,7 @@ bool loadKernelBinary(const std::string& path) {
     return true;
 }
 
-bool configureKernel(const std::string& kernel_name, const std::vector<uint32_t>& args) {
+bool configureKernel(const std::string& kernel_name, const std::vector<uint64_t>& args) {
     std::cout << "[driver] Configuring kernel '" << kernel_name << "' with " << args.size() << " args\n";
     // TODO: implement DMA and kernel parameter setup
     return true;

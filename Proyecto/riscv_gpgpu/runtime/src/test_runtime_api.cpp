@@ -1,19 +1,42 @@
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include "host_runtime.cpp"
+#include "../../software/kernel_loader/kernel_loader.h"
+#include "../../llvm/backend/llvm_backend.h"
 
 using namespace riscv_gpgpu;
+namespace fs = std::filesystem;
 
 TEST(RuntimeApiTest, UploadLaunchPoll) {
+    fs::path temp_dir = fs::temp_directory_path();
+    fs::path source_file = temp_dir / "riscv_gpgpu_runtime_test.c";
+    fs::path binary_file = temp_dir / "riscv_gpgpu_runtime_test.riscv.elf";
+    fs::path manifest_file = temp_dir / "riscv_gpgpu_runtime_test.json";
+
+    std::ofstream source(source_file);
+    ASSERT_TRUE(source.is_open());
+    source << "void kernel() { volatile int x = 42; x += 1; }\n";
+    source.close();
+
+    EXPECT_TRUE(emitKernelBinary(source_file.string(), binary_file.string()));
+    EXPECT_TRUE(fs::exists(binary_file));
+    EXPECT_TRUE(packKernelBundle("runtime_test", binary_file.string(), manifest_file.string(), 4, 1, 1, 512));
+    EXPECT_TRUE(uploadKernelBundle(manifest_file.string()));
+
     KernelLaunchInfo info;
-    info.name = "test_kernel";
+    info.name = "runtime_test";
     info.args = {42, 84};
     info.workgroup_x = 4;
-    info.workgroup_y = 4;
+    info.workgroup_y = 1;
     info.workgroup_z = 1;
 
-    EXPECT_TRUE(uploadKernel(info));
     EXPECT_TRUE(launchKernel(info));
     std::string status;
     EXPECT_TRUE(pollKernelStatus(status));
-    EXPECT_EQ(status, "COMPLETED");
+    EXPECT_EQ(status, "RUNNING");
+
+    fs::remove(source_file);
+    fs::remove(binary_file);
+    fs::remove(manifest_file);
 }

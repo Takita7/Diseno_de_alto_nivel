@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "loader.cpp"
+#include "loader.h"
 
 using namespace riscv_gpgpu;
 
@@ -8,7 +8,7 @@ TEST(DriverApiTest, LoadKernel) {
 }
 
 TEST(DriverApiTest, ConfigureKernel) {
-    std::vector<uint32_t> args = {1, 2, 3};
+    std::vector<uint64_t> args = {1, 2, 3};
     EXPECT_TRUE(configureKernel("test", args));
 }
 

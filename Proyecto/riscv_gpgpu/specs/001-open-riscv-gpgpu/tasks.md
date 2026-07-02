@@ -116,16 +116,19 @@
 
 - [x] T031 [US3] Implement assembler/linker additions in `software/llvm/mc/` or `software/binutils/`
 	- Deliverable: MC/ASM support for new SIMT instructions and assembler syntax; update to `lld` if using LLVM linking.
+	- Notes: current implementation uses `clang`/`ld.lld` to emit and link `riscv32-unknown-elf` kernels using `rv32gc`/`ilp32`.
 
 - [x] T032 [US3] Implement the runtime kernel-launch and execution-status interface in `runtime/src/`
 	- Deliverable: `runtime/src/host_runtime.cpp` exposing kernel upload, launch, status, and simple memory management APIs compatible with CUDA/HIP semantics.
-	- Notes: Provide a shim layer so POCL / host-side runtime can call into this API.
+	- Notes: runtime now supports bundle manifest upload, bundle inspection, and driver-backed kernel launch.
 
 - [x] T033 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
 	- Deliverable: userspace loader `driver/src/loader.cpp` implementing bitstream/kernel load, DMA setup, and kernel control commands; host API in `software/host_api/` that maps runtime calls to driver operations.
+	- Notes: driver loader now accepts kernel binaries from bundle manifests and exposes configure/start/query hooks.
 
 - [x] T034 [US3] Implement the kernel-loader and configuration-management path in `software/kernel_loader/`
 	- Deliverable: tooling to pack kernel binaries, metadata (workgroup size, required shared mem), and support upload format (e.g., simple tar/json manifest).
+	- Notes: bundle manifest currently includes `kernel_name`, `binary_path`, `binary_size`, workgroup dimensions, and shared memory size.
 
 - [x] T035 [US3] Add benchmark harnesses and reproducibility scripts in `benchmarks/` and `scripts/benchmark/`
 	- Deliverable: example kernels (Rodinia subset) and scripts to build, upload, run, and collect metrics for comparison.
