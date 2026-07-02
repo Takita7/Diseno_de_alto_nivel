@@ -27,9 +27,21 @@ void SIMTController::initializeWarp(WarpID warp_id, uint32_t threads_per_warp) {
 
 void SIMTController::handleBranch(WarpID warp_id, bool* thread_conditions) {
     if (warp_id >= active_masks_.size()) return;
-    pushDivergenceState(warp_id, active_masks_[warp_id]);
+    const uint32_t old_mask = active_masks_[warp_id];
     computeActiveMask(warp_id, thread_conditions);
+    const uint32_t taken_mask = active_masks_[warp_id];
+
+    if (taken_mask == 0 || taken_mask == old_mask) {
+        // No divergence: either all lanes take the branch or none do.
+        if (taken_mask == 0) {
+            active_masks_[warp_id] = old_mask;
+        }
+        return;
+    }
+
+    pushDivergenceState(warp_id, old_mask);
     divergence_events_++;
+    wasted_cycles_ += popcount32(old_mask ^ taken_mask);
 }
 
 void SIMTController::handleJoin(WarpID warp_id) {
@@ -65,6 +77,15 @@ void SIMTController::popDivergenceState(WarpID warp_id) {
         active_masks_[warp_id] = stack.mask_stack.top();
         stack.mask_stack.pop();
     }
+}
+
+uint32_t SIMTController::popcount32(uint32_t value) {
+    uint32_t count = 0;
+    while (value != 0) {
+        value &= (value - 1);
+        ++count;
+    }
+    return count;
 }
 
 } // namespace riscv_gpgpu

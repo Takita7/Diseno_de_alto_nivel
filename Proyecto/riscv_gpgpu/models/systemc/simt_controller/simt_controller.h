@@ -52,7 +52,7 @@ public:
 private:
     struct DivergenceStack {
         std::stack<uint32_t> pc_stack;      // Program counter stack
-        std::stack<uint32_t> mask_stack;    // Active mask stack
+        std::stack<uint32_t> mask_stack;    // Saved active masks for reconvergence
         std::vector<uint32_t> thread_masks; // Per-thread masks
     };
 
@@ -71,6 +71,7 @@ private:
     void computeActiveMask(WarpID warp_id, const bool* conditions);
     void pushDivergenceState(WarpID warp_id, uint32_t mask);
     void popDivergenceState(WarpID warp_id);
+    static uint32_t popcount32(uint32_t value);
 };
 
 }  // namespace riscv_gpgpu

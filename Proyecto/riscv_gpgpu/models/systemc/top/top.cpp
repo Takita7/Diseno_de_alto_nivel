@@ -41,6 +41,7 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     simt_cfg.mode                    = SIMTController::RecovergenceMode::IMMEDIATE;
     simt_cfg.enable_divergence_tracking = true;
     simt_cfg.max_history_depth       = 32;
+    simt_controller_ = std::make_unique<SIMTController>("simt_controller", simt_cfg);
 
     // ── Compute units ─────────────────────────────────────────────────────────
     compute_units_.reserve(config.num_compute_units);
@@ -72,6 +73,7 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
         // Bind clk/reset
         cu->clk(clk_sig_);
         cu->reset(reset_sig_);
+        cu->setSIMTController(simt_controller_.get());
         // Bind memory handshake ports to stub signals
         cu->memory_ready(*mem_ready_sigs_.back());
         cu->memory_request(*mem_req_sigs_.back());
@@ -93,6 +95,10 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     scheduler_->clk(clk_sig_);
     scheduler_->reset(reset_sig_);
 
+    // Bind SIMT controller clk/reset
+    simt_controller_->clk(clk_sig_);
+    simt_controller_->reset(reset_sig_);
+
     SC_HAS_PROCESS(GPGPUTop);
     SC_THREAD(simulationProcess);
     sensitive << clk.pos();
@@ -107,9 +113,13 @@ GPGPUTop::~GPGPUTop() = default;
 void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y) {
     LOG_INFO("GPGPUTop::launchKernel grid=" + std::to_string(grid_x) + "x" + std::to_string(grid_y));
 
-    uint32_t block = 0;
-    for (auto& cu : compute_units_) {
-        cu->launchKernel(block++, grid_x, grid_y);
+    const uint32_t total_blocks = grid_x * grid_y;
+    for (uint32_t block = 0; block < total_blocks; ++block) {
+        auto& cu = compute_units_[block % compute_units_.size()];
+        cu->launchKernel(block, grid_x, grid_y);
+        if (simt_controller_) {
+            simt_controller_->initializeWarp(block, config_.threads_per_warp);
+        }
     }
 }
 
@@ -148,7 +158,9 @@ uint64_t GPGPUTop::getTotalInstructions() const {
 
 uint32_t GPGPUTop::getL1CacheHits()   const { return memory_ ? (uint32_t)memory_->getL1CacheHits()   : 0; }
 uint32_t GPGPUTop::getL1CacheMisses() const { return memory_ ? (uint32_t)memory_->getL1CacheMisses() : 0; }
-uint32_t GPGPUTop::getDivergenceEvents() const { return 0; }  // TODO: wire SIMTController
+uint32_t GPGPUTop::getDivergenceEvents() const {
+    return simt_controller_ ? simt_controller_->getTotalDivergenceEvents() : 0;
+}
 
 // ─── SC_THREAD process ────────────────────────────────────────────────────────
 

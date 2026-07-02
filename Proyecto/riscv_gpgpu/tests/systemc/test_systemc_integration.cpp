@@ -54,6 +54,39 @@ static bool compileKernel(const std::string& src, const std::string& elf) {
     return (r == 0) && fs::exists(elf);
 }
 
+static bool compileCudaStyleKernel(const std::string& src, const std::string& elf) {
+    std::string obj = elf + ".o";
+    std::string compile = "clang -target riscv32-unknown-elf"
+                          " -march=rv32im -mabi=ilp32"
+                          " -O0 -fno-exceptions -fomit-frame-pointer"
+                          " -x c -c " + src + " -o " + obj + " 2>&1";
+    int r = std::system(compile.c_str());
+    if (r != 0) return false;
+
+    std::string link = "clang -target riscv32-unknown-elf"
+                       " -march=rv32im -mabi=ilp32"
+                       " -fuse-ld=lld -nostdlib -Wl,--entry,0"
+                       " -o " + elf + " " + obj + " 2>&1";
+    r = std::system(link.c_str());
+    return (r == 0) && fs::exists(elf);
+}
+
+static bool compileAssemblyKernel(const std::string& src, const std::string& elf) {
+    std::string obj = elf + ".o";
+    std::string compile = "clang -target riscv32-unknown-elf"
+                          " -march=rv32im -mabi=ilp32"
+                          " -x assembler -c " + src + " -o " + obj + " 2>&1";
+    int r = std::system(compile.c_str());
+    if (r != 0) return false;
+
+    std::string link = "clang -target riscv32-unknown-elf"
+                       " -march=rv32im -mabi=ilp32"
+                       " -fuse-ld=lld -nostdlib -Wl,--entry,0"
+                       " -o " + elf + " " + obj + " 2>&1";
+    r = std::system(link.c_str());
+    return (r == 0) && fs::exists(elf);
+}
+
 // ─── Test 1: ELF loader can read and store binary ─────────────────────────────
 
 TEST(SystemCIntegration, ElfLoaderBasic) {
@@ -249,4 +282,113 @@ TEST(SystemCIntegration, ScalarMultiply) {
     EXPECT_TRUE(gpgpuFree(arr_ptr));
     fs::remove(src); fs::remove(elf);
     fs::remove(elf.string() + ".o");
+}
+
+// ─── Test 5: CUDA-style multi-unit SIMT end-to-end ───────────────────────────
+
+TEST(SystemCIntegration, CudaMultiUnitSimtEndToEnd) {
+    const int N = 16;
+
+    fs::path src = fs::temp_directory_path() / "test_cuda_multi_unit_simt.c";
+    fs::path elf = fs::temp_directory_path() / "test_cuda_multi_unit_simt.riscv.elf";
+    fs::path manifest = fs::temp_directory_path() / "test_cuda_multi_unit_simt.json";
+
+    {
+        std::ofstream f(src);
+        ASSERT_TRUE(f.is_open());
+                f << ".text\n"
+                    << ".globl cuda_multi_unit_simt\n"
+                    << "cuda_multi_unit_simt:\n"
+                    << "    slli t0, a4, 3\n"
+                    << "    add t0, t0, a5\n"
+                    << "    andi t1, a5, 1\n"
+                    << "    slli t0, t0, 2\n"
+                    << "    add t2, a2, t0\n"
+                    << "    add t3, a0, t0\n"
+                    << "    add t4, a1, t0\n"
+                    << "    bne t1, zero, 1f\n"
+                    << "0:\n"
+                    << "    lw t5, 0(t3)\n"
+                    << "    lw t6, 0(t4)\n"
+                    << "    add t5, t5, t6\n"
+                    << "    sw t5, 0(t2)\n"
+                    << "    ret\n"
+                    << "1:\n"
+                    << "    lw t5, 0(t3)\n"
+                    << "    lw t6, 0(t4)\n"
+                    << "    sub t5, t5, t6\n"
+                    << "    sw t5, 0(t2)\n"
+                    << "    ret\n";
+    }
+
+        ASSERT_TRUE(compileAssemblyKernel(src.string(), elf.string()))
+        << "Kernel compilation failed";
+
+    ASSERT_TRUE(packKernelBundle("cuda_multi_unit_simt", elf.string(), manifest.string(), 8, 1, 1, 0));
+    KernelBundleInfo bundle_info;
+    ASSERT_TRUE(inspectKernelBundleDetails(manifest.string(), bundle_info));
+
+    uint64_t a_ptr = 0, b_ptr = 0, c_ptr = 0;
+    ASSERT_TRUE(gpgpuMalloc(a_ptr, N * sizeof(int)));
+    ASSERT_TRUE(gpgpuMalloc(b_ptr, N * sizeof(int)));
+    ASSERT_TRUE(gpgpuMalloc(c_ptr, N * sizeof(int)));
+
+    int host_a[N], host_b[N], host_c[N];
+    for (int i = 0; i < N; ++i) {
+        host_a[i] = i * 4 + 1;
+        host_b[i] = i * 3 + 2;
+        host_c[i] = 0;
+    }
+
+    ASSERT_TRUE(gpgpuMemcpyH2D(a_ptr, host_a, sizeof(host_a)));
+    ASSERT_TRUE(gpgpuMemcpyH2D(b_ptr, host_b, sizeof(host_b)));
+    ASSERT_TRUE(gpgpuMemcpyH2D(c_ptr, host_c, sizeof(host_c)));
+
+    KernelLaunchArgs launch_args;
+    launch_args.kernel_name = bundle_info.kernel_name;
+    launch_args.entry_symbol = bundle_info.entry_symbol;
+    launch_args.grid_x = 2;
+    launch_args.grid_y = 1;
+    launch_args.grid_z = 1;
+    launch_args.block_x = bundle_info.workgroup_x;
+    launch_args.block_y = bundle_info.workgroup_y;
+    launch_args.block_z = bundle_info.workgroup_z;
+    launch_args.shared_mem_bytes = bundle_info.shared_mem_bytes;
+    launch_args.args = {a_ptr, b_ptr, c_ptr, static_cast<uint64_t>(N), 0, 0};
+
+    ASSERT_TRUE(configureLaunch(launch_args));
+
+    KernelBridge::Config bridge_cfg;
+    bridge_cfg.num_compute_units = 2;
+    bridge_cfg.threads_per_warp = 8;
+    bridge_cfg.max_warps_per_cu = 1;
+    bridge_cfg.max_sim_cycles = 500000;
+    bridge_cfg.print_stats = true;
+
+    KernelBridge bridge(bridge_cfg);
+    ASSERT_TRUE(bridge.runOnHardware("cuda_multi_unit_simt", elf.string(), launch_args.args, {a_ptr, b_ptr, c_ptr}));
+
+    ASSERT_TRUE(gpgpuMemcpyD2H(host_c, c_ptr, sizeof(host_c)));
+
+    for (int i = 0; i < N; ++i) {
+        int expected = (i & 1) ? (host_a[i] - host_b[i]) : (host_a[i] + host_b[i]);
+        EXPECT_EQ(host_c[i], expected)
+            << "c[" << i << "] = " << host_c[i]
+            << ", expected " << expected;
+    }
+
+    EXPECT_GT(bridge.lastTotalCycles(), 0u);
+    EXPECT_GT(bridge.lastTotalInstructions(), 0u);
+    EXPECT_EQ(bridge.lastGridX(), 2u);
+    EXPECT_EQ(bridge.lastBlockX(), 8u);
+    EXPECT_GT(bridge.lastDivergenceEvents(), 0u);
+
+    EXPECT_TRUE(gpgpuFree(a_ptr));
+    EXPECT_TRUE(gpgpuFree(b_ptr));
+    EXPECT_TRUE(gpgpuFree(c_ptr));
+
+    fs::remove(src);
+    fs::remove(elf);
+    fs::remove(elf.string() + ".o");
+    fs::remove(manifest);
 }

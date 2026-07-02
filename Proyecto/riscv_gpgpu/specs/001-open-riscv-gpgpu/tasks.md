@@ -127,7 +127,7 @@
 
 - [x] T032 [US3] Implement the runtime kernel-launch and execution-status interface in `runtime/src/`
 	- Deliverable: `runtime/src/host_runtime.cpp` exposing kernel upload, launch, status, and simple memory management APIs compatible with CUDA/HIP semantics.
-	- Implemented now: grid-level launch (`KernelLaunchInfo` carries `grid_x/y/z` + `workgroup_x/y/z`), `waitKernelCompletion()` for synchronous completion, `pollKernelStatus()` reporting IDLE/CONFIGURED/RUNNING/COMPLETED/FAILED from the driver. New `host_runtime.h` public header. CMakeLists links `kernel_loader_lib` + `driver_lib`.
+	- Implemented now: grid-level launch (`KernelLaunchInfo` carries `grid_x/y/z` + `workgroup_x/y/z`), `waitKernelCompletion()` for synchronous completion, `pollKernelStatus()` reporting IDLE/CONFIGURED/RUNNING/COMPLETED/FAILED from the driver. Runtime now preserves bundle launch metadata, auto-fills workgroup defaults from the packed manifest when omitted, and resolves the ELF entry symbol before dispatch. New `host_runtime.h` public header. CMakeLists links `kernel_loader_lib` + `driver_lib`.
 	- Tests added: `WaitKernelCompletion` in `runtime/src/test_runtime_api.cpp`.
 
 - [x] T033 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
@@ -152,10 +152,11 @@
 	- Bundle manifest pack/load/inspect + runtime upload/launch plumbing.
 	- **Driver**: simulated device buffer registry (alloc/free/H2D/D2H copies); structured `KernelLaunchArgs` with grid+block dims; completion state machine; legacy shim preserved.
 	- **Host API**: `gpgpuMalloc/Free/MemcpyH2D/MemcpyD2H/LaunchKernel/Synchronize` fully wired to driver; `clearKernelArguments`; `host_api.h` public header.
-	- **Runtime**: `KernelLaunchInfo` with `grid_x/y/z`; `waitKernelCompletion`; `host_runtime.h` public header.
+	- **Runtime**: `KernelLaunchInfo` with `grid_x/y/z`; `waitKernelCompletion`; `host_runtime.h` public header; bundle metadata now flows from manifest into launch geometry and entry-symbol selection.
 	- **Kernel Loader**: `resolveEntrySymbol` (nm-based symbol search); `listKernelSymbols`; `kernel_loader.h` includes own header.
 	- **Benchmarks**: `vector_add.cu` + `saxpy.cu` (bare-metal, no stdlib headers); `run_vector_add.sh` + `run_saxpy.sh` (compile → disassemble → bundle → host-sim validate, both PASS N=1024).
 	- **SystemC hardware model**: real `MemoryHierarchy` (byte-addressable sparse memory, L1/L2 cache), full RV32I+M decoder (`riscv_isa.h`), real `ComputeUnit` fetch/decode/execute loop, `ElfLoader` (ELF32 parser), `KernelBridge` SW↔SC integration, `GPGPUTop` top-level with all ports bound, `WarpScheduler` and `SIMTController` `.cpp` implementations.
+	- **SIMT support**: `GPGPUTop` now exposes divergence metrics from `SIMTController`, distributes kernel blocks round-robin across compute units, and has a dedicated `test_simt_controller.cpp` validating active masks and reconvergence.
 	- **End-to-end test**: `test_systemc_integration.cpp` verifies ELF loading, CU register arithmetic, vector_add (N=8, H2D→bridge→D2H), and scalar_mul (N=4).
 	- 9/9 test suites pass (34 tests total).
 - Still pending before calling the stack production-complete:
@@ -183,6 +184,7 @@
 	- Manual ELF32 parser (no libelf); reads PT_LOAD segments into `MemoryHierarchy`; parses SHT_SYMTAB for function symbols; `findSymbol()` by name.
 - [x] T040b [US1] Implement `KernelBridge` SW↔SC integration in `models/systemc/integration/kernel_bridge.h/.cpp`
 	- Orchestrates: create standalone MemoryHierarchy → load ELF → copy H2D driver buffers → resolve entry symbol → set up registers (a0..a7=args, sp=0x20000000, ra=sentinel) → run CU step loop until complete → copy results D2H → print metrics (cycles, IPC, cache hit rate).
+	- Updated now: KernelBridge now preserves driver launch geometry, records the effective grid/block used during execution, surfaces the resolved entry symbol in metrics output, and dispatches blocks across a bounded pool of functional CUs.
 - [x] T041b [US1] Implement `GPGPUTop` with all port bindings in `models/systemc/top/top.cpp`
 	- Wires ComputeUnits, WarpScheduler, MemoryHierarchy, SIMTController; binds all `clk/reset/memory_ready/memory_request` ports to internal signals.
 - [x] T042b [US1] Implement `WarpScheduler` and `SIMTController` stub `.cpp` files
@@ -196,6 +198,10 @@
 	- `models/systemc/top/CMakeLists.txt`: split into `gpgpu_top` static library + `systemc_simulation` executable.
 	- `tests/systemc/CMakeLists.txt`: added `sc_gtest_main.cpp` for `sc_main()`→GTest bridge; dropped conflicting `GTest::Main`.
 	- All 9 test suites pass (34 tests total).
+
+- [x] T045b [US1] Add SIMT controller validation and top-level block dispatch support in `tests/systemc/test_simt_controller.cpp` and `models/systemc/top/top.cpp`
+	- `SIMTController` now has a dedicated unit test covering active-mask initialization, branch masking, and join/reconvergence.
+	- `GPGPUTop::launchKernel()` distributes blocks round-robin across compute units and reports divergence metrics through `SIMTController`.
 
 ### Notes / Repositories to clone for US3 work
 

@@ -4,6 +4,7 @@
 #include "host_runtime.cpp"
 #include "../../software/kernel_loader/kernel_loader.h"
 #include "../../llvm/backend/llvm_backend.h"
+#include "../../driver/src/loader.h"
 
 using namespace riscv_gpgpu;
 namespace fs = std::filesystem;
@@ -27,14 +28,18 @@ TEST(RuntimeApiTest, UploadLaunchPoll) {
     KernelLaunchInfo info;
     info.name        = "runtime_test";
     info.args        = {42, 84};
-    info.workgroup_x = 4;
-    info.workgroup_y = 1;
-    info.workgroup_z = 1;
+    // Leave workgroup dims default to test bundle-provided metadata.
     info.grid_x      = 2;
     info.grid_y      = 1;
     info.grid_z      = 1;
 
     EXPECT_TRUE(launchKernel(info));
+
+    KernelLaunchArgs launch_args;
+    ASSERT_TRUE(getCurrentLaunchArgs(launch_args));
+    EXPECT_EQ(launch_args.entry_symbol, "kernel");
+    EXPECT_EQ(launch_args.block_x, 4u);
+    EXPECT_EQ(launch_args.shared_mem_bytes, 512u);
 
     std::string status;
     EXPECT_TRUE(pollKernelStatus(status));

@@ -6,6 +6,17 @@
 
 namespace riscv_gpgpu {
 
+struct KernelBundleInfo {
+    std::string kernel_name;
+    std::string binary_path;
+    std::string entry_symbol;
+    uint64_t binary_size = 0;
+    uint32_t workgroup_x = 1;
+    uint32_t workgroup_y = 1;
+    uint32_t workgroup_z = 1;
+    uint64_t shared_mem_bytes = 0;
+};
+
 // ── Bundle pack / load / inspect ───────────────────────────────────────────────
 bool packKernelBundle(
     const std::string& kernel_name,
@@ -25,6 +36,10 @@ bool inspectKernelBundle(
     std::string& kernel_name,
     std::string& binary_path,
     uint64_t& binary_size);
+
+bool inspectKernelBundleDetails(
+    const std::string& manifest_path,
+    KernelBundleInfo& info);
 
 // ── ELF entry point resolution ───────────────────────────────────────────────
 // Scans the ELF symbol table to find the mangled name of a kernel function.

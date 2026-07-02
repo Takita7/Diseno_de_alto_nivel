@@ -29,6 +29,10 @@ struct KernelLaunchArgs {
     uint32_t     block_x = 1, block_y = 1, block_z = 1;
     std::vector<uint64_t> args;  // packed args, device ptrs as addresses
     uint32_t     shared_mem_bytes = 0;
+
+    uint64_t gridCount() const { return static_cast<uint64_t>(grid_x) * grid_y * grid_z; }
+    uint64_t blockCount() const { return static_cast<uint64_t>(block_x) * block_y * block_z; }
+    uint64_t totalThreads() const { return gridCount() * blockCount(); }
 };
 bool configureLaunch(const KernelLaunchArgs& launch_args);
 bool startKernel();
@@ -47,6 +51,8 @@ bool getDeviceBufferContent(uint64_t dev_ptr, std::vector<uint8_t>& data);
 bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data);
 // Return the size of an allocated device buffer (0 if not found).
 size_t getDeviceBufferSize(uint64_t dev_ptr);
+// Return the currently configured launch arguments.
+bool getCurrentLaunchArgs(KernelLaunchArgs& out_args);
 // Return the loaded kernel binary path (set by loadKernelBinary).
 const std::string& getKernelBinaryPath();
 

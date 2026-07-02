@@ -20,13 +20,17 @@
 #include "../top/top.h"
 #include "../memory/memory_hierarchy.h"
 #include "../compute_unit/compute_unit.h"
+#include "../simt_controller/simt_controller.h"
 
 // Driver API
 #include "../../../driver/src/loader.h"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <systemc>
 
@@ -38,9 +42,23 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                                   const std::string& binary_path,
                                   const std::vector<uint64_t>& kernel_args,
                                   const std::vector<uint64_t>& device_ptrs) {
+    static std::atomic<uint64_t> run_sequence{0};
+    const uint64_t run_id = run_sequence.fetch_add(1, std::memory_order_relaxed);
+    const std::string run_prefix = "bridge_run_" + std::to_string(run_id);
 
     std::cout << "[bridge] Starting hardware simulation for kernel '" << kernel_name << "'\n";
     std::cout << "[bridge] ELF binary: " << binary_path << "\n";
+
+    KernelLaunchArgs launch_args;
+    const bool have_launch_args = getCurrentLaunchArgs(launch_args);
+    if (have_launch_args) {
+        std::cout << "[bridge] Driver launch available: "
+                  << launch_args.kernel_name
+                  << " entry=" << (launch_args.entry_symbol.empty() ? "<unresolved>" : launch_args.entry_symbol)
+                  << " grid=" << launch_args.grid_x << "x" << launch_args.grid_y << "x" << launch_args.grid_z
+                  << " block=" << launch_args.block_x << "x" << launch_args.block_y << "x" << launch_args.block_z
+                  << " shared_mem=" << launch_args.shared_mem_bytes << "\n";
+    }
 
     // ── 1. Build SystemC MemoryHierarchy independently (no sc_start) ──────────
     MemoryHierarchy::Config mem_cfg;
@@ -75,13 +93,17 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // ── 4. Resolve entry point ────────────────────────────────────────────────
     uint32_t entry_pc = 0;
     SymbolEntry sym;
-    if (elf.findSymbol(kernel_name, sym)) {
+    const std::string& entry_name = (have_launch_args && !launch_args.entry_symbol.empty())
+        ? launch_args.entry_symbol
+        : kernel_name;
+
+    if (elf.findSymbol(entry_name, sym)) {
         entry_pc = sym.address;
         std::cout << "[bridge] Entry point '" << sym.name
                   << "' at 0x" << std::hex << entry_pc << std::dec << "\n";
     } else {
         entry_pc = elf.getEntryPoint();
-        std::cout << "[bridge] Symbol '" << kernel_name
+        std::cout << "[bridge] Symbol '" << entry_name
                   << "' not found; using ELF e_entry=0x"
                   << std::hex << entry_pc << std::dec << "\n";
     }
@@ -104,40 +126,118 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
               << " ra=0x" << regs[1] << std::dec
               << " a0..a" << (kernel_args.size()-1) << "=[args]\n";
 
-    // ── 6. Create and run ComputeUnit ─────────────────────────────────────────
-    ComputeUnit::Config cu_cfg;
-    cu_cfg.unit_id          = 0;
-    cu_cfg.num_threads      = cfg_.threads_per_warp;
-    cu_cfg.threads_per_warp = cfg_.threads_per_warp;
-    cu_cfg.max_warps        = 1;  // one warp for functional sim
-    cu_cfg.shared_mem_size  = cfg_.shared_mem_size;
-    cu_cfg.max_cycles       = cfg_.max_sim_cycles;
+    // ── 6. Create and run functional compute units ────────────────────────────
+    const uint32_t effective_grid_x = have_launch_args ? launch_args.grid_x : 1;
+    const uint32_t effective_grid_y = have_launch_args ? launch_args.grid_y : 1;
+    const uint32_t effective_grid_z = have_launch_args ? launch_args.grid_z : 1;
+    const uint32_t effective_block_x = have_launch_args ? launch_args.block_x : 1;
+    const uint32_t effective_block_y = have_launch_args ? launch_args.block_y : 1;
+    const uint32_t effective_block_z = have_launch_args ? launch_args.block_z : 1;
+    const uint32_t total_blocks = std::max<uint32_t>(1u,
+        effective_grid_x * std::max<uint32_t>(1u, effective_grid_y) * std::max<uint32_t>(1u, effective_grid_z));
+    const uint32_t live_units = std::max<uint32_t>(1u,
+        std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units, total_blocks));
 
-    ComputeUnit cu("bridge_cu", cu_cfg);
-    cu.setMemoryHierarchy(&mem);
-    cu.setEntryPoint(entry_pc);
-    cu.setInitialRegisters(regs);
-    cu.setReturnSentinel(RETURN_SENTINEL);
-    cu.launchKernel(0, 1, 1);
+    struct Worker {
+        std::unique_ptr<ComputeUnit> cu;
+        std::unique_ptr<SIMTController> simt;
+        uint32_t block_id = 0;
+        bool active = false;
+    };
 
-    // Functional loop — no sc_start, just direct step() calls
+    auto makeWorker = [&](uint32_t block_id) {
+        Worker worker;
+
+        ComputeUnit::Config cu_cfg;
+        cu_cfg.unit_id          = block_id;
+        cu_cfg.num_threads      = cfg_.threads_per_warp;
+        cu_cfg.threads_per_warp = cfg_.threads_per_warp;
+        cu_cfg.max_warps        = std::max<uint32_t>(1u, cfg_.max_warps_per_cu);
+        cu_cfg.shared_mem_size  = cfg_.shared_mem_size;
+        cu_cfg.max_cycles       = cfg_.max_sim_cycles;
+
+        const std::string cu_name = run_prefix + "_cu_" + std::to_string(block_id);
+        const std::string simt_name = run_prefix + "_simt_" + std::to_string(block_id);
+
+        worker.simt = std::make_unique<SIMTController>(simt_name.c_str(), SIMTController::Config{});
+        worker.cu   = std::make_unique<ComputeUnit>(cu_name.c_str(), cu_cfg);
+        worker.cu->setMemoryHierarchy(&mem);
+        worker.cu->setSIMTController(worker.simt.get());
+        worker.cu->setEntryPoint(entry_pc);
+        auto worker_regs = regs;
+        worker_regs[30] = block_id;
+        worker.cu->setInitialRegisters(worker_regs);
+        worker.cu->setReturnSentinel(RETURN_SENTINEL);
+        worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
+
+        worker.block_id = block_id;
+        worker.active = true;
+        return worker;
+    };
+
+    std::vector<Worker> workers;
+    workers.reserve(live_units);
+
+    uint32_t next_block = 0;
+    for (; next_block < total_blocks && workers.size() < live_units; ++next_block) {
+        workers.emplace_back(makeWorker(next_block));
+    }
+
+    last_cycles_       = 0;
+    last_instructions_ = 0;
+
     uint64_t cycle = 0;
-    while (!cu.isComplete()) {
-        cu.step();
-        ++cycle;
-        if (cycle % 100000 == 0) {
-            std::cout << "[bridge]   ... " << cycle << " cycles\n";
+    while (true) {
+        bool any_active = false;
+
+        for (auto& worker : workers) {
+            if (!worker.active || !worker.cu) {
+                continue;
+            }
+
+            any_active = true;
+            worker.cu->step();
+            ++cycle;
+
+            if (cycle % 100000 == 0) {
+                std::cout << "[bridge]   ... " << cycle << " functional steps\n";
+            }
+
+            if (worker.cu->isComplete()) {
+                last_cycles_       += worker.cu->getTotalCycles();
+                last_instructions_ += worker.cu->getTotalInstructions();
+                worker.active = false;
+
+                if (next_block < total_blocks) {
+                    worker = makeWorker(next_block++);
+                }
+            }
+        }
+
+        if (!any_active) {
+            break;
         }
     }
 
     std::cout << "[bridge] Execution complete: "
-              << cu.getTotalCycles() << " cycles, "
-              << cu.getTotalInstructions() << " instructions\n";
+              << last_cycles_ << " cycles, "
+              << last_instructions_ << " instructions\n";
 
-    last_cycles_       = cu.getTotalCycles();
-    last_instructions_ = cu.getTotalInstructions();
     last_l1_hits_      = static_cast<uint32_t>(mem.getL1CacheHits());
     last_l1_misses_    = static_cast<uint32_t>(mem.getL1CacheMisses());
+    last_divergence_events_ = 0;
+    for (const auto& worker : workers) {
+        if (worker.simt) {
+            last_divergence_events_ += worker.simt->getTotalDivergenceEvents();
+        }
+    }
+    last_grid_x_       = effective_grid_x;
+    last_grid_y_       = effective_grid_y;
+    last_grid_z_       = effective_grid_z;
+    last_block_x_      = effective_block_x;
+    last_block_y_      = effective_block_y;
+    last_block_z_      = effective_block_z;
+    last_entry_symbol_ = sym.name.empty() ? entry_name : sym.name;
 
     // ── 7. Copy results back to driver device buffers ─────────────────────────
     for (uint64_t dev_ptr : device_ptrs) {
@@ -158,6 +258,9 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     if (cfg_.print_stats) {
         std::cout << "\n[bridge] ── Performance Metrics ────────────────────────\n";
         std::cout << "[bridge]   Kernel:       " << kernel_name << "\n";
+        std::cout << "[bridge]   Entry:        " << last_entry_symbol_ << "\n";
+        std::cout << "[bridge]   Grid:         " << last_grid_x_ << "x" << last_grid_y_ << "x" << last_grid_z_ << "\n";
+        std::cout << "[bridge]   Block:        " << last_block_x_ << "x" << last_block_y_ << "x" << last_block_z_ << "\n";
         std::cout << "[bridge]   Cycles:       " << last_cycles_ << "\n";
         std::cout << "[bridge]   Instructions: " << last_instructions_ << "\n";
         std::cout << "[bridge]   IPC:          "

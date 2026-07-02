@@ -107,8 +107,10 @@ bool configureLaunch(const KernelLaunchArgs& la) {
     g_launch_configured = true;
     g_exec_state = ExecState::CONFIGURED;
     std::cout << "[driver] Launch configured: " << la.kernel_name
+              << "  entry=" << (la.entry_symbol.empty() ? "<unresolved>" : la.entry_symbol)
               << "  grid=" << la.grid_x << "x" << la.grid_y << "x" << la.grid_z
               << "  block=" << la.block_x << "x" << la.block_y << "x" << la.block_z
+              << "  threads=" << la.totalThreads()
               << "  args=" << la.args.size()
               << "  shared_mem=" << la.shared_mem_bytes << " bytes\n";
     // Print packed argument list so the hardware interface is visible.
@@ -181,6 +183,14 @@ bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data) 
 size_t getDeviceBufferSize(uint64_t dev_ptr) {
     auto it = g_device_buffers.find(dev_ptr);
     return (it != g_device_buffers.end()) ? it->second.size() : 0;
+}
+
+bool getCurrentLaunchArgs(KernelLaunchArgs& out_args) {
+    if (!g_launch_configured) {
+        return false;
+    }
+    out_args = g_launch_args;
+    return true;
 }
 
 const std::string& getKernelBinaryPath() {

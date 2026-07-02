@@ -69,6 +69,7 @@ private:
 
     std::vector<std::unique_ptr<ComputeUnit>>  compute_units_;
     std::unique_ptr<WarpScheduler>             scheduler_;
+    std::unique_ptr<SIMTController>            simt_controller_;
     std::unique_ptr<MemoryHierarchy>           memory_;
 
     SC_HAS_PROCESS(GPGPUTop);

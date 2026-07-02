@@ -55,6 +55,21 @@ static bool parseJsonStringValue(const std::string& line, const std::string& key
     return true;
 }
 
+static bool extractFirstFunctionSymbol(const std::string& report, std::string& symbol) {
+    std::istringstream iss(report);
+    std::string line;
+    while (std::getline(iss, line)) {
+        std::istringstream lss(line);
+        std::string sym, type, addr;
+        if (!(lss >> sym >> type >> addr)) continue;
+        if (type == "T" || type == "t" || type == "W" || type == "w") {
+            symbol = sym;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool parseJsonUint64Value(const std::string& line, const std::string& key, uint64_t& out_value) {
     auto key_pos = line.find('"' + key + '"');
     if (key_pos == std::string::npos) {
@@ -68,6 +83,15 @@ static bool parseJsonUint64Value(const std::string& line, const std::string& key
     size_t end_pos = 0;
     out_value = std::stoull(value_str, &end_pos);
     return end_pos > 0;
+}
+
+static bool parseJsonUint32Value(const std::string& line, const std::string& key, uint32_t& out_value) {
+    uint64_t temp = 0;
+    if (!parseJsonUint64Value(line, key, temp)) {
+        return false;
+    }
+    out_value = static_cast<uint32_t>(temp);
+    return true;
 }
 
 bool packKernelBundle(
@@ -85,11 +109,23 @@ bool packKernelBundle(
         return false;
     }
 
+    std::string entry_symbol;
+    if (!resolveEntrySymbol(binary_path, kernel_name, entry_symbol)) {
+        std::string symbols;
+        if (listKernelSymbols(binary_path, symbols)) {
+            extractFirstFunctionSymbol(symbols, entry_symbol);
+        }
+        if (entry_symbol.empty()) {
+            entry_symbol = kernel_name;
+        }
+    }
+
     uint64_t binary_size = fs::file_size(fs::path(binary_path));
     std::ostringstream manifest;
     manifest << "{\n";
     manifest << "  \"kernel_name\": \"" << kernel_name << "\",\n";
     manifest << "  \"binary_path\": \"" << binary_path << "\",\n";
+    manifest << "  \"entry_symbol\": \"" << entry_symbol << "\",\n";
     manifest << "  \"binary_size\": " << binary_size << ",\n";
     manifest << "  \"workgroup_x\": " << workgroup_x << ",\n";
     manifest << "  \"workgroup_y\": " << workgroup_y << ",\n";
@@ -116,11 +152,9 @@ bool loadKernelBundle(const std::string& manifest_path) {
     return true;
 }
 
-bool inspectKernelBundle(
+bool inspectKernelBundleDetails(
     const std::string& manifest_path,
-    std::string& kernel_name,
-    std::string& binary_path,
-    uint64_t& binary_size) {
+    KernelBundleInfo& info) {
 
     std::cout << "[kernel_loader] Inspecting kernel bundle manifest " << manifest_path << "\n";
     std::ifstream manifest(manifest_path);
@@ -129,32 +163,51 @@ bool inspectKernelBundle(
         return false;
     }
 
-    kernel_name.clear();
-    binary_path.clear();
-    binary_size = 0;
+    info = KernelBundleInfo{};
     uint64_t seen_size = 0;
     std::string line;
     while (std::getline(manifest, line)) {
-        parseJsonStringValue(line, "kernel_name", kernel_name);
-        parseJsonStringValue(line, "binary_path", binary_path);
+        parseJsonStringValue(line, "kernel_name", info.kernel_name);
+        parseJsonStringValue(line, "binary_path", info.binary_path);
+        parseJsonStringValue(line, "entry_symbol", info.entry_symbol);
         parseJsonUint64Value(line, "binary_size", seen_size);
+        parseJsonUint32Value(line, "workgroup_x", info.workgroup_x);
+        parseJsonUint32Value(line, "workgroup_y", info.workgroup_y);
+        parseJsonUint32Value(line, "workgroup_z", info.workgroup_z);
+        parseJsonUint64Value(line, "shared_mem_bytes", info.shared_mem_bytes);
     }
 
-    if (kernel_name.empty() || binary_path.empty()) {
+    if (info.kernel_name.empty() || info.binary_path.empty()) {
         std::cerr << "[kernel_loader] Manifest missing required fields.\n";
         return false;
     }
-    if (!pathExists(binary_path)) {
-        std::cerr << "[kernel_loader] Binary referenced in manifest is missing: " << binary_path << "\n";
+    if (!pathExists(info.binary_path)) {
+        std::cerr << "[kernel_loader] Binary referenced in manifest is missing: " << info.binary_path << "\n";
         return false;
     }
 
-    binary_size = fs::file_size(fs::path(binary_path));
-    if (seen_size != 0 && seen_size != binary_size) {
-        std::cerr << "[kernel_loader] Binary size mismatch: manifest=" << seen_size << " actual=" << binary_size << "\n";
+    info.binary_size = fs::file_size(fs::path(info.binary_path));
+    if (seen_size != 0 && seen_size != info.binary_size) {
+        std::cerr << "[kernel_loader] Binary size mismatch: manifest=" << seen_size << " actual=" << info.binary_size << "\n";
         return false;
     }
 
+    return true;
+}
+
+bool inspectKernelBundle(
+    const std::string& manifest_path,
+    std::string& kernel_name,
+    std::string& binary_path,
+    uint64_t& binary_size) {
+
+    KernelBundleInfo info;
+    if (!inspectKernelBundleDetails(manifest_path, info)) {
+        return false;
+    }
+    kernel_name = info.kernel_name;
+    binary_path = info.binary_path;
+    binary_size = info.binary_size;
     return true;
 }
 

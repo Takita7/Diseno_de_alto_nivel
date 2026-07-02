@@ -24,6 +24,25 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_MODELS AND SystemC_FOUND)
             SystemC::SystemC
         )
         add_test(NAME pipeline_integration_tests COMMAND test_pipeline)
+
+        add_executable(test_simt_controller test_simt_controller.cpp sc_gtest_main.cpp)
+        target_link_libraries(test_simt_controller PRIVATE
+            GTest::GTest
+            simt_controller
+            SystemC::SystemC
+        )
+        add_test(NAME simt_controller_tests COMMAND test_simt_controller)
+
+        add_executable(test_simt_compute_unit test_simt_compute_unit.cpp sc_gtest_main.cpp)
+        target_link_libraries(test_simt_compute_unit PRIVATE
+            GTest::GTest
+            compute_unit
+            simt_controller
+            memory_hierarchy
+            systemc_integration
+            SystemC::SystemC
+        )
+        add_test(NAME simt_compute_unit_tests COMMAND test_simt_compute_unit)
     else()
         message(WARNING "GTest not found. Skipping C++ unit tests.")
     endif()

@@ -56,6 +56,14 @@ public:
     uint64_t lastTotalInstructions() const { return last_instructions_; }
     uint32_t lastL1Hits()            const { return last_l1_hits_; }
     uint32_t lastL1Misses()          const { return last_l1_misses_; }
+    uint32_t lastGridX()             const { return last_grid_x_; }
+    uint32_t lastGridY()             const { return last_grid_y_; }
+    uint32_t lastGridZ()             const { return last_grid_z_; }
+    uint32_t lastBlockX()            const { return last_block_x_; }
+    uint32_t lastBlockY()            const { return last_block_y_; }
+    uint32_t lastBlockZ()            const { return last_block_z_; }
+    uint32_t lastDivergenceEvents()  const { return last_divergence_events_; }
+    const std::string& lastEntrySymbol() const { return last_entry_symbol_; }
 
 private:
     Config   cfg_;
@@ -63,6 +71,14 @@ private:
     uint64_t last_instructions_ = 0;
     uint32_t last_l1_hits_      = 0;
     uint32_t last_l1_misses_    = 0;
+    uint32_t last_grid_x_       = 1;
+    uint32_t last_grid_y_       = 1;
+    uint32_t last_grid_z_       = 1;
+    uint32_t last_block_x_      = 1;
+    uint32_t last_block_y_      = 1;
+    uint32_t last_block_z_      = 1;
+    uint32_t last_divergence_events_ = 0;
+    std::string last_entry_symbol_;
 };
 
 } // namespace riscv_gpgpu
