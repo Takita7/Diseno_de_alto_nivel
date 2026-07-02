@@ -103,8 +103,10 @@
 
 ### Tests for User Story 3
 
-- [x] T027 [P] [US3] Add compiler/backend smoke tests in `tests/compiler/test_llvm_backend.py`
-- [x] T028 [P] [US3] Add runtime and driver integration tests in `tests/runtime/test_runtime_api.py`
+- [x] T027 [P] [US3] Add compiler/backend smoke tests in `tests/compiler/llvm/test_llvm_backend.cpp`
+	- Status: smoke coverage exists in `tests/compiler/llvm/test_llvm_backend.cpp`; backend-specific compile regressions also exist in `software/llvm/backend/test_llvm_backend.cpp`.
+- [x] T028 [P] [US3] Add runtime and driver integration tests in `runtime/src/test_runtime_api.cpp` and `driver/src/test_driver_api.cpp`
+	- Status: runtime upload/launch/poll flow and driver API smoke checks are covered by C++ tests registered through CMake.
 ### Implementation for User Story 3 (detailed)
 
 - [x] T029 [US3] Define the compiler/runtime interface contract in `docs/software/interfaces.md`
@@ -113,25 +115,50 @@
 - [x] T030 [US3] Implement the LLVM backend adaptation scaffold in `software/llvm/backend/`
 	- Deliverable: prototype LLVM backend directory with TableGen `.td` files, `TargetLowering`, and `SelectionDAG`/ISel hooks.
 	- Notes: Target name `riscv-gpgpu` (start from `llvm-project/llvm/lib/Target/RISCV` as a template).
+	- Implemented now: `clang`/`ld.lld`-based RISC-V ELF emission for C/C++ and CUDA-like `.cu` frontend sources, plus demo artifact generation and backend tests.
+	- Pending for closure: real LLVM target integration (`TableGen`, lowering, instruction selection, ABI-aware codegen) instead of the current compiler-driver wrapper.
 
 - [x] T031 [US3] Implement assembler/linker additions in `software/llvm/mc/` or `software/binutils/`
 	- Deliverable: MC/ASM support for new SIMT instructions and assembler syntax; update to `lld` if using LLVM linking.
 	- Notes: current implementation uses `clang`/`ld.lld` to emit and link `riscv32-unknown-elf` kernels using `rv32gc`/`ilp32`.
+	- Implemented now: object assembly/link helpers and validated disassembly flow using `binutils-riscv64-unknown-elf`.
+	- Pending for closure: custom SIMT/GPGPU instruction encodings, assembler syntax, and MC-layer validation beyond baseline RISC-V code generation.
 
 - [x] T032 [US3] Implement the runtime kernel-launch and execution-status interface in `runtime/src/`
 	- Deliverable: `runtime/src/host_runtime.cpp` exposing kernel upload, launch, status, and simple memory management APIs compatible with CUDA/HIP semantics.
 	- Notes: runtime now supports bundle manifest upload, bundle inspection, and driver-backed kernel launch.
+	- Implemented now: manifest-driven upload, name validation, launch dispatch, and status polling through the driver shim.
+	- Pending for closure: real device memory management, grid-level launch configuration, completion/error propagation, and richer CUDA/HIP-like runtime semantics.
 
 - [x] T033 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
 	- Deliverable: userspace loader `driver/src/loader.cpp` implementing bitstream/kernel load, DMA setup, and kernel control commands; host API in `software/host_api/` that maps runtime calls to driver operations.
 	- Notes: driver loader now accepts kernel binaries from bundle manifests and exposes configure/start/query hooks.
+	- Implemented now: loader stubs for load/configure/start/query and host API smoke coverage.
+	- Pending for closure: DMA programming, device buffer management, bitstream/hardware binding, and a non-stub host API that actually maps runtime/kernel arguments into driver transactions.
 
 - [x] T034 [US3] Implement the kernel-loader and configuration-management path in `software/kernel_loader/`
 	- Deliverable: tooling to pack kernel binaries, metadata (workgroup size, required shared mem), and support upload format (e.g., simple tar/json manifest).
 	- Notes: bundle manifest currently includes `kernel_name`, `binary_path`, `binary_size`, workgroup dimensions, and shared memory size.
+	- Implemented now: bundle pack/load/inspect helpers plus demo outputs for manifest, launch packet, ELF metadata, symbols, relocations, SHA256, and expected output.
+	- Pending for closure: richer metadata for buffer layouts, mangled/physical entry symbol mapping, relocation policy, ISA requirements, and hardware memory banking/config details.
 
 - [x] T035 [US3] Add benchmark harnesses and reproducibility scripts in `benchmarks/` and `scripts/benchmark/`
 	- Deliverable: example kernels (Rodinia subset) and scripts to build, upload, run, and collect metrics for comparison.
+	- Implemented now: benchmark directory structure, configuration templates, result analysis script, and top-level benchmark harness entry point.
+	- Pending for closure: actual benchmark workloads integrated with the runtime/driver path, end-to-end execution against hardware or simulation, and captured comparison results.
+
+### Current Software Status Snapshot
+
+- Completed and validated now:
+	- RISC-V 32-bit kernel emission from C/C++ and CUDA-like `.cu` sources.
+	- ELF/disassembly inspection flow for emitted kernels.
+	- Bundle manifest generation, inspection, and runtime upload/launch plumbing.
+	- Driver/runtime smoke tests and demo artifacts for launch packet and expected output.
+- Still pending in software before the stack can be called complete:
+	- Real LLVM backend/target work instead of the current `clang` wrapper flow.
+	- Custom GPGPU/SIMT instruction definitions and matching assembler/MC support.
+	- Non-stub host API and driver DMA/device-memory implementation.
+	- Real benchmark kernels and benchmark result capture through the runtime/hardware path.
 
 ### Notes / Repositories to clone for US3 work
 
