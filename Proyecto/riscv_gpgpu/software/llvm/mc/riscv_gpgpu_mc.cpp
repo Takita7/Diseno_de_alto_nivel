@@ -85,7 +85,7 @@ bool linkKernelObjects(const std::vector<std::vector<uint8_t>>& objects, std::ve
 
     fs::path output_file = temp_dir / "riscv_gpgpu_linked.elf";
     std::ostringstream link_cmd;
-    link_cmd << "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -nostdlib -Wl,--no-entry -shared -o " << shellEscape(output_file.string());
+    link_cmd << "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -fuse-ld=lld -nostdlib -Wl,--entry,0 -o " << shellEscape(output_file.string());
     for (auto const& path : object_paths) {
         link_cmd << " " << shellEscape(path.string());
     }

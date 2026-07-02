@@ -6,6 +6,7 @@
 
 namespace riscv_gpgpu {
 
+// ── Bundle pack / load / inspect ───────────────────────────────────────────────
 bool packKernelBundle(
     const std::string& kernel_name,
     const std::string& binary_path,
@@ -24,6 +25,18 @@ bool inspectKernelBundle(
     std::string& kernel_name,
     std::string& binary_path,
     uint64_t& binary_size);
+
+// ── ELF entry point resolution ───────────────────────────────────────────────
+// Scans the ELF symbol table to find the mangled name of a kernel function.
+// kernel_base_name should be the undecorated name (e.g. "vector_add").
+// On success, entry_symbol receives the exact mangled symbol name.
+bool resolveEntrySymbol(
+    const std::string& binary_path,
+    const std::string& kernel_base_name,
+    std::string& entry_symbol);
+
+// Returns a human-readable dump of all global FUNC symbols in the ELF.
+bool listKernelSymbols(const std::string& binary_path, std::string& symbol_report);
 
 } // namespace riscv_gpgpu
 

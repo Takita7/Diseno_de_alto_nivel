@@ -1,3 +1,4 @@
+#include "host_runtime.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -7,68 +8,74 @@
 
 namespace riscv_gpgpu {
 
-struct KernelLaunchInfo {
-    std::string name;
-    std::vector<uint64_t> args;
-    uint32_t workgroup_x = 1;
-    uint32_t workgroup_y = 1;
-    uint32_t workgroup_z = 1;
-};
-
 static std::string current_kernel_name;
 static std::string current_binary_path;
-static uint64_t current_binary_size = 0;
-static bool current_kernel_loaded = false;
+static uint64_t    current_binary_size  = 0;
+static bool        current_kernel_loaded = false;
 
+// ─── Bundle upload ─────────────────────────────────────────────────────────
 bool uploadKernelBundle(const std::string& manifest_path) {
-    std::string kernel_name;
-    std::string binary_path;
-    uint64_t binary_size = 0;
-    if (!inspectKernelBundle(manifest_path, kernel_name, binary_path, binary_size)) {
+    std::string kernel_name, binary_path;
+    uint64_t    binary_size = 0;
+    if (!inspectKernelBundle(manifest_path, kernel_name, binary_path, binary_size))
         return false;
-    }
-
-    if (!loadKernelBinary(binary_path)) {
+    if (!loadKernelBinary(binary_path))
         return false;
-    }
-
-    current_kernel_name = kernel_name;
-    current_binary_path = binary_path;
-    current_binary_size = binary_size;
+    current_kernel_name   = kernel_name;
+    current_binary_path   = binary_path;
+    current_binary_size   = binary_size;
     current_kernel_loaded = true;
-    std::cout << "[runtime] Kernel bundle loaded: " << current_kernel_name << "\n";
+    std::cout << "[runtime] Kernel bundle loaded: " << current_kernel_name
+              << " (" << binary_size << " bytes)\n";
     return true;
 }
 
+// ─── Kernel launch ──────────────────────────────────────────────────────────
 bool launchKernel(const KernelLaunchInfo& info) {
     if (!current_kernel_loaded) {
-        std::cerr << "[runtime] No kernel loaded before launch.\n";
+        std::cerr << "[runtime] No kernel loaded\n";
         return false;
     }
     if (info.name != current_kernel_name) {
-        std::cerr << "[runtime] Kernel name mismatch: expected '" << current_kernel_name << "' got '" << info.name << "'\n";
+        std::cerr << "[runtime] Kernel name mismatch: expected '" << current_kernel_name
+                  << "' got '" << info.name << "'\n";
         return false;
     }
-    if (!configureKernel(info.name, info.args)) {
-        return false;
-    }
-    if (!startKernel()) {
-        return false;
-    }
-    std::cout << "[runtime] Launching kernel: " << info.name << " with workgroup " << info.workgroup_x << "x" << info.workgroup_y << "x" << info.workgroup_z << "\n";
+    KernelLaunchArgs la;
+    la.kernel_name = info.name;
+    la.grid_x  = info.grid_x;      la.grid_y  = info.grid_y;      la.grid_z  = info.grid_z;
+    la.block_x = info.workgroup_x; la.block_y = info.workgroup_y; la.block_z = info.workgroup_z;
+    la.args    = info.args;
+    if (!configureLaunch(la))  return false;
+    if (!startKernel())        return false;
+    std::cout << "[runtime] Launched '" << info.name << "'"
+              << "  grid=[" << info.grid_x << "," << info.grid_y << "," << info.grid_z << "]"
+              << "  block=[" << info.workgroup_x << "," << info.workgroup_y << "," << info.workgroup_z << "]\n";
     return true;
 }
 
+// ─── Status ───────────────────────────────────────────────────────────────────
 bool pollKernelStatus(std::string& status) {
     if (!current_kernel_loaded) {
-        std::cerr << "[runtime] No kernel with status to poll.\n";
+        std::cerr << "[runtime] No kernel loaded\n";
         return false;
     }
-    if (!queryKernelStatus(status)) {
-        return false;
-    }
-    std::cout << "[runtime] Kernel status: " << status << "\n";
+    if (!queryKernelStatus(status)) return false;
+    std::cout << "[runtime] Kernel '" << current_kernel_name << "' status: " << status << "\n";
     return true;
+}
+
+bool waitKernelCompletion() {
+    if (!current_kernel_loaded) {
+        std::cerr << "[runtime] No kernel loaded\n";
+        return false;
+    }
+    bool completed = false;
+    if (!pollKernelCompletion(completed)) return false;
+    std::string status;
+    queryKernelStatus(status);
+    std::cout << "[runtime] Kernel '" << current_kernel_name << "' completed with status: " << status << "\n";
+    return completed;
 }
 
 } // namespace riscv_gpgpu

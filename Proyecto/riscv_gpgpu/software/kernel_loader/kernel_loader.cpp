@@ -1,3 +1,4 @@
+#include "kernel_loader.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -154,6 +155,104 @@ bool inspectKernelBundle(
         return false;
     }
 
+    return true;
+}
+
+// ─── ELF entry point resolution ───────────────────────────────────────────────
+//
+// Uses `nm` (from binutils-riscv64-unknown-elf) to scan the symbol table.
+// Falls back to `riscv64-unknown-elf-nm` then `nm` (host) in that order.
+// Matches the first FUNC symbol whose demangled or mangled name contains
+// kernel_base_name.
+
+static std::string runCommand(const std::string& cmd) {
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return {};
+    std::string result;
+    char buf[256];
+    while (fgets(buf, sizeof(buf), pipe))
+        result += buf;
+    pclose(pipe);
+    return result;
+}
+
+static std::string detectNm() {
+    // Prefer the RISC-V-targeted nm for demangled names; fall back to system nm.
+    for (const auto& candidate : {
+            "riscv64-unknown-elf-nm",
+            "riscv32-unknown-elf-nm",
+            "nm"}) {
+        std::string test = std::string("which ") + candidate + " 2>/dev/null";
+        std::string found = runCommand(test);
+        if (!found.empty()) return candidate;
+    }
+    return {};
+}
+
+bool resolveEntrySymbol(
+        const std::string& binary_path,
+        const std::string& kernel_base_name,
+        std::string& entry_symbol) {
+
+    if (!pathExists(binary_path)) {
+        std::cerr << "[kernel_loader] resolveEntrySymbol: binary not found: " << binary_path << "\n";
+        return false;
+    }
+
+    std::string nm = detectNm();
+    if (nm.empty()) {
+        std::cerr << "[kernel_loader] resolveEntrySymbol: no nm utility found in PATH\n";
+        return false;
+    }
+
+    // --defined-only -f posix: <name> <type> <value> <size>
+    std::string cmd = nm + " --defined-only -f posix \"" + binary_path + "\" 2>/dev/null";
+    std::string output = runCommand(cmd);
+    if (output.empty()) {
+        std::cerr << "[kernel_loader] resolveEntrySymbol: nm produced no output for " << binary_path << "\n";
+        return false;
+    }
+
+    // Parse posix-format lines: <symbol> <type> <value> [<size>]
+    // Types: T = .text (global), t = .text (local), W = weak, etc.
+    // We match any symbol name that contains kernel_base_name and is a FUNC.
+    std::istringstream iss(output);
+    std::string line;
+    while (std::getline(iss, line)) {
+        std::istringstream lss(line);
+        std::string sym, type, addr;
+        if (!(lss >> sym >> type >> addr)) continue;
+        // RISC-V nm reports T or t for text (function) symbols.
+        if (type != "T" && type != "t" && type != "W" && type != "w") continue;
+        if (sym.find(kernel_base_name) != std::string::npos) {
+            entry_symbol = sym;
+            std::cout << "[kernel_loader] Resolved entry symbol: '" << sym
+                      << "' for kernel '" << kernel_base_name << "'\n";
+            return true;
+        }
+    }
+
+    // No match found.
+    std::cerr << "[kernel_loader] resolveEntrySymbol: no symbol containing '"
+              << kernel_base_name << "' found in " << binary_path << "\n";
+    return false;
+}
+
+bool listKernelSymbols(const std::string& binary_path, std::string& symbol_report) {
+    if (!pathExists(binary_path)) {
+        std::cerr << "[kernel_loader] listKernelSymbols: binary not found: " << binary_path << "\n";
+        return false;
+    }
+
+    std::string nm = detectNm();
+    if (nm.empty()) {
+        symbol_report = "<nm not found>";
+        return false;
+    }
+
+    std::string cmd = nm + " --defined-only -f posix \"" + binary_path + "\" 2>/dev/null";
+    symbol_report = runCommand(cmd);
+    if (symbol_report.empty()) symbol_report = "<no symbols>";
     return true;
 }
 

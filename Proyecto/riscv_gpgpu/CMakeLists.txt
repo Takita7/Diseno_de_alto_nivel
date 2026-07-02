@@ -50,9 +50,10 @@ if(BUILD_HLS)
 endif()
 
 # Add subdirectories
+# driver must come before software/runtime because host_api and runtime link against driver_lib.
+add_subdirectory(driver)
 add_subdirectory(software)
 add_subdirectory(runtime)
-add_subdirectory(driver)
 
 if(BUILD_SYSTEMC_MODELS)
     add_subdirectory(models)

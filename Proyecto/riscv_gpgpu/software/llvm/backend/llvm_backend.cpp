@@ -89,7 +89,7 @@ bool emitKernelBinary(const std::string& kernel_source_path, const std::string& 
     }
 
     fs::create_directories(output_file.parent_path());
-    std::string link_cmd = "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -nostdlib -Wl,--no-entry -shared -o " + shellEscape(output_file.string()) + " " + shellEscape(object_file.string());
+    std::string link_cmd = "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -fuse-ld=lld -nostdlib -Wl,--entry,0 -o " + shellEscape(output_file.string()) + " " + shellEscape(object_file.string());
     if (!runCommand(link_cmd)) {
         std::cerr << "[llvm_backend] Failed to link kernel object.\n";
         return false;
