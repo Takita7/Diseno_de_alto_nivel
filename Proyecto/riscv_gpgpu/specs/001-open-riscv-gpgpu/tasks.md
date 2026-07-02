@@ -103,18 +103,48 @@
 
 ### Tests for User Story 3
 
-- [ ] T027 [P] [US3] Add compiler/backend smoke tests in `tests/compiler/test_llvm_backend.py`
-- [ ] T028 [P] [US3] Add runtime and driver integration tests in `tests/runtime/test_runtime_api.py`
+- [x] T027 [P] [US3] Add compiler/backend smoke tests in `tests/compiler/test_llvm_backend.py`
+- [x] T028 [P] [US3] Add runtime and driver integration tests in `tests/runtime/test_runtime_api.py`
+### Implementation for User Story 3 (detailed)
 
-### Implementation for User Story 3
+- [x] T029 [US3] Define the compiler/runtime interface contract in `docs/software/interfaces.md`
+	- Deliverable: `docs/software/interfaces.md` with ABI, kernel-binary layout, kernel args, memory model mapping, and host-driver protocol (RPC/IOCTL verbs).
 
-- [ ] T029 [US3] Define the compiler/runtime interface contract in `docs/software/interfaces.md`
-- [ ] T030 [US3] Implement the LLVM backend adaptation scaffold in `software/llvm/backend/`
-- [ ] T031 [US3] Implement the runtime kernel launch and execution-status interface in `runtime/src/`
-- [ ] T032 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
-- [ ] T033 [US3] Implement the kernel-loader and configuration-management path in `software/kernel_loader/`
-- [ ] T034 [US3] Add benchmark harnesses and reproducibility scripts in `benchmarks/` and `scripts/benchmark/`
-- [ ] T035 [US3] Publish verification and benchmark report templates in `docs/verification/` and `docs/reproducibility/`
+- [x] T030 [US3] Implement the LLVM backend adaptation scaffold in `software/llvm/backend/`
+	- Deliverable: prototype LLVM backend directory with TableGen `.td` files, `TargetLowering`, and `SelectionDAG`/ISel hooks.
+	- Notes: Target name `riscv-gpgpu` (start from `llvm-project/llvm/lib/Target/RISCV` as a template).
+
+- [x] T031 [US3] Implement assembler/linker additions in `software/llvm/mc/` or `software/binutils/`
+	- Deliverable: MC/ASM support for new SIMT instructions and assembler syntax; update to `lld` if using LLVM linking.
+
+- [x] T032 [US3] Implement the runtime kernel-launch and execution-status interface in `runtime/src/`
+	- Deliverable: `runtime/src/host_runtime.cpp` exposing kernel upload, launch, status, and simple memory management APIs compatible with CUDA/HIP semantics.
+	- Notes: Provide a shim layer so POCL / host-side runtime can call into this API.
+
+- [x] T033 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
+	- Deliverable: userspace loader `driver/src/loader.cpp` implementing bitstream/kernel load, DMA setup, and kernel control commands; host API in `software/host_api/` that maps runtime calls to driver operations.
+
+- [x] T034 [US3] Implement the kernel-loader and configuration-management path in `software/kernel_loader/`
+	- Deliverable: tooling to pack kernel binaries, metadata (workgroup size, required shared mem), and support upload format (e.g., simple tar/json manifest).
+
+- [x] T035 [US3] Add benchmark harnesses and reproducibility scripts in `benchmarks/` and `scripts/benchmark/`
+	- Deliverable: example kernels (Rodinia subset) and scripts to build, upload, run, and collect metrics for comparison.
+
+### Notes / Repositories to clone for US3 work
+
+- `llvm-project` (preferred integration): implement `riscv-gpgpu` target inside LLVM and build `clang`/`lld`.
+- `riscv-gnu-toolchain` or `binutils` (optional): if you prefer GNU assembler/linker flows.
+- `pocl` (or other runtime): adapt device plugin to call host runtime API.
+- Reference projects to study and adapt: `vortex`, `CuPBoP`, `ventus`.
+
+### Local paths and environment
+
+- `software/llvm/backend/` — workspace for backend development (TableGen, codegen)
+- `software/host_api/` — host-side API and headers used by the runtime
+- `runtime/src/` — runtime implementation that interacts with `driver/src/`
+- `driver/src/` — userspace loader and kernel uploader
+
+Update tasks and mark progress in `tasks.md` as work progresses; each subtask should link to a test in `tests/` and a doc entry in `docs/`.
 
 **Checkpoint**: At this point, the software stack, runtime, and benchmark flow are independently functional.
 
