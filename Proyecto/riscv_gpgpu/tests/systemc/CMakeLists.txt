@@ -1,6 +1,6 @@
 # CMakeLists.txt - SystemC tests
 
-if(BUILD_TESTS)
+if(BUILD_TESTS AND BUILD_SYSTEMC_MODELS)
     if(GTest_FOUND)
         add_executable(test_scheduler test_scheduler.cpp)
         target_link_libraries(test_scheduler PRIVATE 
@@ -21,6 +21,8 @@ if(BUILD_TESTS)
     else()
         message(WARNING "GTest not found. Skipping C++ unit tests.")
     endif()
+elseif(BUILD_TESTS)
+    message(STATUS "BUILD_SYSTEMC_MODELS is OFF; skipping SystemC unit tests.")
 endif()
 
 message(STATUS "SystemC tests configured")

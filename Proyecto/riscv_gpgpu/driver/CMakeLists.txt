@@ -1,6 +1,6 @@
 # CMakeLists.txt - Driver
 
-# Subdirectories for driver components
-# add_subdirectory(src)
+# Driver implementation and userspace loader
+add_subdirectory(src)
 
-message(STATUS "Driver subdirectory (ready for implementation)")
+message(STATUS "Driver subdirectory configured")

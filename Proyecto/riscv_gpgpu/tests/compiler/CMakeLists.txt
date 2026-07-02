@@ -1,0 +1,9 @@
+if(BUILD_TESTS)
+    if(GTest_FOUND)
+        add_subdirectory(llvm)
+    else()
+        message(WARNING "GTest not found. Skipping compiler tests.")
+    endif()
+endif()
+
+message(STATUS "Compiler tests configured")

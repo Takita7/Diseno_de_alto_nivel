@@ -1,0 +1,11 @@
+if(BUILD_TESTS)
+    if(GTest_FOUND)
+        add_executable(test_top_runtime_api ../runtime/src/test_runtime_api.cpp)
+        target_link_libraries(test_top_runtime_api PRIVATE GTest::GTest GTest::Main)
+        add_test(NAME runtime_api_tests COMMAND test_top_runtime_api)
+    else()
+        message(WARNING "GTest not found. Skipping runtime tests.")
+    endif()
+endif()
+
+message(STATUS "Runtime tests configured")
