@@ -46,6 +46,11 @@ if command -v llvm-config &> /dev/null; then
     echo "Detected LLVM: $LLVM_HOME"
 fi
 
+if command -v riscv64-unknown-elf-objdump &> /dev/null; then
+    export RISCV_OBJDUMP=$(command -v riscv64-unknown-elf-objdump)
+    echo "Detected RISC-V objdump: $RISCV_OBJDUMP"
+fi
+
 # Create build directory
 if [ ! -d "$PROJECT_ROOT/build" ]; then
     mkdir -p "$PROJECT_ROOT/build"

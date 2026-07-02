@@ -16,6 +16,7 @@ Prerequisites
 - Python 3.10+ (for scripts)
 - Google Test (`libgtest-dev`, `libgmock-dev`) for C++ unit tests
 - LLVM/Clang tools (`clang`, `lld`, `llvm-dev`, `llvm-tools`) for compiler/runtime development
+- RISC-V cross binutils (`binutils-riscv64-unknown-elf`) for ELF inspection and disassembly
 - OpenCL ICD headers (`ocl-icd-opencl-dev`, `opencl-c-headers`, `opencl-clhpp-headers`) for runtime integration
 - Host dev packages: `libhwloc-dev`, `libnuma-dev`, `libelf-dev`, `libfdt-dev`, `libxml2-dev`, `libssl-dev`
 
@@ -45,6 +46,19 @@ Option A — via provided runner (recommended):
 # from project root
 ./scripts/run_systemc_sim.sh --scenario baseline
 ```
+
+## CUDA-style kernel bundle demo
+
+Run the demo script to generate a CUDA-like kernel, compile it to a RISC-V ELF binary, and produce a bundle manifest for hardware integration.
+
+```bash
+./scripts/demo_cuda_kernel_bundle.sh
+```
+
+The script prints the bundle manifest and binary metadata that the runtime/driver interface expects.
+The demo now builds a small CUDA-style `vector_add` kernel and always emits a decoded RISC-V disassembly under `build/cuda_demo/vector_add.disasm.txt`.
+It requires a RISC-V-capable disassembler in `PATH`; on Ubuntu/Debian, install `binutils-riscv64-unknown-elf` to get `riscv64-unknown-elf-objdump`, which correctly decodes the generated ELF32 RISC-V binary.
+The same demo also emits ELF header, section table, symbol table, relocation table, launch packet, SHA256 digest, and expected-output artifacts under `build/cuda_demo/`.
 
 Option B — run the built executable directly:
 

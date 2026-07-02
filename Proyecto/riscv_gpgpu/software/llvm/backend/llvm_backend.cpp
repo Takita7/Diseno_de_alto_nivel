@@ -1,5 +1,6 @@
 #include "llvm_backend.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -26,6 +27,25 @@ static bool runCommand(const std::string& command) {
     std::cout << "[llvm_backend] Running: " << command << "\n";
     int result = std::system(command.c_str());
     return result == 0;
+}
+
+static bool isCudaSource(const fs::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext == ".cu" || ext == ".cuh";
+}
+
+static std::string getClangSourceOptions(const fs::path& source_path) {
+    if (isCudaSource(source_path)) {
+        return "-x c++ -std=c++17 -D__global__= -D__device__= -D__host__= -D__shared__= -D__constant__= -D__restrict__=";
+    }
+
+    std::string ext = source_path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx") {
+        return "-x c++ -std=c++17";
+    }
+    return "-x c";
 }
 
 bool initializeLLVMBackend() {
@@ -61,7 +81,8 @@ bool emitKernelBinary(const std::string& kernel_source_path, const std::string& 
     fs::path object_file = output_file;
     object_file.replace_extension(".o");
 
-    std::string compile_cmd = "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -O2 -c " + shellEscape(source_path.string()) + " -o " + shellEscape(object_file.string());
+    std::string source_options = getClangSourceOptions(source_path);
+    std::string compile_cmd = "clang -target riscv32-unknown-elf -march=rv32gc -mabi=ilp32 " + source_options + " -O2 -c " + shellEscape(source_path.string()) + " -o " + shellEscape(object_file.string());
     if (!runCommand(compile_cmd)) {
         std::cerr << "[llvm_backend] Failed to compile kernel source.\n";
         return false;

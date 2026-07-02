@@ -19,7 +19,8 @@ echo "Installing build tools and libraries (non-FPGA/HLS)..."
 apt-get install -y build-essential cmake ninja-build git curl python3-venv python3-pip \
   pkg-config libssl-dev zlib1g-dev libncurses5-dev libelf-dev libudev-dev libfdt-dev \
   libxml2-dev autoconf automake libtool bison flex python3-dev libgtest-dev libgmock-dev \
-  clang lld llvm-dev llvm-tools libhwloc-dev libnuma-dev ocl-icd-opencl-dev opencl-c-headers opencl-clhpp-headers
+  clang lld llvm-dev llvm-tools binutils-riscv64-unknown-elf libhwloc-dev libnuma-dev \
+  ocl-icd-opencl-dev opencl-c-headers opencl-clhpp-headers
 
 echo "Creating global virtualenv for project at /opt/riscv-gpgpu-venv"
 VENV_DIR=/opt/riscv-gpgpu-venv
