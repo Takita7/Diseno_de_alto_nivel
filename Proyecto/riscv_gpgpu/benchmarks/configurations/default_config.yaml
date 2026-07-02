@@ -1,0 +1,118 @@
+# Benchmark Configuration Template
+
+# Default benchmark configuration for RISCV GPGPU
+#
+# This file defines benchmark parameters and execution settings
+
+# Benchmark Suite Configuration
+benchmark_suite:
+  # Enable/disable benchmark categories
+  enable_rodinia: true
+  enable_custom_micro: true
+  enable_design_space: false
+  
+  # Rodinia benchmark selection
+  rodinia_benchmarks:
+    - bfs
+    - hotspot
+    - needle
+    - gaussian
+    - lavamds
+
+# Performance Measurement Settings
+measurements:
+  # Enable detailed performance counters
+  enable_counters: true
+  
+  # Counter categories
+  counters:
+    - instruction_count
+    - cycle_count
+    - cache_hits
+    - cache_misses
+    - memory_bandwidth
+    - synchronization_stalls
+    - divergence_stalls
+  
+  # Sampling frequency (cycles between samples)
+  sample_frequency: 1000
+  
+  # Enable waveform tracing (may impact performance)
+  enable_tracing: false
+
+# Workload Configuration
+workloads:
+  # Input data sizes for benchmarks
+  data_sizes:
+    small: 1024
+    medium: 8192
+    large: 65536
+  
+  # Kernel launch configuration
+  kernel_config:
+    # Default grid and block dimensions
+    default_grid_x: 16
+    default_grid_y: 1
+    default_block_x: 256
+    default_block_y: 1
+  
+  # Number of iterations for averaging
+  iterations: 5
+  
+  # Warm-up runs before measurement
+  warmup_runs: 2
+
+# Architecture Configuration for Benchmarks
+architecture:
+  # Number of compute units to model
+  num_compute_units: 4
+  
+  # Threads per warp
+  threads_per_warp: 32
+  
+  # Memory configuration
+  shared_mem_size: 49152  # 48 KB
+  l1_cache_size: 16384    # 16 KB
+  l2_cache_size: 262144   # 256 KB
+  
+  # Clock frequency for timing (MHz)
+  clock_frequency: 100
+
+# Result Collection
+results:
+  # Output directory for results
+  output_dir: "results/benchmarks"
+  
+  # Result format
+  format: "json"  # or "csv"
+  
+  # Enable per-kernel results
+  detailed_per_kernel: true
+  
+  # Enable per-warp statistics
+  detailed_per_warp: false
+
+# Analysis Settings
+analysis:
+  # Generate comparison plots
+  generate_plots: true
+  
+  # Statistical analysis level
+  stat_level: "basic"  # "basic", "advanced"
+  
+  # Confidence intervals
+  confidence_level: 0.95
+  
+  # Generate HTML report
+  generate_html_report: true
+
+# Logging and Debug
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+  
+  # Log file
+  log_file: "benchmarks.log"
+  
+  # Enable stdout logging
+  stdout_logging: true

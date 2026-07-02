@@ -1,0 +1,93 @@
+# Architecture Configuration Schema
+#
+# Baseline parameterization for the RISCV GPGPU architecture
+#
+# This file defines the default configuration values and schema
+# for architecture parameters. These can be overridden at runtime
+# or during synthesis.
+
+# Execution Model
+execution:
+  # Number of compute units
+  num_compute_units: 4
+  
+  # Threads per warp (SIMT width)
+  threads_per_warp: 32
+  
+  # Maximum warps per compute unit
+  max_warps_per_cu: 16
+  
+  # Total threads per compute unit
+  max_threads_per_cu: 512
+
+# Memory Configuration
+memory:
+  # Shared memory size per compute unit (bytes)
+  shared_memory_size: 49152  # 48 KB
+  
+  # Global memory size (bytes) - 0 means unlimited/external
+  global_memory_size: 0
+  
+  # Cache line size (bytes)
+  cache_line_size: 128
+  
+  # L1 cache size per compute unit (bytes)
+  l1_cache_size: 16384  # 16 KB
+  
+  # L2 cache size (bytes) - shared
+  l2_cache_size: 262144  # 256 KB
+
+# Scheduler Configuration
+scheduler:
+  # Scheduling policy: "round-robin", "priority", "fifo"
+  policy: "round-robin"
+  
+  # Enable warp scheduling optimization
+  enable_optimization: true
+  
+  # Batch size for warp scheduling
+  batch_size: 4
+
+# SIMT Configuration
+simt:
+  # Reconvergence handling: "immediate", "deferred", "sync_only"
+  reconvergence_mode: "immediate"
+  
+  # Enable divergence tracking
+  enable_divergence_tracking: true
+  
+  # Maximum divergence history depth
+  max_history_depth: 32
+
+# Synchronization
+synchronization:
+  # Barrier implementation: "hardware", "software"
+  barrier_impl: "hardware"
+  
+  # Maximum barriers per kernel
+  max_barriers: 1024
+  
+  # Atomic operation support
+  enable_atomics: true
+
+# Debug and Tracing
+debug:
+  # Enable detailed tracing
+  enable_tracing: false
+  
+  # Trace level: "minimal", "normal", "verbose"
+  trace_level: "normal"
+  
+  # Enable performance counters
+  enable_counters: true
+
+# Platform
+platform:
+  # Target platform: "systemc", "hls", "fpga", "sim"
+  target: "systemc"
+  
+  # Clock frequency (MHz)
+  clock_frequency: 100
+  
+  # Simulation time limit (0 = unlimited)
+  simulation_time_limit: 0
