@@ -161,5 +161,29 @@ bool configureKernel(const std::string& kernel_name, const std::vector<uint64_t>
     la.args        = args;
     return configureLaunch(la);
 }
+// ─── Device buffer inspection ──────────────────────────────────────────────────────────────
 
+bool getDeviceBufferContent(uint64_t dev_ptr, std::vector<uint8_t>& data) {
+    auto it = g_device_buffers.find(dev_ptr);
+    if (it == g_device_buffers.end()) return false;
+    data = it->second;
+    return true;
+}
+
+bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data) {
+    auto it = g_device_buffers.find(dev_ptr);
+    if (it == g_device_buffers.end()) return false;
+    if (data.size() != it->second.size()) return false;
+    it->second = data;
+    return true;
+}
+
+size_t getDeviceBufferSize(uint64_t dev_ptr) {
+    auto it = g_device_buffers.find(dev_ptr);
+    return (it != g_device_buffers.end()) ? it->second.size() : 0;
+}
+
+const std::string& getKernelBinaryPath() {
+    return g_kernel_binary_path;
+}
 } // namespace riscv_gpgpu

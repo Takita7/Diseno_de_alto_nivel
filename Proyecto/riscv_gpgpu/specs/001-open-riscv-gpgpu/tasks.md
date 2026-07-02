@@ -65,6 +65,7 @@
 - [x] T015 [US1] Implement the SIMT controller and divergence/reconvergence behavior in `models/systemc/simt_controller.cpp`
 - [x] T016 [US1] Implement the memory hierarchy and shared-memory model in `models/systemc/memory_hierarchy.cpp`
 - [x] T017 [US1] Integrate the architecture components into an executable top-level SystemC model in `models/systemc/top.cpp`
+	- Implemented now: `top.cpp` fully wires `MemoryHierarchy`, `WarpScheduler`, `SIMTController`, and `ComputeUnit` instances. `GPGPUTop` owns per-CU signals for port binding, binds all `clk/reset` and `memory_ready/request` ports internally. `gpgpu_top` static library exports `launchKernel`, `configureKernel`, `getTotalCycles/Instructions`, `getL1CacheHits/Misses`, `getDivergenceEvents`.
 - [x] T018 [US1] Add configuration-driven scenario scripts and simulation entry points in `scripts/run_systemc_sim.sh` and `scripts/scenarios/`
 
 **Checkpoint**: At this point, the baseline architecture model is functional and independently testable.
@@ -154,12 +155,47 @@
 	- **Runtime**: `KernelLaunchInfo` with `grid_x/y/z`; `waitKernelCompletion`; `host_runtime.h` public header.
 	- **Kernel Loader**: `resolveEntrySymbol` (nm-based symbol search); `listKernelSymbols`; `kernel_loader.h` includes own header.
 	- **Benchmarks**: `vector_add.cu` + `saxpy.cu` (bare-metal, no stdlib headers); `run_vector_add.sh` + `run_saxpy.sh` (compile → disassemble → bundle → host-sim validate, both PASS N=1024).
-	- 6/6 test suites pass (25 tests total).
+	- **SystemC hardware model**: real `MemoryHierarchy` (byte-addressable sparse memory, L1/L2 cache), full RV32I+M decoder (`riscv_isa.h`), real `ComputeUnit` fetch/decode/execute loop, `ElfLoader` (ELF32 parser), `KernelBridge` SW↔SC integration, `GPGPUTop` top-level with all ports bound, `WarpScheduler` and `SIMTController` `.cpp` implementations.
+	- **End-to-end test**: `test_systemc_integration.cpp` verifies ELF loading, CU register arithmetic, vector_add (N=8, H2D→bridge→D2H), and scalar_mul (N=4).
+	- 9/9 test suites pass (34 tests total).
 - Still pending before calling the stack production-complete:
 	- Real LLVM backend/target work (TableGen, TargetLowering, SelectionDAG) instead of the `clang` wrapper.
 	- Custom GPGPU/SIMT instruction definitions and MC-layer assembler syntax.
 	- Real hardware binding (DMA, register-mapped MMIO) in the driver instead of host-memory simulation.
 	- Full Rodinia or GPGPU benchmark suite results through actual hardware or a cycle-accurate simulator.
+	- Real hardware binding (DMA, register-mapped MMIO) in the driver instead of host-memory simulation.
+	- Full Rodinia or GPGPU benchmark suite results through actual hardware or a cycle-accurate simulator.
+	- Multi-warp/multi-block execution in `KernelBridge` (currently runs single warp 0 only).
+
+---
+
+## Phase 5b: SystemC ↔ Software Integration (hardware_main branch)
+
+**Goal**: Connect the SystemC hardware model to the software stack for end-to-end functional simulation.
+
+- [x] T036b [US1] Implement real byte-addressable `MemoryHierarchy` with L1/L2 cache simulation in `models/systemc/memory/memory_hierarchy.cpp`
+	- Sparse `byte_memory_` map; word-aligned L1/L2 cache sets; `writeBytes`/`readBytes` bulk access for ELF loading.
+- [x] T037b [US1] Implement RV32I + M-extension decoder in `models/systemc/integration/riscv_isa.h`
+	- Header-only; `RV32Instr` struct with `Op` enum covering all RV32I+M ops; `decodeRV32()`; `expandRVC()` for compressed instructions.
+- [x] T038b [US1] Rewrite `ComputeUnit` with real fetch/decode/execute in `models/systemc/compute_unit/compute_unit.cpp`
+	- Full RV32I+M execution; warp context (rf[32], pc, halted); detects `JALR x0, x1, 0` (ret) and return-sentinel PC as completion.
+- [x] T039b [US1] Implement ELF32 binary loader in `models/systemc/integration/elf_loader.h/.cpp`
+	- Manual ELF32 parser (no libelf); reads PT_LOAD segments into `MemoryHierarchy`; parses SHT_SYMTAB for function symbols; `findSymbol()` by name.
+- [x] T040b [US1] Implement `KernelBridge` SW↔SC integration in `models/systemc/integration/kernel_bridge.h/.cpp`
+	- Orchestrates: create standalone MemoryHierarchy → load ELF → copy H2D driver buffers → resolve entry symbol → set up registers (a0..a7=args, sp=0x20000000, ra=sentinel) → run CU step loop until complete → copy results D2H → print metrics (cycles, IPC, cache hit rate).
+- [x] T041b [US1] Implement `GPGPUTop` with all port bindings in `models/systemc/top/top.cpp`
+	- Wires ComputeUnits, WarpScheduler, MemoryHierarchy, SIMTController; binds all `clk/reset/memory_ready/memory_request` ports to internal signals.
+- [x] T042b [US1] Implement `WarpScheduler` and `SIMTController` stub `.cpp` files
+	- `warp_scheduler.cpp`: ROUND_ROBIN/PRIORITY/FIFO scheduling, multi-CU warp queues, load balancing.
+	- `simt_controller.cpp`: active mask management, divergence stack, per-warp thread activation.
+- [x] T043b [US1] Add SystemC integration test suite in `tests/systemc/test_systemc_integration.cpp`
+	- 4 tests: `ElfLoaderBasic`, `ComputeUnitAddsRegisters`, `VectorAddEndToEnd` (N=8, H2D→bridge→D2H), `ScalarMultiply` (N=4). All pass.
+- [x] T044b [US1] Fix CMake SystemC detection and build system
+	- `cmake/FindSystemC.cmake`: added `/usr/local/lib-linux64` search path.
+	- `models/CMakeLists.txt`: enabled `add_subdirectory(systemc)` guarded on `SystemC_FOUND`.
+	- `models/systemc/top/CMakeLists.txt`: split into `gpgpu_top` static library + `systemc_simulation` executable.
+	- `tests/systemc/CMakeLists.txt`: added `sc_gtest_main.cpp` for `sc_main()`→GTest bridge; dropped conflicting `GTest::Main`.
+	- All 9 test suites pass (34 tests total).
 
 ### Notes / Repositories to clone for US3 work
 

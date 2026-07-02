@@ -71,9 +71,11 @@ enum class MemoryAccessType : uint8_t {
 
 // Cache hit/miss status
 enum class CacheStatus : uint8_t {
-    HIT = 0,
-    MISS = 1,
-    PENDING = 2
+    HIT    = 0,   // Generic hit (for backward compat)
+    HIT_L1 = 0,   // L1 cache hit
+    HIT_L2 = 1,   // L2 cache hit
+    MISS   = 2,   // Full miss → main memory
+    PENDING = 3
 };
 
 // Instruction execution status

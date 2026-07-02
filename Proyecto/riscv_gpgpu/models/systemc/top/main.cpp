@@ -8,7 +8,7 @@
 
 using namespace riscv_gpgpu;
 
-int main(int argc, char* argv[]) {
+int sc_main(int argc, char* argv[]) {
     Platform::printSimulationBanner();
     
     // Create top-level module
@@ -28,10 +28,9 @@ int main(int argc, char* argv[]) {
     
     // Launch a simple kernel
     top.launchKernel(4, 1);
-    
+
     // Run simulation for a fixed number of cycles
-    uint64_t max_cycles = 10000;
-    sc_core::sc_start(max_cycles * 10, sc_core::SC_NS);  // 10ns per cycle
+    sc_core::sc_start(100000, sc_core::SC_NS);  // 10ns per cycle × 10000 cycles
     
     // Print final statistics
     LOG_INFO("Simulation complete");

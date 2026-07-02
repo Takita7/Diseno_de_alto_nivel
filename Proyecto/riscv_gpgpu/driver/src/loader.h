@@ -40,6 +40,16 @@ bool pollKernelCompletion(bool& completed);
 // ── Legacy shim (kept for backward compatibility) ──────────────────────────
 bool configureKernel(const std::string& kernel_name, const std::vector<uint64_t>& args);
 
+// ─── Device buffer inspection (used by KernelBridge) ─────────────────────────
+// Read the current contents of a simulated device buffer.
+bool getDeviceBufferContent(uint64_t dev_ptr, std::vector<uint8_t>& data);
+// Overwrite the contents of a simulated device buffer (used to copy results back).
+bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data);
+// Return the size of an allocated device buffer (0 if not found).
+size_t getDeviceBufferSize(uint64_t dev_ptr);
+// Return the loaded kernel binary path (set by loadKernelBinary).
+const std::string& getKernelBinaryPath();
+
 } // namespace riscv_gpgpu
 
 #endif // RISCV_GPGPU_DRIVER_LOADER_H

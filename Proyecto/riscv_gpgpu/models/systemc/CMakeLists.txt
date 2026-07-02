@@ -11,10 +11,11 @@ target_include_directories(systemc_common INTERFACE
 target_link_libraries(systemc_common INTERFACE SystemC::SystemC)
 
 # Build all component libraries
+add_subdirectory(memory)
 add_subdirectory(compute_unit)
 add_subdirectory(scheduler)
 add_subdirectory(simt_controller)
-add_subdirectory(memory)
+add_subdirectory(integration)
 
 # Build top-level module and executable
 if(BUILD_SYSTEMC_MODELS)

@@ -55,7 +55,7 @@ add_subdirectory(driver)
 add_subdirectory(software)
 add_subdirectory(runtime)
 
-if(BUILD_SYSTEMC_MODELS)
+if(BUILD_SYSTEMC_MODELS OR SystemC_FOUND)
     add_subdirectory(models)
 endif()
 

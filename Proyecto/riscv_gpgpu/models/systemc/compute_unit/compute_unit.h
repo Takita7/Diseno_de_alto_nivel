@@ -1,88 +1,88 @@
-// compute_unit.h - Baseline compute unit model
-//
-// Represents a single compute unit that executes warps
-// and manages thread resources
+// compute_unit.h - Compute unit with real RV32I(+C) instruction execution
 //
 
 #ifndef RISCV_GPGPU_COMPUTE_UNIT_H
 #define RISCV_GPGPU_COMPUTE_UNIT_H
 
 #include <systemc>
+#include <array>
 #include <vector>
 #include <queue>
 #include <memory>
+#include <cstdint>
 #include "../common/types.h"
+#include "../memory/memory_hierarchy.h"
 
 namespace riscv_gpgpu {
 
+// ─── Per-warp execution context ────────────────────────────────────────────────
+struct WarpContext {
+    std::array<uint32_t, 32> rf{};  // register file (x0 always 0)
+    uint32_t pc = 0;                // program counter
+    WarpState state = WarpState::IDLE;
+    uint32_t stall_cycles = 0;
+    bool halted = false;            // set on EBREAK / return via sentinel
+};
+
 class ComputeUnit : public sc_core::sc_module {
 public:
-    // Configuration
     struct Config {
         uint32_t unit_id;
-        uint32_t num_threads;
+        uint32_t num_threads;         // total threads (lanes)
         uint32_t threads_per_warp;
         uint32_t max_warps;
         uint32_t shared_mem_size;
+        uint32_t max_cycles = 1000000; // safety limit
     };
 
-    // Ports for memory interface
+    // Ports
     sc_core::sc_in<bool> clk{"clk"};
     sc_core::sc_in<bool> reset{"reset"};
-    
-    // Memory interface (placeholder - to be extended with full interfaces)
     sc_core::sc_out<bool> memory_ready{"memory_ready"};
-    sc_core::sc_in<bool> memory_request{"memory_request"};
+    sc_core::sc_in<bool>  memory_request{"memory_request"};
 
     ComputeUnit(sc_core::sc_module_name name, const Config& config);
     ~ComputeUnit();
 
-    // Public interface
+    // ── Setup (call before sc_start) ──────────────────────────────────────────
+    void setMemoryHierarchy(MemoryHierarchy* mem) { mem_ = mem; }
+    // Sets entry PC and initial register file for warp 0 (thread 0 / lane 0).
+    void setEntryPoint(uint32_t pc);
+    void setInitialRegisters(const std::array<uint32_t, 32>& regs);
+    // Optional: set a return-address sentinel so we detect function return.
+    void setReturnSentinel(uint32_t sentinel_pc) { return_sentinel_ = sentinel_pc; }
+
+    // ── Public interface ──────────────────────────────────────────────────────
     void launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y);
     WarpState getWarpState(WarpID warp_id) const;
-    void step();  // Execute one cycle
+    void step();         // Execute one cycle (one instruction per warp)
     bool isComplete() const;
-    
-    // Statistics
-    CycleCount getTotalCycles() const { return total_cycles_; }
-    InstructionCount getTotalInstructions() const { return total_instructions_; }
+    uint32_t getRegister(WarpID wid, uint8_t reg) const;
+
+    // ── Statistics ────────────────────────────────────────────────────────────
+    CycleCount        getTotalCycles()       const { return total_cycles_; }
+    InstructionCount  getTotalInstructions() const { return total_instructions_; }
 
 private:
-    // SC_MODULE interface
     SC_HAS_PROCESS(ComputeUnit);
-    
+
     void clockProcess();
     void resetProcess();
-    void executeProcess();
 
-    // Internal state
-    Config config_;
-    ComputeUnitID unit_id_;
-    
-    // Warp management
-    std::vector<WarpState> warp_states_;
-    std::queue<WarpID> ready_warps_;
-    std::queue<WarpID> stalled_warps_;
-    
-    // Thread register files
-    std::vector<std::vector<uint32_t>> registers_;  // [warp][reg]
-    
-    // Shared memory
-    std::vector<uint8_t> shared_memory_;
-    
-    // Execution state
-    CycleCount total_cycles_;
-    InstructionCount total_instructions_;
-    WarpID current_executing_warp_;
-    bool is_running_;
-    
-    // Helper methods
-    void initializeWarp(WarpID warp_id);
-    void finalizeWarp(WarpID warp_id);
-    void scheduleWarp();
-    void executeInstruction(WarpID warp_id);
-    bool checkMemoryDependencies(WarpID warp_id);
-    void updateWarpState();
+    // ── Internal helpers ──────────────────────────────────────────────────────
+    void executeWarp(WarpID warp_id);
+    void decodeAndExecute(WarpContext& ctx, uint32_t raw32, uint32_t raw_pc);
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    Config               config_;
+    MemoryHierarchy*     mem_ = nullptr;
+    std::vector<WarpContext> warps_;
+
+    uint32_t return_sentinel_  = 0xDEADBEEF;
+    bool     is_running_       = false;
+
+    CycleCount       total_cycles_      = 0;
+    InstructionCount total_instructions_ = 0;
 };
 
 }  // namespace riscv_gpgpu
