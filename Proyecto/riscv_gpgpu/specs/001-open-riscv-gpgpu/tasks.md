@@ -24,9 +24,9 @@
 **Purpose**: Create the repository structure and shared tooling required for the multi-stage implementation workflow.
 
 - [x] T001 Create repository structure for architecture, SystemC, HLS, RTL, software, tests, and documentation in `docs/`, `models/`, `hls/`, `rtl/`, `software/`, `runtime/`, `driver/`, `tests/`, and `benchmarks/`
-- [ ] T002 Initialize the build and configuration framework with CMake and environment scripts in `CMakeLists.txt`, `cmake/`, and `scripts/`
-- [ ] T003 [P] Create the baseline documentation skeleton and traceability templates in `docs/architecture/`, `docs/verification/`, and `docs/reproducibility/`
-- [ ] T004 [P] Add the initial verification and reporting harness templates in `tests/`, `scripts/verify/`, and `scripts/benchmark/`
+- [x] T002 Initialize the build and configuration framework with CMake and environment scripts in `CMakeLists.txt`, `cmake/`, and `scripts/`
+- [x] T003 [P] Create the baseline documentation skeleton and traceability templates in `docs/architecture/`, `docs/verification/`, and `docs/reproducibility/`
+- [x] T004 [P] Add the initial verification and reporting harness templates in `tests/`, `scripts/verify/`, and `scripts/benchmark/`
 
 ---
 
@@ -36,11 +36,11 @@
 
 **⚠️ CRITICAL**: No story work can begin until this phase is complete.
 
-- [ ] T005 Define the baseline architecture interface contracts and parameter schema in `docs/architecture/interfaces.md` and `config/arch_config.yaml`
-- [ ] T006 Implement the shared configuration and parameter parsing infrastructure in `config/` and `software/common/`
-- [ ] T007 Create the SystemC project skeleton and common simulation utilities in `models/systemc/common/` and `models/systemc/README.md`
-- [ ] T008 Implement the traceability and evidence-reporting framework in `docs/traceability/` and `scripts/collect_evidence.py`
-- [ ] T009 Create the initial benchmark and measurement configuration templates in `benchmarks/` and `scripts/benchmark/`
+- [x] T005 Define the baseline architecture interface contracts and parameter schema in `docs/architecture/interfaces.md` and `config/arch_config.yaml`
+- [x] T006 Implement the shared configuration and parameter parsing infrastructure in `config/` and `software/common/`
+- [x] T007 Create the SystemC project skeleton and common simulation utilities in `models/systemc/common/` and `models/systemc/README.md`
+- [x] T008 Implement the traceability and evidence-reporting framework in `docs/traceability/` and `scripts/collect_evidence.py`
+- [x] T009 Create the initial benchmark and measurement configuration templates in `benchmarks/` and `scripts/benchmark/`
 
 **Checkpoint**: Foundation ready - implementation workstreams can now proceed in parallel.
 
@@ -54,18 +54,18 @@
 
 ### Tests for User Story 1
 
-- [ ] T010 [P] [US1] Add unit tests for scheduler and thread-group dispatch in `tests/systemc/test_scheduler.cpp`
-- [ ] T011 [P] [US1] Add integration tests for kernel launch, divergence, and memory access in `tests/systemc/test_pipeline.cpp`
+- [x] T010 [P] [US1] Add unit tests for scheduler and thread-group dispatch in `tests/systemc/test_scheduler.cpp`
+- [x] T011 [P] [US1] Add integration tests for kernel launch, divergence, and memory access in `tests/systemc/test_pipeline.cpp`
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Define the baseline ISA and execution semantics in `docs/architecture/isa.md`
-- [ ] T013 [US1] Implement the baseline compute unit model in `models/systemc/compute_unit.cpp`
-- [ ] T014 [US1] Implement the warp scheduler and dispatch model in `models/systemc/warp_scheduler.cpp`
-- [ ] T015 [US1] Implement the SIMT controller and divergence/reconvergence behavior in `models/systemc/simt_controller.cpp`
-- [ ] T016 [US1] Implement the memory hierarchy and shared-memory model in `models/systemc/memory_hierarchy.cpp`
-- [ ] T017 [US1] Integrate the architecture components into an executable top-level SystemC model in `models/systemc/top.cpp`
-- [ ] T018 [US1] Add configuration-driven scenario scripts and simulation entry points in `scripts/run_systemc_sim.sh` and `scripts/scenarios/`
+- [x] T012 [US1] Define the baseline ISA and execution semantics in `docs/architecture/isa.md`
+- [x] T013 [US1] Implement the baseline compute unit model in `models/systemc/compute_unit.cpp`
+- [x] T014 [US1] Implement the warp scheduler and dispatch model in `models/systemc/warp_scheduler.cpp`
+- [x] T015 [US1] Implement the SIMT controller and divergence/reconvergence behavior in `models/systemc/simt_controller.cpp`
+- [x] T016 [US1] Implement the memory hierarchy and shared-memory model in `models/systemc/memory_hierarchy.cpp`
+- [x] T017 [US1] Integrate the architecture components into an executable top-level SystemC model in `models/systemc/top.cpp`
+- [x] T018 [US1] Add configuration-driven scenario scripts and simulation entry points in `scripts/run_systemc_sim.sh` and `scripts/scenarios/`
 
 **Checkpoint**: At this point, the baseline architecture model is functional and independently testable.
 
