@@ -126,39 +126,40 @@
 
 - [x] T032 [US3] Implement the runtime kernel-launch and execution-status interface in `runtime/src/`
 	- Deliverable: `runtime/src/host_runtime.cpp` exposing kernel upload, launch, status, and simple memory management APIs compatible with CUDA/HIP semantics.
-	- Notes: runtime now supports bundle manifest upload, bundle inspection, and driver-backed kernel launch.
-	- Implemented now: manifest-driven upload, name validation, launch dispatch, and status polling through the driver shim.
-	- Pending for closure: real device memory management, grid-level launch configuration, completion/error propagation, and richer CUDA/HIP-like runtime semantics.
+	- Implemented now: grid-level launch (`KernelLaunchInfo` carries `grid_x/y/z` + `workgroup_x/y/z`), `waitKernelCompletion()` for synchronous completion, `pollKernelStatus()` reporting IDLE/CONFIGURED/RUNNING/COMPLETED/FAILED from the driver. New `host_runtime.h` public header. CMakeLists links `kernel_loader_lib` + `driver_lib`.
+	- Tests added: `WaitKernelCompletion` in `runtime/src/test_runtime_api.cpp`.
 
 - [x] T033 [US3] Implement the driver and host API layers in `driver/src/` and `software/host_api/`
 	- Deliverable: userspace loader `driver/src/loader.cpp` implementing bitstream/kernel load, DMA setup, and kernel control commands; host API in `software/host_api/` that maps runtime calls to driver operations.
-	- Notes: driver loader now accepts kernel binaries from bundle manifests and exposes configure/start/query hooks.
-	- Implemented now: loader stubs for load/configure/start/query and host API smoke coverage.
-	- Pending for closure: DMA programming, device buffer management, bitstream/hardware binding, and a non-stub host API that actually maps runtime/kernel arguments into driver transactions.
+	- Implemented now: driver has device buffer registry (host-backed, device addresses from 0x10000000, 16-byte aligned); `allocateDeviceBuffer`, `freeDeviceBuffer`, `copyHostToDevice`, `copyDeviceToHost`, `configureLaunch(KernelLaunchArgs)`, `pollKernelCompletion`. Host API exposes `gpgpuMalloc`, `gpgpuFree`, `gpgpuMemcpyH2D`, `gpgpuMemcpyD2H`, `gpgpuLaunchKernel`, `gpgpuSynchronize`, `clearKernelArguments`. New `host_api.h` public header.
+	- Tests added: `AllocateFreeBuffer`, `CopyHostToDeviceAndBack`, `ConfigureLaunchAndStart`, `PollCompletion`, `StatusAfterCompletion`, `LegacyConfigureKernel` in driver; `MallocAndFree`, `MemcpyH2DAndD2H`, `SetAndClearKernelArgument`, `LaunchKernelAndSynchronize` in host_api.
 
 - [x] T034 [US3] Implement the kernel-loader and configuration-management path in `software/kernel_loader/`
 	- Deliverable: tooling to pack kernel binaries, metadata (workgroup size, required shared mem), and support upload format (e.g., simple tar/json manifest).
-	- Notes: bundle manifest currently includes `kernel_name`, `binary_path`, `binary_size`, workgroup dimensions, and shared memory size.
-	- Implemented now: bundle pack/load/inspect helpers plus demo outputs for manifest, launch packet, ELF metadata, symbols, relocations, SHA256, and expected output.
-	- Pending for closure: richer metadata for buffer layouts, mangled/physical entry symbol mapping, relocation policy, ISA requirements, and hardware memory banking/config details.
+	- Implemented now: `resolveEntrySymbol(binary_path, base_name, &symbol)` using `riscv64-unknown-elf-nm` (POSIX format, falls back to system nm); `listKernelSymbols(binary_path, &report)` dumps all defined text symbols. `kernel_loader.h` extended. `kernel_loader.cpp` now includes its own header (forward declarations).
+	- Tests added: `ResolveEntrySymbol`, `ListKernelSymbols` in `software/kernel_loader/test_kernel_loader.cpp`.
 
 - [x] T035 [US3] Add benchmark harnesses and reproducibility scripts in `benchmarks/` and `scripts/benchmark/`
 	- Deliverable: example kernels (Rodinia subset) and scripts to build, upload, run, and collect metrics for comparison.
-	- Implemented now: benchmark directory structure, configuration templates, result analysis script, and top-level benchmark harness entry point.
-	- Pending for closure: actual benchmark workloads integrated with the runtime/driver path, end-to-end execution against hardware or simulation, and captured comparison results.
+	- Implemented now: `benchmarks/workloads/vector_add/vector_add.cu` and `run_vector_add.sh` (compile → RISC-V ELF, disassemble, symbol resolve, bundle manifest, launch packet, host-sim validation — N=1024 PASS); `benchmarks/workloads/saxpy/saxpy.cu` and `run_saxpy.sh` (same flow, a=2.5 — N=1024 PASS). Both scripts produce `*.riscv.elf`, `*.disasm.txt`, `*_manifest.json`, `*.launch.json` under `build/benchmarks/`.
 
-### Current Software Status Snapshot
+### Current Software Status Snapshot (updated)
 
-- Completed and validated now:
-	- RISC-V 32-bit kernel emission from C/C++ and CUDA-like `.cu` sources.
-	- ELF/disassembly inspection flow for emitted kernels.
-	- Bundle manifest generation, inspection, and runtime upload/launch plumbing.
-	- Driver/runtime smoke tests and demo artifacts for launch packet and expected output.
-- Still pending in software before the stack can be called complete:
-	- Real LLVM backend/target work instead of the current `clang` wrapper flow.
-	- Custom GPGPU/SIMT instruction definitions and matching assembler/MC support.
-	- Non-stub host API and driver DMA/device-memory implementation.
-	- Real benchmark kernels and benchmark result capture through the runtime/hardware path.
+- Completed and validated:
+	- RISC-V 32-bit kernel emission from C/C++ and CUDA-like `.cu` sources (linker uses `ld.lld` via `-fuse-ld=lld -nostdlib -Wl,--entry,0`).
+	- ELF disassembly, symbol inspection, and ELF metadata pipeline.
+	- Bundle manifest pack/load/inspect + runtime upload/launch plumbing.
+	- **Driver**: simulated device buffer registry (alloc/free/H2D/D2H copies); structured `KernelLaunchArgs` with grid+block dims; completion state machine; legacy shim preserved.
+	- **Host API**: `gpgpuMalloc/Free/MemcpyH2D/MemcpyD2H/LaunchKernel/Synchronize` fully wired to driver; `clearKernelArguments`; `host_api.h` public header.
+	- **Runtime**: `KernelLaunchInfo` with `grid_x/y/z`; `waitKernelCompletion`; `host_runtime.h` public header.
+	- **Kernel Loader**: `resolveEntrySymbol` (nm-based symbol search); `listKernelSymbols`; `kernel_loader.h` includes own header.
+	- **Benchmarks**: `vector_add.cu` + `saxpy.cu` (bare-metal, no stdlib headers); `run_vector_add.sh` + `run_saxpy.sh` (compile → disassemble → bundle → host-sim validate, both PASS N=1024).
+	- 6/6 test suites pass (25 tests total).
+- Still pending before calling the stack production-complete:
+	- Real LLVM backend/target work (TableGen, TargetLowering, SelectionDAG) instead of the `clang` wrapper.
+	- Custom GPGPU/SIMT instruction definitions and MC-layer assembler syntax.
+	- Real hardware binding (DMA, register-mapped MMIO) in the driver instead of host-memory simulation.
+	- Full Rodinia or GPGPU benchmark suite results through actual hardware or a cycle-accurate simulator.
 
 ### Notes / Repositories to clone for US3 work
 
