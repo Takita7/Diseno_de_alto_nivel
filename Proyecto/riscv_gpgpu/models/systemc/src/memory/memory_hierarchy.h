@@ -1,6 +1,4 @@
-// memory_hierarchy.h - Memory hierarchy and access model
-//
-// Implements cache hierarchy and memory access patterns
+// memory_hierarchy.h – Memory hierarchy and access model
 //
 
 #ifndef RISCV_GPGPU_MEMORY_HIERARCHY_H
@@ -16,58 +14,54 @@ namespace riscv_gpgpu {
 class MemoryHierarchy : public sc_core::sc_module {
 public:
     struct Config {
-        uint32_t shared_mem_size;
-        uint32_t global_mem_size;
-        uint32_t cache_line_size;
-        uint32_t l1_cache_size;
-        uint32_t l2_cache_size;
+        uint32_t shared_mem_size = 16 * 1024;
+        uint32_t global_mem_size = 0;          // 0 = unlimited
+        uint32_t cache_line_size = 128;
+        uint32_t l1_cache_size   = 32 * 1024;
+        uint32_t l2_cache_size   = 512 * 1024;
     };
 
-    // Ports
+    // reset removed – nothing connects it yet; add back in Phase 1
     sc_core::sc_in<bool> clk{"clk"};
-    sc_core::sc_in<bool> reset{"reset"};
 
+    SC_HAS_PROCESS(MemoryHierarchy);
     MemoryHierarchy(sc_core::sc_module_name name, const Config& config);
     ~MemoryHierarchy();
 
-    // Public interface
-    bool loadWord(Address addr, uint32_t& data, uint32_t& latency);
-    bool storeWord(Address addr, uint32_t data, uint32_t& latency);
-    bool loadSharedMemory(Address addr, uint32_t& data);
-    bool storeSharedMemory(Address addr, uint32_t data);
-    
+    // Memory interface
+    bool loadWord       (Address addr, uint32_t& data, uint32_t& latency);
+    bool storeWord      (Address addr, uint32_t  data, uint32_t& latency);
+    bool loadSharedMemory (Address addr, uint32_t& data);
+    bool storeSharedMemory(Address addr, uint32_t  data);
+
     // Cache interface
-    bool cacheHit(Address addr, CacheStatus& status);
+    bool cacheHit      (Address addr, CacheStatus& status);
     void invalidateCache();
-    
+
     // Statistics
-    uint64_t getL1CacheHits() const { return l1_hits_; }
+    uint64_t getL1CacheHits()   const { return l1_hits_;   }
     uint64_t getL1CacheMisses() const { return l1_misses_; }
-    uint64_t getL2CacheHits() const { return l2_hits_; }
+    uint64_t getL2CacheHits()   const { return l2_hits_;   }
     uint64_t getL2CacheMisses() const { return l2_misses_; }
 
 private:
     Config config_;
-    
-    // Memory storage
-    std::vector<uint8_t> shared_memory_;
+
+    std::vector<uint8_t>        shared_memory_;
     std::map<Address, uint32_t> global_memory_;
-    
-    // Cache structures
-    std::map<Address, uint32_t> l1_cache_;
-    std::map<Address, uint32_t> l2_cache_;
-    std::map<Address, CycleCount> cache_timestamps_;
-    
-    // Statistics
-    uint64_t l1_hits_;
-    uint64_t l1_misses_;
-    uint64_t l2_hits_;
-    uint64_t l2_misses_;
-    
-    // Helper methods
-    Address alignAddress(Address addr);
-    bool isSharedMemoryAddress(Address addr) const;
-    uint32_t calculateLatency(CacheStatus status);
+
+    std::map<Address, uint32_t>    l1_cache_;
+    std::map<Address, uint32_t>    l2_cache_;
+    std::map<Address, CycleCount>  cache_timestamps_;
+
+    uint64_t l1_hits_   = 0;
+    uint64_t l1_misses_ = 0;
+    uint64_t l2_hits_   = 0;
+    uint64_t l2_misses_ = 0;
+
+    Address  alignAddress          (Address addr);
+    bool     isSharedMemoryAddress (Address addr) const;
+    uint32_t calculateLatency      (CacheStatus status);
 };
 
 }  // namespace riscv_gpgpu

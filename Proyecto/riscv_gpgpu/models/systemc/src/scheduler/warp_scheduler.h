@@ -33,7 +33,7 @@ public:
 
     // Ports
     sc_core::sc_in<bool> clk{"clk"};
-    sc_core::sc_in<bool> reset{"reset"};
+    //sc_core::sc_in<bool> reset{"reset"};
 
     WarpScheduler(sc_core::sc_module_name name, const Config& config);
     ~WarpScheduler();

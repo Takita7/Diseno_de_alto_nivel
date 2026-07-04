@@ -10,45 +10,67 @@
 #include <systemc>
 #include <string>
 #include <iostream>
+#include <cstdint>
 
 namespace riscv_gpgpu {
 
-// SystemC module naming utilities
+// System clock period – must match the sc_clock in GPGPUTop
+static constexpr double GPGPU_CLOCK_PERIOD_NS = 10.0;
+
 class Platform {
 public:
-    // Get current simulation time
+
+    // Current simulation time
     static sc_core::sc_time getCurrentTime() {
         return sc_core::sc_time_stamp();
     }
-    
-    // Get current simulation cycle (assuming 1ns time unit)
+
+    // Approximate cycle count relative to the 10 ns system clock.
+    // Individual modules track their own counters; use this only for
+    // quick sanity checks in tests.
     static uint64_t getCurrentCycle() {
-        return sc_core::sc_time_stamp().to_double() / 1000.0;
+        double time_ns = sc_core::sc_time_stamp().to_seconds() * 1.0e9;
+        return static_cast<uint64_t>(time_ns / GPGPU_CLOCK_PERIOD_NS);
     }
-    
-    // Format module name hierarchically
-    static std::string getModuleName(const std::string& base_name,
-                                      uint32_t id) {
-        return base_name + "_" + std::to_string(id);
+
+    // Build a hierarchical module name, e.g. getModuleName("cu", 2) -> "cu_2"
+    static std::string getModuleName(const std::string& base, uint32_t id) {
+        return base + "_" + std::to_string(id);
     }
-    
-    // Print simulation banner
+
+    // ── Output helpers ────────────────────────────────────────────────────────
+
     static void printSimulationBanner() {
-        std::cout << "=====================================" << std::endl;
-        std::cout << "RISCV GPGPU SystemC Simulation" << std::endl;
-        std::cout << "=====================================" << std::endl;
-        std::cout << "SystemC version: " << SC_VERSION << std::endl;
-        std::cout << "Starting simulation..." << std::endl;
+        std::cout
+            << "\n"
+            << "==============================================\n"
+            << "  RISC-V GPGPU  –  SystemC Functional Model  \n"
+            << "==============================================\n"
+            << "  SystemC version : " << SC_VERSION << "\n"
+            << "  Clock period    : " << GPGPU_CLOCK_PERIOD_NS << " ns\n"
+            << "==============================================\n\n"
+            << std::flush;
     }
-    
-    // Print simulation statistics
+
+    // Numbered phase header – call at the start of each test section
+    static void printPhaseHeader(int phase, const std::string& name) {
+        std::string title = "Phase " + std::to_string(phase) + ": " + name;
+        std::string bar(title.size() + 4, '=');
+        std::cout << "\n" << bar << "\n"
+                  << "  " << title << "\n"
+                  << bar << "\n" << std::flush;
+    }
+
     static void printSimulationStats(uint64_t total_cycles,
-                                      uint64_t total_instructions) {
-        std::cout << "=====================================" << std::endl;
-        std::cout << "Simulation Complete" << std::endl;
-        std::cout << "Total cycles: " << total_cycles << std::endl;
-        std::cout << "Total instructions: " << total_instructions << std::endl;
-        std::cout << "=====================================" << std::endl;
+                                     uint64_t total_instructions) {
+        std::cout
+            << "\n"
+            << "==============================================\n"
+            << "  Simulation Complete\n"
+            << "  Total cycles       : " << total_cycles       << "\n"
+            << "  Total instructions : " << total_instructions  << "\n"
+            << "==============================================\n\n"
+            << std::flush;
     }
 };
 
