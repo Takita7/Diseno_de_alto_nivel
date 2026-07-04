@@ -1,4 +1,4 @@
-// compute_unit.h - Compute unit with real RV32I(+C) instruction execution
+// compute_unit.h – Baseline compute unit model
 //
 
 #ifndef RISCV_GPGPU_COMPUTE_UNIT_H
@@ -33,65 +33,55 @@ struct WarpContext {
 class ComputeUnit : public sc_core::sc_module {
 public:
     struct Config {
-        uint32_t unit_id;
-        uint32_t num_threads;         // total threads (lanes)
-        uint32_t threads_per_warp;
-        uint32_t max_warps;
-        uint32_t shared_mem_size;
-        uint32_t max_cycles = 1000000; // safety limit
+        uint32_t unit_id          = 0;
+        uint32_t num_threads      = 32;
+        uint32_t threads_per_warp = 32;
+        uint32_t max_warps        = 4;
+        uint32_t shared_mem_size  = 16 * 1024;
     };
 
-    // Ports
+    // reset, memory_ready, memory_request removed –
+    // nothing connects them yet; TLM socket replaces these in Phase 4.
     sc_core::sc_in<bool> clk{"clk"};
-    sc_core::sc_in<bool> reset{"reset"};
-    sc_core::sc_out<bool> memory_ready{"memory_ready"};
-    sc_core::sc_in<bool>  memory_request{"memory_request"};
 
+    SC_HAS_PROCESS(ComputeUnit);
     ComputeUnit(sc_core::sc_module_name name, const Config& config);
     ~ComputeUnit();
 
-    // ── Setup (call before sc_start) ──────────────────────────────────────────
-    void setMemoryHierarchy(MemoryHierarchy* mem) { mem_ = mem; }
-    void setSIMTController(SIMTController* simt) { simt_ = simt; }
-    // Sets entry PC and initial register file for warp 0 (thread 0 / lane 0).
-    void setEntryPoint(uint32_t pc);
-    void setInitialRegisters(const std::array<uint32_t, 32>& regs);
-    // Optional: set a return-address sentinel so we detect function return.
-    void setReturnSentinel(uint32_t sentinel_pc) { return_sentinel_ = sentinel_pc; }
-
-    // ── Public interface ──────────────────────────────────────────────────────
-    void launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y);
+    // Public interface
+    void      launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y);
     WarpState getWarpState(WarpID warp_id) const;
-    void step();         // Execute one cycle (one instruction per warp)
-    bool isComplete() const;
-    uint32_t getRegister(WarpID wid, uint8_t reg) const;
+    void      step();
+    bool      isComplete() const;
 
-    // ── Statistics ────────────────────────────────────────────────────────────
-    CycleCount        getTotalCycles()       const { return total_cycles_; }
-    InstructionCount  getTotalInstructions() const { return total_instructions_; }
+    // Statistics
+    CycleCount       getTotalCycles()       const { return total_cycles_;       }
+    InstructionCount getTotalInstructions() const { return total_instructions_; }
 
 private:
-    SC_HAS_PROCESS(ComputeUnit);
-
     void clockProcess();
-    void resetProcess();
+    void executeProcess();
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
-    void executeWarp(WarpID warp_id);
-    void decodeAndExecute(WarpContext& ctx, uint32_t raw32, uint32_t raw_pc);
-    void executeWarpMultiLane(WarpID warp_id);
+    Config        config_;
+    ComputeUnitID unit_id_;
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    Config               config_;
-    MemoryHierarchy*     mem_ = nullptr;
-    SIMTController*      simt_ = nullptr;
-    std::vector<WarpContext> warps_;
+    std::vector<WarpState>           warp_states_;
+    std::queue<WarpID>               ready_warps_;
+    std::queue<WarpID>               stalled_warps_;
+    std::vector<std::vector<uint32_t>> registers_;   // [warp][reg]
+    std::vector<uint8_t>             shared_memory_;
 
-    uint32_t return_sentinel_  = 0xDEADBEEF;
-    bool     is_running_       = false;
-
-    CycleCount       total_cycles_      = 0;
+    CycleCount       total_cycles_       = 0;
     InstructionCount total_instructions_ = 0;
+    WarpID           current_executing_warp_ = 0;
+    bool             is_running_         = false;
+
+    void initializeWarp  (WarpID warp_id);
+    void finalizeWarp    (WarpID warp_id);
+    void scheduleWarp    ();
+    void executeInstruction(WarpID warp_id);
+    bool checkMemoryDependencies(WarpID warp_id);
+    void updateWarpState ();
 };
 
 }  // namespace riscv_gpgpu
