@@ -1,4 +1,7 @@
-// memory_hierarchy.h – Memory hierarchy and access model
+// memory_hierarchy.h – Memory hierarchy and cache model
+//
+// Phase 1: real L1/L2/global/shared memory logic via direct method calls.
+// Phase 4: TLM socket will be added here when compute units bind to it.
 //
 
 #ifndef RISCV_GPGPU_MEMORY_HIERARCHY_H
@@ -18,30 +21,29 @@ class MemoryHierarchy : public sc_core::sc_module {
 public:
     struct Config {
         uint32_t shared_mem_size = 16 * 1024;
-        uint32_t global_mem_size = 0;          // 0 = unlimited
+        uint32_t global_mem_size = 0;
         uint32_t cache_line_size = 128;
         uint32_t l1_cache_size   = 32 * 1024;
         uint32_t l2_cache_size   = 512 * 1024;
     };
 
-    // reset removed – nothing connects it yet; add back in Phase 1
     sc_core::sc_in<bool> clk{"clk"};
+
+    // Phase 4: add TLM target socket here
+    // tlm_utils::simple_target_socket<MemoryHierarchy> mem_socket;
 
     SC_HAS_PROCESS(MemoryHierarchy);
     MemoryHierarchy(sc_core::sc_module_name name, const Config& config);
     ~MemoryHierarchy();
 
-    // Memory interface
-    bool loadWord       (Address addr, uint32_t& data, uint32_t& latency);
-    bool storeWord      (Address addr, uint32_t  data, uint32_t& latency);
+    bool loadWord        (Address addr, uint32_t& data, uint32_t& latency);
+    bool storeWord       (Address addr, uint32_t  data, uint32_t& latency);
     bool loadSharedMemory (Address addr, uint32_t& data);
     bool storeSharedMemory(Address addr, uint32_t  data);
 
-    // Cache interface
     bool cacheHit      (Address addr, CacheStatus& status);
     void invalidateCache();
 
-    // Statistics
     uint64_t getL1CacheHits()   const { return l1_hits_;   }
     uint64_t getL1CacheMisses() const { return l1_misses_; }
     uint64_t getL2CacheHits()   const { return l2_hits_;   }
@@ -50,12 +52,11 @@ public:
 private:
     Config config_;
 
-    std::vector<uint8_t>        shared_memory_;
-    std::map<Address, uint32_t> global_memory_;
-
-    std::map<Address, uint32_t>    l1_cache_;
-    std::map<Address, uint32_t>    l2_cache_;
-    std::map<Address, CycleCount>  cache_timestamps_;
+    std::vector<uint8_t>          shared_memory_;
+    std::map<Address, uint32_t>   global_memory_;
+    std::map<Address, uint32_t>   l1_cache_;
+    std::map<Address, uint32_t>   l2_cache_;
+    std::map<Address, CycleCount> cache_timestamps_;
 
     uint64_t l1_hits_   = 0;
     uint64_t l1_misses_ = 0;
