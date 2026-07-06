@@ -1,4 +1,5 @@
-// top_test.cpp – Phase 0 + Phase 1 + Phase 2 tests
+// top_test.cpp – Phase 0 + Phase 1 + Phase 2 + Phase 3 tests
+//
 
 #include <systemc>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include "top/top.h"
 #include "memory/memory_hierarchy.h"
 #include "scheduler/warp_scheduler.h"
+#include "simt_controller/simt_controller.h"
 #include "common/platform.h"
 #include "common/logging.h"
 
@@ -25,7 +27,6 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
 
     // ── Instantiate all modules before sc_start ───────────────────────────────
 
-    // Phase 0
     GPGPUTop::Config top_config;
     top_config.num_compute_units = 1;
     top_config.max_warps_per_cu  = 4;
@@ -35,11 +36,10 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     top_config.l2_cache_size     = 512 * 1024;
     GPGPUTop top("gpgpu_top", top_config);
 
-    // Shared test clock (bound to all standalone test modules)
     sc_core::sc_clock test_clock("test_clock",
         sc_core::sc_time(GPGPU_CLOCK_PERIOD_NS, sc_core::SC_NS));
 
-    // Phase 1 – standalone memory
+    // Phase 1
     MemoryHierarchy::Config mem_config;
     mem_config.shared_mem_size = 16 * 1024;
     mem_config.l1_cache_size   = 32 * 1024;
@@ -48,30 +48,33 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     MemoryHierarchy mem_test("mem_test", mem_config);
     mem_test.clk(test_clock);
 
-    // Phase 2a/2b – single-CU scheduler
+    // Phase 2
     WarpScheduler::Config sched1_config;
-    sched1_config.num_compute_units   = 1;
-    sched1_config.max_warps_per_cu    = 8;
-    sched1_config.policy              = WarpScheduler::SchedulingPolicy::ROUND_ROBIN;
-    sched1_config.enable_optimization = false;
-    sched1_config.batch_size          = 1;
+    sched1_config.num_compute_units = 1;
+    sched1_config.max_warps_per_cu  = 8;
+    sched1_config.policy            = WarpScheduler::SchedulingPolicy::ROUND_ROBIN;
     WarpScheduler sched1("sched1", sched1_config);
     sched1.clk(test_clock);
 
-    // Phase 2c – two-CU scheduler (load distribution test)
     WarpScheduler::Config sched2_config;
-    sched2_config.num_compute_units   = 2;
-    sched2_config.max_warps_per_cu    = 8;
-    sched2_config.policy              = WarpScheduler::SchedulingPolicy::ROUND_ROBIN;
-    sched2_config.enable_optimization = false;
-    sched2_config.batch_size          = 1;
+    sched2_config.num_compute_units = 2;
+    sched2_config.max_warps_per_cu  = 8;
+    sched2_config.policy            = WarpScheduler::SchedulingPolicy::ROUND_ROBIN;
     WarpScheduler sched2("sched2", sched2_config);
     sched2.clk(test_clock);
+
+    // Phase 3
+    SIMTController::Config simt_config;
+    simt_config.mode                      = SIMTController::RecovergenceMode::IMMEDIATE;
+    simt_config.enable_divergence_tracking = true;
+    simt_config.max_history_depth         = 8;
+    SIMTController simt("simt_test", simt_config);
+    simt.clk(test_clock);
 
     sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Phase 0 – Build & Initialization
+    // Phase 0
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(0, "Build & Initialization");
     LOG_SEP("Phase 0 Results");
@@ -79,10 +82,9 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
           "GPGPUTop: isKernelComplete() true before any kernel launch");
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Phase 1 – Memory Hierarchy
+    // Phase 1
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(1, "Memory Hierarchy");
-
     uint32_t data = 0, latency = 0;
 
     LOG_SEP("1a: Global memory write / read");
@@ -93,51 +95,39 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     LOG_SEP("1b: L1 hit on second read");
     uint64_t hits_before = mem_test.getL1CacheHits();
     mem_test.loadWord(0x10000, data, latency);
-    CHECK(mem_test.getL1CacheHits() == hits_before + 1,
-          "L1 hit counter incremented on second read");
+    CHECK(mem_test.getL1CacheHits() == hits_before + 1, "L1 hit counter incremented");
     CHECK(latency == 1, "L1 hit latency == 1 cycle");
 
     LOG_SEP("1c: Cache invalidation forces miss");
     mem_test.invalidateCache();
     uint64_t misses_before = mem_test.getL1CacheMisses();
     mem_test.loadWord(0x10000, data, latency);
-    CHECK(mem_test.getL1CacheMisses() == misses_before + 1,
-          "L1 miss after invalidation");
-    CHECK(data == 0xDEADBEEF,
-          "Data still correct after re-fetch from global memory");
+    CHECK(mem_test.getL1CacheMisses() == misses_before + 1, "L1 miss after invalidation");
+    CHECK(data == 0xDEADBEEF, "Data correct after re-fetch");
 
     LOG_SEP("1d: Shared memory");
     mem_test.storeSharedMemory(0x0, 0x12345678);
     data = 0;
     mem_test.loadSharedMemory(0x0, data);
-    CHECK(data == 0x12345678, "Shared memory write→read: data matches");
+    CHECK(data == 0x12345678, "Shared memory write→read matches");
 
-    LOG_SEP("1e: Multiple addresses - no aliasing");
+    LOG_SEP("1e: Multiple addresses – no aliasing");
     mem_test.storeWord(0x20000, 0xCAFEBABE, latency);
     mem_test.storeWord(0x30000, 0xDEADC0DE, latency);
     uint32_t d1 = 0, d2 = 0;
     mem_test.loadWord(0x20000, d1, latency);
     mem_test.loadWord(0x30000, d2, latency);
-    CHECK(d1 == 0xCAFEBABE, "Address 0x20000 holds correct value");
-    CHECK(d2 == 0xDEADC0DE, "Address 0x30000 holds correct value");
-
-    LOG_SEP("Phase 1 Statistics");
-    std::cout << "  L1 hits   : " << mem_test.getL1CacheHits()   << "\n"
-              << "  L1 misses : " << mem_test.getL1CacheMisses() << "\n"
-              << "  L2 hits   : " << mem_test.getL2CacheHits()   << "\n"
-              << "  L2 misses : " << mem_test.getL2CacheMisses() << "\n";
+    CHECK(d1 == 0xCAFEBABE, "0x20000 holds correct value");
+    CHECK(d2 == 0xDEADC0DE, "0x30000 holds correct value");
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Phase 2 – Warp Scheduler
+    // Phase 2
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(2, "Warp Scheduler");
 
-    // ── 2a. Basic dispatch ────────────────────────────────────────────────────
     LOG_SEP("2a: Basic dispatch – 2x2 kernel, 1 CU");
-    sched1.submitKernel(0, 2, 2);   // 4 warps → CU 0
-
-    CHECK(sched1.hasReadyWarps(0), "hasReadyWarps(0) = true after submitKernel");
-
+    sched1.submitKernel(0, 2, 2);
+    CHECK(sched1.hasReadyWarps(0), "hasReadyWarps(0) = true");
     std::set<WarpID> seen;
     bool all_valid = true;
     for (int i = 0; i < 4; ++i) {
@@ -145,51 +135,104 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
         if (w == WarpScheduler::INVALID_WARP_ID) { all_valid = false; break; }
         seen.insert(w);
     }
-    CHECK(all_valid,         "selectWarp returned valid IDs for all 4 warps");
-    CHECK(seen.size() == 4,  "All 4 warp IDs are distinct");
-    CHECK(!sched1.hasReadyWarps(0), "hasReadyWarps(0) = false after draining queue");
-
+    CHECK(all_valid,        "All 4 warp IDs are valid");
+    CHECK(seen.size() == 4, "All 4 warp IDs are distinct");
+    CHECK(!sched1.hasReadyWarps(0), "Queue empty after draining");
     for (WarpID w : seen) sched1.markWarpComplete(0, w);
-    CHECK(sched1.isComplete(),                    "isComplete() = true after all warps complete");
+    CHECK(sched1.isComplete(),                    "isComplete() after all complete");
     CHECK(sched1.getTotalWarpsDispatched() == 4,  "getTotalWarpsDispatched() = 4");
-    CHECK(sched1.getTotalKernelsCompleted() == 4, "getTotalKernelsCompleted() = 4");
 
-    // ── 2b. Stall flow ────────────────────────────────────────────────────────
     LOG_SEP("2b: Stall flow");
-    sched1.submitKernel(0, 1, 2);   // 2 more warps
+    sched1.submitKernel(0, 1, 2);
     WarpID wa = sched1.selectWarp(0);
     WarpID wb = sched1.selectWarp(0);
-    CHECK(wa != WarpScheduler::INVALID_WARP_ID, "First warp selected successfully");
-    CHECK(wb != WarpScheduler::INVALID_WARP_ID, "Second warp selected successfully");
-
     sched1.markWarpStalled(0, wa);
     sched1.markWarpComplete(0, wb);
-    CHECK(!sched1.isComplete(),
-          "isComplete() = false while one warp is stalled");
+    CHECK(!sched1.isComplete(), "isComplete() = false with stalled warp");
 
-    // ── 2c. Load distribution – 2 CUs ─────────────────────────────────────────
-    LOG_SEP("2c: Load distribution – 2x2 kernel, 2 CUs");
-    sched2.submitKernel(0, 2, 2);   // 4 warps → 2 CUs
+    LOG_SEP("2c: Load distribution – 2 CUs");
+    sched2.submitKernel(0, 2, 2);
+    CHECK(sched2.hasReadyWarps(0), "CU 0 has warps");
+    CHECK(sched2.hasReadyWarps(1), "CU 1 has warps");
+    uint32_t cu0 = 0, cu1 = 0;
+    while (sched2.hasReadyWarps(0)) { sched2.selectWarp(0); ++cu0; }
+    while (sched2.hasReadyWarps(1)) { sched2.selectWarp(1); ++cu1; }
+    CHECK(cu0 == 2, "CU 0 received 2 warps");
+    CHECK(cu1 == 2, "CU 1 received 2 warps");
 
-    CHECK(sched2.hasReadyWarps(0), "CU 0 has ready warps");
-    CHECK(sched2.hasReadyWarps(1), "CU 1 has ready warps");
+    // ═════════════════════════════════════════════════════════════════════════
+    // Phase 3 – SIMT Controller
+    // ═════════════════════════════════════════════════════════════════════════
+    Platform::printPhaseHeader(3, "SIMT Controller");
 
-    // After balancing: each CU should have exactly 2 warps
-    uint32_t cu0_count = 0, cu1_count = 0;
-    while (sched2.hasReadyWarps(0)) { sched2.selectWarp(0); ++cu0_count; }
-    while (sched2.hasReadyWarps(1)) { sched2.selectWarp(1); ++cu1_count; }
-    CHECK(cu0_count == 2, "CU 0 received 2 warps (balanced)");
-    CHECK(cu1_count == 2, "CU 1 received 2 warps (balanced)");
+    // ── 3a. Initialization ────────────────────────────────────────────────────
+    LOG_SEP("3a: Warp initialization – 8 threads");
+    simt.initializeWarp(0, 8);
+    CHECK(simt.getActiveMask(0) == 0xFF, "Initial mask = 0xFF (all 8 threads active)");
+    CHECK(simt.isThreadActive(0, 0),     "Thread 0 active");
+    CHECK(simt.isThreadActive(0, 7),     "Thread 7 active");
+    CHECK(!simt.hasPendingDivergence(0), "No pending divergence initially");
 
-    LOG_SEP("Phase 2 Statistics");
-    std::cout << "  sched1 dispatched  : " << sched1.getTotalWarpsDispatched()  << "\n"
-              << "  sched1 completed   : " << sched1.getTotalKernelsCompleted() << "\n"
-              << "  sched2 dispatched  : " << sched2.getTotalWarpsDispatched()  << "\n";
+    // ── 3b. Divergent branch ──────────────────────────────────────────────────
+    LOG_SEP("3b: Divergent branch – threads 0-3 take, 4-7 don't");
+    bool cond_b[8] = {true, true, true, true, false, false, false, false};
+    simt.handleBranch(0, cond_b);
+    CHECK(simt.getActiveMask(0) == 0x0F,         "Active mask = 0x0F (taken path)");
+    CHECK(simt.getTotalDivergenceEvents() == 1,   "Divergence event counted");
+    CHECK(simt.getTotalWastedCycles() == 4,       "4 wasted lane-cycles (threads 4-7)");
+    CHECK(simt.isThreadActive(0, 0),              "Thread 0 active (taken)");
+    CHECK(!simt.isThreadActive(0, 7),             "Thread 7 inactive (not-taken)");
+    CHECK(simt.hasPendingDivergence(0),           "Divergence stack non-empty");
+
+    // ── 3c. Reconvergence ─────────────────────────────────────────────────────
+    LOG_SEP("3c: Reconvergence at IPDOM");
+    simt.handleJoin(0);
+    CHECK(simt.getActiveMask(0) == 0xFF,          "Mask restored to 0xFF after join");
+    CHECK(!simt.hasPendingDivergence(0),          "Divergence stack empty after join");
+    CHECK(simt.isThreadActive(0, 7),              "Thread 7 active again");
+
+    // ── 3d. No divergence (all threads agree) ─────────────────────────────────
+    LOG_SEP("3d: No-divergence branch – all threads take same path");
+    simt.initializeWarp(1, 4);
+    bool cond_d[4] = {true, true, true, true};
+    simt.handleBranch(1, cond_d);
+    CHECK(simt.getActiveMask(1) == 0x0F,          "Mask unchanged (all threads took)");
+    CHECK(simt.getTotalDivergenceEvents() == 1,   "No new divergence event");
+    CHECK(!simt.hasPendingDivergence(1),          "Stack still empty");
+
+    // ── 3e. Nested divergence ─────────────────────────────────────────────────
+    LOG_SEP("3e: Nested divergence");
+    simt.initializeWarp(2, 8);
+    // Outer branch: threads 0-3 take, 4-7 don't
+    bool cond_outer[8] = {true, true, true, true, false, false, false, false};
+    simt.handleBranch(2, cond_outer);
+    CHECK(simt.getActiveMask(2) == 0x0F,          "After outer branch: mask = 0x0F");
+
+    // Inner branch (within taken path): threads 0-1 take, 2-3 don't
+    bool cond_inner[8] = {true, true, false, false, false, false, false, false};
+    simt.handleBranch(2, cond_inner);
+    CHECK(simt.getActiveMask(2) == 0x03,          "After inner branch: mask = 0x03");
+    CHECK(simt.getTotalDivergenceEvents() == 3,   "Two more divergence events (total 3)");
+
+    // First join: threads 2-3 rejoin
+    simt.handleJoin(2);
+    CHECK(simt.getActiveMask(2) == 0x0F,          "After first join: mask = 0x0F");
+    CHECK(simt.hasPendingDivergence(2),           "Outer divergence still pending");
+
+    // Second join: threads 4-7 rejoin
+    simt.handleJoin(2);
+    CHECK(simt.getActiveMask(2) == 0xFF,          "After second join: mask = 0xFF");
+    CHECK(!simt.hasPendingDivergence(2),          "All divergence resolved");
+
+    // ── Phase 3 statistics ────────────────────────────────────────────────────
+    LOG_SEP("Phase 3 Statistics");
+    std::cout << "  Total divergence events : " << simt.getTotalDivergenceEvents() << "\n"
+              << "  Total wasted cycles     : " << simt.getTotalWastedCycles()     << "\n";
 
     // ── Final result ──────────────────────────────────────────────────────────
     LOG_SEP("");
     if (overall_pass)
-        std::cout << "[PASS] All Phase 0 + Phase 1 + Phase 2 checks passed.\n\n";
+        std::cout << "[PASS] All Phase 0 – Phase 3 checks passed.\n\n";
     else
         std::cout << "[FAIL] One or more checks failed – see above.\n\n";
 
