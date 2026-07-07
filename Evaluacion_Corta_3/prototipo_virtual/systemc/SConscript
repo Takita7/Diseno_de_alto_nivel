@@ -1,0 +1,7 @@
+#!python
+Import('env')
+Import('deps')
+env = env.Clone()
+src = [File('harness_top.cc'), File('accelerator.cc')]
+bin = env.Program('gem5.sc', src + deps)
+Return('bin')
