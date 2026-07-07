@@ -15,7 +15,7 @@ instalación y ejecución.
 
 ```
 ┌────────────────────── gem5 (ARM64, bare-metal) ──────────────────────┐
-│                                                                       │
+│                                                                      │
 │   CPU (TimingSimpleCPU)          RAM (SimpleMemory, 512 MiB)         │
 │   ejecuta accel_test.elf         0x00000000 - 0x1FFFFFFF             │
 │        │                              ▲                              │
@@ -24,10 +24,10 @@ instalación y ejecución.
          │ ExternalSlave                 │ ExternalMaster
          │ (port_type=tlm_slave)         │ (port_type=tlm_master)
          ▼                               │
-┌──────────────────── SystemC (harness_top.cc) ────────────────────────┐
+┌──────────────────── SystemC (harness_top.cc) ─────────────────────────┐
 │                                                                       │
 │   Gem5SlaveTransactor ──────► Accelerator ◄────── Gem5MasterTransactor│
-│      ("regs")              (RGB→Grayscale,             ("dma")       │
+│      ("regs")              (RGB→Grayscale,             ("dma")        │
 │                              sin cambios de lógica)                   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -35,7 +35,7 @@ instalación y ejecución.
 ## 3. Organización del repositorio
 
 ```
-Evaluacion_Corta_2/
+Evaluacion_Corta_3/
 ├── src/                          # Acelerador SystemC (EC anterior)
 │   ├── accelerator.h / .cpp      # Sin cambios de lógica
 │   ├── bus.h, ram.h, storage.*   # No se usan en el prototipo virtual
