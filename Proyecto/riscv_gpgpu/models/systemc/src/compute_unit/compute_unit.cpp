@@ -1,5 +1,14 @@
-// compute_unit.cpp – Baseline compute unit implementation
+// compute_unit.cpp – Phase 4: functional warp execution
 //
+// executeWarp() is the new functional execution path that takes a
+// fully-formed WarpContext (registers + program), runs every instruction
+// through ALU / vector / memory helpers, and returns with ctx.state =
+// COMPLETE.  The legacy clockProcess/step machinery is kept for Phase 5.
+//
+// Memory model (Phase 4): a flat std::map<Address, uint32_t> (sim_memory_)
+// inside the module.  Phase 5 replaces this with a TLM initiator socket.
+//
+
 #include "compute_unit.h"
 #include "../integration/riscv_isa.h"
 #include "../simt_controller/simt_controller.h"
@@ -9,26 +18,24 @@
 
 namespace riscv_gpgpu {
 
+// ── Constructor / destructor ──────────────────────────────────────────────────
+
 ComputeUnit::ComputeUnit(sc_core::sc_module_name name, const Config& config)
     : sc_core::sc_module(name),
       config_(config),
-      unit_id_(config.unit_id),
-      total_cycles_(0),
-      total_instructions_(0),
-      current_executing_warp_(0),
-      is_running_(false)
+      unit_id_(config.unit_id)
 {
-    warp_states_.resize(config.max_warps, WarpState::IDLE);
+    // Warp state tables (legacy path)
+    warp_states_.resize(config_.max_warps, WarpState::IDLE);
+    registers_.resize(config_.max_warps,
+                      std::vector<uint32_t>(config_.threads_per_warp * 32, 0));
+    shared_memory_.resize(config_.shared_mem_size, 0);
 
-    registers_.resize(config.max_warps);
-    for (auto& warp_regs : registers_) {
-        warp_regs.resize(config.num_threads * 32, 0);
-    }
+    // SIMTController: child SC_MODULE, clock passed through
+    SIMTController::Config simt_cfg;
+    simt_ctrl_ = std::make_unique<SIMTController>("simt_ctrl", simt_cfg);
+    simt_ctrl_->clk(clk);   // hierarchical port binding
 
-    shared_memory_.resize(config.shared_mem_size, 0);
-
-    // SC_METHOD fires on every rising clock edge and must return –
-    // no wait() calls allowed inside.
     SC_METHOD(clockProcess);
     sensitive << clk.pos();
 
@@ -39,13 +46,135 @@ ComputeUnit::~ComputeUnit() {
     LOG_INFO("ComputeUnit " + std::to_string(unit_id_) + " destroyed");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4: executeWarp – functional execution path
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ComputeUnit::executeWarp(WarpContext& ctx) {
+    // Ensure register file is large enough
+    if (ctx.regs.size() < config_.threads_per_warp) {
+        ctx.regs.resize(config_.threads_per_warp,
+                        std::vector<uint32_t>(32, 0));
+    }
+    for (auto& t_regs : ctx.regs) {
+        if (t_regs.size() < 32) t_regs.resize(32, 0);
+    }
+
+    // Initialise SIMT: all threads active, divergence stack empty
+    simt_ctrl_->initializeWarp(ctx.warp_id, config_.threads_per_warp);
+    ctx.state = WarpState::RUNNING;
+    ctx.pc    = 0;
+
+    while (ctx.pc < static_cast<uint32_t>(ctx.program.size())) {
+        const Instruction& instr = ctx.program[ctx.pc];
+        uint32_t mask            = simt_ctrl_->getActiveMask(ctx.warp_id);
+        auto     op              = static_cast<Opcode>(instr.opcode);
+
+        if (op == Opcode::HALT) {
+            ++total_instructions_;
+            break;
+        }
+
+        if (instr.is_memory) {
+            executeMemOp(ctx, instr, mask);
+        } else if (instr.is_vector) {
+            executeVector(ctx, instr, mask);
+        } else {
+            executeALU(ctx, instr, mask);
+        }
+
+        ++total_instructions_;
+        ++ctx.pc;
+    }
+
+    ctx.state = WarpState::COMPLETE;
+
+    LOG_DEBUG("ComputeUnit " + std::to_string(unit_id_)
+              + ": warp " + std::to_string(ctx.warp_id)
+              + " complete, " + std::to_string(ctx.pc) + " instructions");
+}
+
+// ── Scalar ALU ────────────────────────────────────────────────────────────────
+
+void ComputeUnit::executeALU(WarpContext& ctx,
+                               const Instruction& instr,
+                               uint32_t mask) {
+    auto op = static_cast<Opcode>(instr.opcode);
+    for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
+        if (!((mask >> t) & 1u)) continue;
+
+        uint32_t a = ctx.regs[t][instr.rs1];
+        uint32_t b = (op == Opcode::ADDI || op == Opcode::LUI)
+                     ? static_cast<uint32_t>(instr.imm)
+                     : ctx.regs[t][instr.rs2];
+
+        switch (op) {
+            case Opcode::ADD:
+            case Opcode::ADDI: ctx.regs[t][instr.rd] = a + b;                               break;
+            case Opcode::SUB:  ctx.regs[t][instr.rd] = a - b;                               break;
+            case Opcode::AND:  ctx.regs[t][instr.rd] = a & b;                               break;
+            case Opcode::OR:   ctx.regs[t][instr.rd] = a | b;                               break;
+            case Opcode::XOR:  ctx.regs[t][instr.rd] = a ^ b;                               break;
+            case Opcode::SLT:  ctx.regs[t][instr.rd] = (int32_t(a) < int32_t(b)) ? 1u : 0u; break;
+            case Opcode::LUI:  ctx.regs[t][instr.rd] = b << 12;                             break;
+            default: break;
+        }
+    }
+}
+
+// ── Vector (RVV-style: operate across active thread lanes) ────────────────────
+
+void ComputeUnit::executeVector(WarpContext& ctx,
+                                  const Instruction& instr,
+                                  uint32_t mask) {
+    auto op = static_cast<Opcode>(instr.opcode);
+    for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
+        if (!((mask >> t) & 1u)) continue;
+
+        uint32_t a = ctx.regs[t][instr.rs1];
+        uint32_t b = ctx.regs[t][instr.rs2];
+        uint32_t c = ctx.regs[t][instr.rd];   // accumulator for VFMADD
+
+        switch (op) {
+            case Opcode::VADD:   ctx.regs[t][instr.rd] = a + b;     break;
+            case Opcode::VSUB:   ctx.regs[t][instr.rd] = a - b;     break;
+            case Opcode::VMUL:   ctx.regs[t][instr.rd] = a * b;     break;
+            case Opcode::VFMADD: ctx.regs[t][instr.rd] = a * b + c; break;
+            default: break;
+        }
+    }
+}
+
+// ── Memory (per-thread address, Phase 4 internal map) ─────────────────────────
+
+void ComputeUnit::executeMemOp(WarpContext& ctx,
+                                 const Instruction& instr,
+                                 uint32_t mask) {
+    auto op = static_cast<Opcode>(instr.opcode);
+    for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
+        if (!((mask >> t) & 1u)) continue;
+
+        Address addr = static_cast<Address>(
+            static_cast<int64_t>(ctx.regs[t][instr.rs1]) + instr.imm);
+
+        if (op == Opcode::LW) {
+            auto it = sim_memory_.find(addr);
+            ctx.regs[t][instr.rd] = (it != sim_memory_.end()) ? it->second : 0u;
+        } else {   // SW
+            sim_memory_[addr] = ctx.regs[t][instr.rs2];
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy clock-driven path (kept for Phase 5 wiring)
+// ─────────────────────────────────────────────────────────────────────────────
+
 void ComputeUnit::launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y) {
     std::stringstream ss;
-    ss << "Launching kernel block " << block_id
-       << " on CU " << unit_id_
-       << " (grid: " << grid_x << "x" << grid_y << ")";
+    ss << "ComputeUnit " << unit_id_ << ": launchKernel block=" << block_id
+       << " grid=" << grid_x << "x" << grid_y;
     LOG_INFO(ss.str());
-
     is_running_ = true;
     initializeWarp(0);
     ready_warps_.push(0);
@@ -58,46 +187,35 @@ WarpState ComputeUnit::getWarpState(WarpID warp_id) const {
 
 void ComputeUnit::step() {
     if (!is_running_) return;
-
     if (!ready_warps_.empty()) {
         current_executing_warp_ = ready_warps_.front();
         ready_warps_.pop();
         executeInstruction(current_executing_warp_);
         ready_warps_.push(current_executing_warp_);
     }
-
-    total_cycles_++;
+    ++total_cycles_;
     updateWarpState();
 }
 
 bool ComputeUnit::isComplete() const {
     for (const auto& state : warp_states_) {
-        if (state != WarpState::IDLE && state != WarpState::COMPLETE) {
-            return false;
+        if (state != WarpState::IDLE && state != WarpState::COMPLETE) return false;
+    }
     return true;
 }
 
-// SC_METHOD – fires on clk.pos(), must return immediately
-void ComputeUnit::clockProcess() {
-    if (is_running_) {
-        step();
-    }
-}
-
-// resetProcess removed – reset port no longer exists in Phase 0.
-// Reset logic (clear cycles, instructions, warp states, registers,
-// shared memory) will be triggered explicitly in Phase 4 when a
-// proper reset mechanism is designed.
+void ComputeUnit::clockProcess() { if (is_running_) step(); }
+void ComputeUnit::executeProcess() { /* Phase 5 */ }
 
 void ComputeUnit::initializeWarp(WarpID warp_id) {
     warp_states_[warp_id] = WarpState::READY;
-    auto& warp_regs = registers_[warp_id];
-    std::fill(warp_regs.begin(), warp_regs.end(), 0);
+    std::fill(registers_[warp_id].begin(), registers_[warp_id].end(), 0);
 }
 
 void ComputeUnit::finalizeWarp(WarpID warp_id) {
-    warp_states_[warp_id] = WarpState::COMPLETE;   // was COMPLETED
-    LOG_INFO("Warp " + std::to_string(warp_id) + " completed");
+    warp_states_[warp_id] = WarpState::COMPLETE;
+    LOG_INFO("ComputeUnit " + std::to_string(unit_id_)
+             + ": warp " + std::to_string(warp_id) + " finalized");
 }
 
 void ComputeUnit::scheduleWarp() {
@@ -112,49 +230,17 @@ void ComputeUnit::scheduleWarp() {
 void ComputeUnit::executeInstruction(WarpID warp_id) {
     if (warp_states_[warp_id] != WarpState::RUNNING &&
         warp_states_[warp_id] != WarpState::READY) return;
-
     warp_states_[warp_id] = WarpState::RUNNING;
-    total_instructions_++;
+    ++total_instructions_;
 }
 
-bool ComputeUnit::checkMemoryDependencies(WarpID /*warp_id*/) {
-    return true;
-}
+bool ComputeUnit::checkMemoryDependencies(WarpID /*warp_id*/) { return true; }
 
 void ComputeUnit::updateWarpState() {
     for (size_t i = 0; i < warp_states_.size(); ++i) {
-        if (warp_states_[i] == WarpState::RUNNING) {
-            if (total_cycles_ > 100) {
-                finalizeWarp(static_cast<WarpID>(i));
-            }
-        }
+        if (warp_states_[i] == WarpState::RUNNING && total_cycles_ > 100)
+            finalizeWarp(static_cast<WarpID>(i));
     }
-
-    if (branch_handled && simt_) {
-        simt_->handleBranch(0, branch_conditions.data());
-    }
-
-    ctx.rf = ctx.lane_rf[active_lanes.front()];
-    ctx.rf[0] = 0;
-    ctx.pc = ctx.lane_pc[active_lanes.front()];
-    total_instructions_ += static_cast<InstructionCount>(active_lanes.size());
-
-    bool all_done = true;
-    for (bool halted : ctx.lane_halted) {
-        if (!halted) {
-            all_done = false;
-            break;
-        }
-    }
-    if (all_done) {
-        ctx.halted = true;
-        ctx.state = WarpState::COMPLETED;
-        if (simt_) simt_->handleJoin(0);
-    }
-}
-
-void ComputeUnit::executeProcess() {
-    // Phase 4: TLM-based execution loop will go here
 }
 
 }  // namespace riscv_gpgpu
