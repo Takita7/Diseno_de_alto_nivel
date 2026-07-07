@@ -18,17 +18,17 @@ instalación y ejecución.
 │                                                                      │
 │   CPU (TimingSimpleCPU)          RAM (SimpleMemory, 512 MiB)         │
 │   ejecuta accel_test.elf         0x00000000 - 0x1FFFFFFF             │
-│        │                              ▲                              │
-│        │ MMIO                         │ DMA                          │
-└────────┼───────────────────────────────┼─────────────────────────────┘
-         │ ExternalSlave                 │ ExternalMaster
-         │ (port_type=tlm_slave)         │ (port_type=tlm_master)
-         ▼                               │
+│        │                                             ▲               │
+│        │ MMIO                                        │ DMA           │
+└────────┼─────────────────────────────────────────────┼───────────────┘
+         │ ExternalSlave                               │ ExternalMaster
+         │ (port_type=tlm_slave)                       │ (port_type=tlm_master)
+         ▼                                             │
 ┌──────────────────── SystemC (harness_top.cc) ─────────────────────────┐
 │                                                                       │
 │   Gem5SlaveTransactor ──────► Accelerator ◄────── Gem5MasterTransactor│
-│      ("regs")              (RGB→Grayscale,             ("dma")        │
-│                              sin cambios de lógica)                   │
+│      ("regs")              (RGB→Grayscale)             ("dma")        │
+│                           
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
