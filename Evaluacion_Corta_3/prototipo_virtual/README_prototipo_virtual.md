@@ -117,9 +117,7 @@ procesamiento no se alteró por el cambio de plataforma.
 ## 9. Declaración de uso de IA
 
 Se utilizó IA (Claude, Anthropic) como apoyo durante el desarrollo de esta
-sección. A continuación se documentan las categorías de uso, mostrando que
-la interacción implicó comprensión y toma de decisiones activa, no una
-generación mecánica de código sin revisión.
+sección. A continuación se documentan las categorías de uso:
 
 **Depuración** — diagnóstico de errores reales de compilación y ejecución
 (gem5, SystemC, puente `util/tlm`), incluyendo el uso de `gdb` para
