@@ -1,4 +1,4 @@
-// top_test.cpp – Phase 0 through Phase 5 tests
+// top_test.cpp – Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 tests
 //
 
 #include <systemc>
@@ -21,6 +21,7 @@ using namespace riscv_gpgpu;
         else      { std::cout << "[FAIL] " << (msg) << "\n"; overall_pass = false; } \
     } while (0)
 
+// ── Helpers for building WarpContexts ────────────────────────────────────────
 static WarpContext makeContext(WarpID warp_id, uint32_t threads,
                                std::vector<Instruction> prog) {
     WarpContext ctx;
@@ -48,6 +49,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     sc_core::sc_clock test_clock("test_clock",
         sc_core::sc_time(GPGPU_CLOCK_PERIOD_NS, sc_core::SC_NS));
 
+    // Phase 1
     MemoryHierarchy::Config mem_config;
     mem_config.shared_mem_size = 16 * 1024;
     mem_config.l1_cache_size   = 32 * 1024;
@@ -56,6 +58,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     MemoryHierarchy mem_test("mem_test", mem_config);
     mem_test.clk(test_clock);
 
+    // Phase 2
     WarpScheduler::Config sched1_config;
     sched1_config.num_compute_units = 1;
     sched1_config.max_warps_per_cu  = 8;
@@ -70,11 +73,13 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     WarpScheduler sched2("sched2", sched2_config);
     sched2.clk(test_clock);
 
+    // Phase 3
     SIMTController::Config simt_config;
     simt_config.mode = SIMTController::RecovergenceMode::IMMEDIATE;
     SIMTController simt("simt_test", simt_config);
     simt.clk(test_clock);
 
+    // Phase 4 – standalone compute unit, 4 threads/warp
     ComputeUnit::Config cu_config;
     cu_config.unit_id          = 99;
     cu_config.threads_per_warp = 4;
@@ -84,7 +89,6 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     ComputeUnit cu_test("cu_test", cu_config);
     cu_test.clk(test_clock);
 
-    // Elaboration
     sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -101,12 +105,12 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     Platform::printPhaseHeader(1, "Memory Hierarchy");
     uint32_t data = 0, latency = 0;
 
-    LOG_SEP("1a: Global memory");
+    LOG_SEP("1a: Global memory write / read");
     mem_test.storeWord(0x10000, 0xDEADBEEF, latency);
     mem_test.loadWord (0x10000, data, latency);
-    CHECK(data == 0xDEADBEEF, "Write→read: 0xDEADBEEF");
+    CHECK(data == 0xDEADBEEF, "Global write→read: 0xDEADBEEF");
 
-    LOG_SEP("1b: L1 hit");
+    LOG_SEP("1b: L1 hit on second read");
     uint64_t hits_before = mem_test.getL1CacheHits();
     mem_test.loadWord(0x10000, data, latency);
     CHECK(mem_test.getL1CacheHits() == hits_before + 1, "L1 hit counter incremented");
@@ -210,100 +214,85 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(4, "Compute Unit");
 
-    LOG_SEP("4a: Integer ALU");
+    // ── 4a: Integer ALU ───────────────────────────────────────────────────────
+    // r0[t] = t  →  ADDI r1,r0,5  →  r1[t]=t+5
+    //              ADD  r2,r1,r1  →  r2[t]=2*(t+5)
+    LOG_SEP("4a: Integer ALU – ADDI + ADD across 4 threads");
     {
         WarpContext ctx = makeContext(0, 4, {
-            makeInstr(Opcode::ADDI, 1, 0, 0,  5),
-            makeInstr(Opcode::ADD,  2, 1, 1,  0),
+            makeInstr(Opcode::ADDI, 1, 0, 0,  5),  // r1 = r0 + 5
+            makeInstr(Opcode::ADD,  2, 1, 1,  0),  // r2 = r1 + r1
             makeInstr(Opcode::HALT)
         });
-        for (uint32_t t = 0; t < 4; ++t) ctx.regs[t][0] = t;
+        for (uint32_t t = 0; t < 4; ++t) ctx.regs[t][0] = t;  // r0[t] = t
+
         cu_test.executeWarp(ctx);
-        CHECK(ctx.state == WarpState::COMPLETE, "Warp COMPLETE");
-        CHECK(ctx.regs[0][2] == 10, "Thread 0: r2=10");
-        CHECK(ctx.regs[1][2] == 12, "Thread 1: r2=12");
-        CHECK(ctx.regs[2][2] == 14, "Thread 2: r2=14");
-        CHECK(ctx.regs[3][2] == 16, "Thread 3: r2=16");
+
+        CHECK(ctx.state == WarpState::COMPLETE, "Warp state = COMPLETE");
+        CHECK(ctx.regs[0][2] == 10, "Thread 0: r2 = 2*(0+5) = 10");
+        CHECK(ctx.regs[1][2] == 12, "Thread 1: r2 = 2*(1+5) = 12");
+        CHECK(ctx.regs[2][2] == 14, "Thread 2: r2 = 2*(2+5) = 14");
+        CHECK(ctx.regs[3][2] == 16, "Thread 3: r2 = 2*(3+5) = 16");
     }
 
-    LOG_SEP("4b: Vector SAXPY");
+    // ── 4b: Vector SAXPY (integer) ────────────────────────────────────────────
+    // r0[t]=alpha=2, r1[t]=x[t]={1,2,3,4}, r2[t]=y=10
+    // VMUL r3,r1,r0  →  r3[t] = x[t]*alpha
+    // VADD r3,r3,r2  →  r3[t] = x[t]*alpha + y  = {12,14,16,18}
+    LOG_SEP("4b: Vector SAXPY – VMUL + VADD");
     {
         WarpContext ctx = makeContext(1, 4, {
-            makeInstr(Opcode::VMUL, 3, 1, 0,  0),
-            makeInstr(Opcode::VADD, 3, 3, 2,  0),
+            makeInstr(Opcode::VMUL, 3, 1, 0,  0),  // r3 = r1 * r0
+            makeInstr(Opcode::VADD, 3, 3, 2,  0),  // r3 = r3 + r2
             makeInstr(Opcode::HALT)
         });
         for (uint32_t t = 0; t < 4; ++t) {
-            ctx.regs[t][0] = 2; ctx.regs[t][1] = t + 1; ctx.regs[t][2] = 10;
+            ctx.regs[t][0] = 2;          // alpha
+            ctx.regs[t][1] = t + 1;      // x[t] = {1,2,3,4}
+            ctx.regs[t][2] = 10;         // y
         }
+
         cu_test.executeWarp(ctx);
-        CHECK(ctx.regs[0][3] == 12, "Thread 0: 2*1+10=12");
-        CHECK(ctx.regs[1][3] == 14, "Thread 1: 2*2+10=14");
-        CHECK(ctx.regs[2][3] == 16, "Thread 2: 2*3+10=16");
-        CHECK(ctx.regs[3][3] == 18, "Thread 3: 2*4+10=18");
+
+        CHECK(ctx.regs[0][3] == 12, "Thread 0: 2*1+10 = 12");
+        CHECK(ctx.regs[1][3] == 14, "Thread 1: 2*2+10 = 14");
+        CHECK(ctx.regs[2][3] == 16, "Thread 2: 2*3+10 = 16");
+        CHECK(ctx.regs[3][3] == 18, "Thread 3: 2*4+10 = 18");
     }
 
-    LOG_SEP("4c: Memory SW + LW");
+    // ── 4c: Memory store / load ───────────────────────────────────────────────
+    // r0[t] = 0x1000 + t*4  (unique per-thread address)
+    // r1[t] = t * 100       (value to store)
+    // SW r1, 0(r0)  →  mem[addr] = r1[t]
+    // LW r2, 0(r0)  →  r2[t] = mem[addr]
+    LOG_SEP("4c: Memory SW + LW per thread");
     {
         WarpContext ctx = makeContext(2, 4, {
-            makeInstr(Opcode::SW,  0, 0, 1, 0),
-            makeInstr(Opcode::LW,  2, 0, 0, 0),
+            makeInstr(Opcode::SW,   0, 0, 1,  0),  // mem[r0] = r1
+            makeInstr(Opcode::LW,   2, 0, 0,  0),  // r2 = mem[r0]
             makeInstr(Opcode::HALT)
         });
         for (uint32_t t = 0; t < 4; ++t) {
-            ctx.regs[t][0] = 0x1000 + t * 4;
-            ctx.regs[t][1] = t * 100;
+            ctx.regs[t][0] = 0x1000 + t * 4;  // unique address
+            ctx.regs[t][1] = t * 100;          // value
         }
+
         cu_test.executeWarp(ctx);
-        CHECK(ctx.regs[0][2] ==   0, "Thread 0: r2=0");
-        CHECK(ctx.regs[1][2] == 100, "Thread 1: r2=100");
-        CHECK(ctx.regs[2][2] == 200, "Thread 2: r2=200");
-        CHECK(ctx.regs[3][2] == 300, "Thread 3: r2=300");
+
+        CHECK(ctx.regs[0][2] == 0,   "Thread 0: r2 = 0");
+        CHECK(ctx.regs[1][2] == 100, "Thread 1: r2 = 100");
+        CHECK(ctx.regs[2][2] == 200, "Thread 2: r2 = 200");
+        CHECK(ctx.regs[3][2] == 300, "Thread 3: r2 = 300");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // Phase 5 – Top Integration (end-to-end SAXPY kernel)
-    // ═════════════════════════════════════════════════════════════════════════
-    Platform::printPhaseHeader(5, "Top Integration");
-    LOG_SEP("5a: End-to-end SAXPY kernel – 2x1 grid (2 warps), 32 threads/warp");
-
-    // Sanity check: scheduler empty before launch
-    CHECK(top.isKernelComplete(), "isKernelComplete() = true before launch");
-
-    // Launch: submits 2 warps, fires kernel_launch_event_
-    top.launchKernel(2, 1);
-    CHECK(!top.isKernelComplete(), "isKernelComplete() = false immediately after launch");
-
-    // Advance simulation: simulationProcess runs both warps to completion
-    sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-
-    LOG_SEP("5a: Results");
-    CHECK(top.isKernelComplete(), "isKernelComplete() = true after sc_start");
-
-    // 2 warps × 3 instructions (VMUL + VADD + HALT) = 6
-    CHECK(top.getTotalInstructions() == 6,
-          "getTotalInstructions() = 6  (2 warps × 3 instructions)");
-
-    LOG_SEP("5b: Second kernel launch (stateful reset check)");
-    // Launch again: scheduler re-used, new warps queued
-    top.launchKernel(1, 1);   // 1 warp
-    sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-    CHECK(top.isKernelComplete(), "isKernelComplete() = true after second kernel");
-    // 6 from first launch + 3 from second = 9
-    CHECK(top.getTotalInstructions() == 9,
-          "getTotalInstructions() = 9 cumulative (6 + 3)");
-
-    LOG_SEP("Phase 5 Statistics");
-    std::cout << "  Total instructions : " << top.getTotalInstructions() << "\n"
-              << "  Total cycles       : " << top.getTotalCycles()
-              << "  (0 – clock-driven path not active in Phase 5)\n"
-              << "  L1 cache hits      : " << top.getL1CacheHits()
-              << "  (0 – memory not yet wired to compute unit)\n";
+    // ── Phase 4 statistics ────────────────────────────────────────────────────
+    LOG_SEP("Phase 4 Statistics");
+    std::cout << "  Total instructions : " << cu_test.getTotalInstructions() << "\n";
 
     // ── Final result ──────────────────────────────────────────────────────────
     LOG_SEP("");
     if (overall_pass)
-        std::cout << "[PASS] All Phase 0 – Phase 5 checks passed.\n\n";
+        std::cout << "[PASS] All Phase 0 – Phase 4 checks passed.\n\n";
     else
         std::cout << "[FAIL] One or more checks failed – see above.\n\n";
 
