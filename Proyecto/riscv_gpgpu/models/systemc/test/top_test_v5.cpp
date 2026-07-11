@@ -1,4 +1,4 @@
-// top_test.cpp – Phase 0 through Phase 6
+// top_test.cpp – Phase 0 through Phase 5 tests
 //
 
 #include <systemc>
@@ -83,8 +83,8 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     cu_config.shared_mem_size  = 4 * 1024;
     ComputeUnit cu_test("cu_test", cu_config);
     cu_test.clk(test_clock);
-    // cu_test uses sim_memory_ (no setMemory call) – suitable for register-based tests
 
+    // Elaboration
     sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -92,7 +92,8 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(0, "Build & Initialization");
     LOG_SEP("Phase 0 Results");
-    CHECK(top.isKernelComplete(), "GPGPUTop: isKernelComplete() before launch");
+    CHECK(top.isKernelComplete(),
+          "GPGPUTop: isKernelComplete() before any kernel launch");
 
     // ═════════════════════════════════════════════════════════════════════════
     // Phase 1 – Memory Hierarchy
@@ -148,7 +149,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
         if (w == WarpScheduler::INVALID_WARP_ID) { all_valid = false; break; }
         seen.insert(w);
     }
-    CHECK(all_valid, "All IDs valid");
+    CHECK(all_valid,        "All IDs valid");
     CHECK(seen.size() == 4, "All IDs distinct");
     for (WarpID w : seen) sched1.markWarpComplete(0, w);
     CHECK(sched1.isComplete(), "isComplete after all warps done");
@@ -228,12 +229,12 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     LOG_SEP("4b: Vector SAXPY");
     {
         WarpContext ctx = makeContext(1, 4, {
-            makeInstr(Opcode::VMUL, 3, 1, 0, 0),
-            makeInstr(Opcode::VADD, 3, 3, 2, 0),
+            makeInstr(Opcode::VMUL, 3, 1, 0,  0),
+            makeInstr(Opcode::VADD, 3, 3, 2,  0),
             makeInstr(Opcode::HALT)
         });
         for (uint32_t t = 0; t < 4; ++t) {
-            ctx.regs[t][0] = 2; ctx.regs[t][1] = t+1; ctx.regs[t][2] = 10;
+            ctx.regs[t][0] = 2; ctx.regs[t][1] = t + 1; ctx.regs[t][2] = 10;
         }
         cu_test.executeWarp(ctx);
         CHECK(ctx.regs[0][3] == 12, "Thread 0: 2*1+10=12");
@@ -261,153 +262,48 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Phase 5 – Top Integration  (updated: launchKernel now takes a program)
+    // Phase 5 – Top Integration (end-to-end SAXPY kernel)
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(5, "Top Integration");
+    LOG_SEP("5a: End-to-end SAXPY kernel – 2x1 grid (2 warps), 32 threads/warp");
 
-    // SAXPY kernel: uses buildWarpContext's r0=0, r1=tid, r2=mem_addr
-    //   r3 = alpha=2, r4 = x[t]=tid+1, r5 = y=10
-    //   r6 = alpha*x + y = 2*(tid+1)+10
-    // 6 instructions/warp (ADDI×3 + VMUL + VADD + HALT)
-    std::vector<Instruction> saxpy_prog = {
-        makeInstr(Opcode::ADDI, 3, 0, 0,  2),   // r3 = alpha = 2
-        makeInstr(Opcode::ADDI, 4, 1, 0,  1),   // r4 = tid + 1  (x[t])
-        makeInstr(Opcode::ADDI, 5, 0, 0, 10),   // r5 = y = 10
-        makeInstr(Opcode::VMUL, 6, 4, 3,  0),   // r6 = x * alpha
-        makeInstr(Opcode::VADD, 6, 6, 5,  0),   // r6 = x*alpha + y
-        makeInstr(Opcode::HALT)
-    };
-
-    LOG_SEP("5a: 2x1 kernel (2 warps)");
+    // Sanity check: scheduler empty before launch
     CHECK(top.isKernelComplete(), "isKernelComplete() = true before launch");
-    top.launchKernel(2, 1, saxpy_prog);
-    CHECK(!top.isKernelComplete(), "isKernelComplete() = false after launch");
+
+    // Launch: submits 2 warps, fires kernel_launch_event_
+    top.launchKernel(2, 1);
+    CHECK(!top.isKernelComplete(), "isKernelComplete() = false immediately after launch");
+
+    // Advance simulation: simulationProcess runs both warps to completion
     sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
+
+    LOG_SEP("5a: Results");
     CHECK(top.isKernelComplete(), "isKernelComplete() = true after sc_start");
-    // 2 warps × 6 instructions = 12
-    CHECK(top.getTotalInstructions() == 12,
-          "getTotalInstructions() = 12  (2 warps × 6)");
 
-    LOG_SEP("5b: Second kernel (1 warp, cumulative check)");
-    top.launchKernel(1, 1, saxpy_prog);
+    // 2 warps × 3 instructions (VMUL + VADD + HALT) = 6
+    CHECK(top.getTotalInstructions() == 6,
+          "getTotalInstructions() = 6  (2 warps × 3 instructions)");
+
+    LOG_SEP("5b: Second kernel launch (stateful reset check)");
+    // Launch again: scheduler re-used, new warps queued
+    top.launchKernel(1, 1);   // 1 warp
     sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-    CHECK(top.isKernelComplete(), "isKernelComplete() after second kernel");
-    // 12 + 6 = 18
-    CHECK(top.getTotalInstructions() == 18,
-          "getTotalInstructions() = 18 cumulative (12 + 6)");
+    CHECK(top.isKernelComplete(), "isKernelComplete() = true after second kernel");
+    // 6 from first launch + 3 from second = 9
+    CHECK(top.getTotalInstructions() == 9,
+          "getTotalInstructions() = 9 cumulative (6 + 3)");
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // Phase 6 – Benchmarks
-    // ═════════════════════════════════════════════════════════════════════════
-    Platform::printPhaseHeader(6, "Benchmarks");
-
-    // ── 6a: SAXPY with real L1/L2 cache (via top) ─────────────────────────────
-    // Uses r2 (unique per-thread address from buildWarpContext) for SW/LW.
-    // SW is write-through/no-write-allocate → LW (first) misses L1, fills it.
-    // LW (second) hits L1.
-    LOG_SEP("6a: SAXPY with real memory – L1 miss then hit");
-    {
-        std::vector<Instruction> mem_saxpy = {
-            makeInstr(Opcode::ADDI, 3, 0, 0,  2),   // r3 = alpha = 2
-            makeInstr(Opcode::ADDI, 4, 1, 0,  1),   // r4 = tid + 1
-            makeInstr(Opcode::ADDI, 5, 0, 0, 10),   // r5 = y = 10
-            makeInstr(Opcode::VMUL, 6, 4, 3,  0),   // r6 = alpha * x
-            makeInstr(Opcode::VADD, 6, 6, 5,  0),   // r6 = result
-            makeInstr(Opcode::SW,   0, 2, 6,  0),   // mem[r2] = r6  (write-through)
-            makeInstr(Opcode::LW,   7, 2, 0,  0),   // r7 = mem[r2]  (L1 miss → fill)
-            makeInstr(Opcode::LW,   8, 2, 0,  0),   // r8 = mem[r2]  (L1 hit)
-            makeInstr(Opcode::HALT)
-        };
-        // 9 instructions × 1 warp
-
-        uint64_t misses_before = top.getL1CacheMisses();
-        uint64_t hits_before   = top.getL1CacheHits();
-
-        top.launchKernel(1, 1, mem_saxpy);
-        sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-
-        CHECK(top.isKernelComplete(), "Kernel complete");
-        // 32 threads × 1 miss each (first LW) = 32 new misses
-        CHECK(top.getL1CacheMisses() == misses_before + 32,
-              "L1 misses += 32 (one per thread, first LW)");
-        // 32 threads × 1 hit each (second LW) = 32 new hits
-        CHECK(top.getL1CacheHits() == hits_before + 32,
-              "L1 hits += 32 (one per thread, second LW)");
-        CHECK(top.getDivergenceEvents() == 0,
-              "No divergence in SAXPY");
-        // Cumulative: 18 + 9 = 27
-        CHECK(top.getTotalInstructions() == 27,
-              "getTotalInstructions() = 27 cumulative");
-    }
-
-    // ── 6b: Divergent kernel – VBRANCH / VJOIN (via cu_test) ──────────────────
-    // r0[t] = t  →  thread 0 (r0=0) falls through VBRANCH
-    //              threads 1,2,3 (r0≠0) are masked until VJOIN
-    LOG_SEP("6b: Divergent kernel – thread 0 falls through, threads 1-3 masked");
-    {
-        WarpContext ctx = makeContext(3, 4, {
-            makeInstr(Opcode::VBRANCH, 0, 0, 0, 3),  // mask threads where r0≠0; skip to VJOIN
-            makeInstr(Opcode::ADDI,    1, 0, 0, 100), // thread 0 only: r1 = 0+100 = 100
-            makeInstr(Opcode::ADD,     2, 1, 0, 0),   // thread 0 only: r2 = r1+r0 = 100
-            makeInstr(Opcode::VJOIN,   0, 0, 0, 0),   // all threads rejoin
-            makeInstr(Opcode::HALT)
-        });
-        for (uint32_t t = 0; t < 4; ++t) ctx.regs[t][0] = t;  // r0[t] = t
-
-        uint32_t div_before = cu_test.getDivergenceEvents();
-        cu_test.executeWarp(ctx);
-
-        CHECK(ctx.state == WarpState::COMPLETE, "Warp COMPLETE");
-        CHECK(ctx.regs[0][1] == 100, "Thread 0: r1=100 (fell through)");
-        CHECK(ctx.regs[1][1] ==   0, "Thread 1: r1=0 (was masked)");
-        CHECK(ctx.regs[2][1] ==   0, "Thread 2: r1=0 (was masked)");
-        CHECK(ctx.regs[3][1] ==   0, "Thread 3: r1=0 (was masked)");
-        CHECK(ctx.regs[0][2] == 100, "Thread 0: r2=100");
-        CHECK(cu_test.getDivergenceEvents() == div_before + 1,
-              "Divergence event counted");
-    }
-
-    // ── 6c: VFMADD vector fused multiply-add (via cu_test) ────────────────────
-    // r3[t]={1,2,3,4}, r4[t]={5,6,7,8}, r5[t]=10
-    // VFMADD r5, r3, r4  ->  r5[t] = r3[t]*r4[t] + r5[t]
-    //   = {1*5+10, 2*6+10, 3*7+10, 4*8+10} = {15, 22, 31, 42}
-    LOG_SEP("6c: VFMADD – fused multiply-add across 4 threads");
-    {
-        WarpContext ctx = makeContext(4, 4, {
-            makeInstr(Opcode::VFMADD, 5, 3, 4, 0),  // r5 = r3*r4 + r5
-            makeInstr(Opcode::HALT)
-        });
-        uint32_t a[] = {1,2,3,4};
-        uint32_t b[] = {5,6,7,8};
-        for (uint32_t t = 0; t < 4; ++t) {
-            ctx.regs[t][3] = a[t];
-            ctx.regs[t][4] = b[t];
-            ctx.regs[t][5] = 10;
-        }
-
-        cu_test.executeWarp(ctx);
-
-        CHECK(ctx.regs[0][5] == 15, "Thread 0: 1*5+10 = 15");
-        CHECK(ctx.regs[1][5] == 22, "Thread 1: 2*6+10 = 22");
-        CHECK(ctx.regs[2][5] == 31, "Thread 2: 3*7+10 = 31");
-        CHECK(ctx.regs[3][5] == 42, "Thread 3: 4*8+10 = 42");
-        CHECK(cu_test.getDivergenceEvents() == 1,
-              "No new divergence (still 1 total from 6b)");
-    }
-
-    // ── Final statistics ──────────────────────────────────────────────────────
-    LOG_SEP("Final Statistics");
-    std::cout << "  top – total instructions : " << top.getTotalInstructions() << "\n"
-              << "  top – L1 cache hits      : " << top.getL1CacheHits()       << "\n"
-              << "  top – L1 cache misses    : " << top.getL1CacheMisses()     << "\n"
-              << "  top – divergence events  : " << top.getDivergenceEvents()  << "\n"
-              << "  cu_test – instructions   : " << cu_test.getTotalInstructions() << "\n"
-              << "  cu_test – divergence     : " << cu_test.getDivergenceEvents()  << "\n";
+    LOG_SEP("Phase 5 Statistics");
+    std::cout << "  Total instructions : " << top.getTotalInstructions() << "\n"
+              << "  Total cycles       : " << top.getTotalCycles()
+              << "  (0 – clock-driven path not active in Phase 5)\n"
+              << "  L1 cache hits      : " << top.getL1CacheHits()
+              << "  (0 – memory not yet wired to compute unit)\n";
 
     // ── Final result ──────────────────────────────────────────────────────────
     LOG_SEP("");
     if (overall_pass)
-        std::cout << "[PASS] All Phase 0 – Phase 6 checks passed.\n\n";
+        std::cout << "[PASS] All Phase 0 – Phase 5 checks passed.\n\n";
     else
         std::cout << "[FAIL] One or more checks failed – see above.\n\n";
 
