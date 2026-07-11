@@ -1,11 +1,5 @@
 // top.h – GPGPUTop module declaration
 //
-// Phase 5 adds:
-//   - SC_THREAD(simulationProcess) registered in constructor
-//   - kernel_launch_event_: wakes simulationProcess when launchKernel() is called
-//   - kernel_program_: hardcoded SAXPY program passed to each WarpContext
-//   - buildWarpContext(): builds a WarpContext for a given warp ID
-//
 
 #ifndef RISCV_GPGPU_TOP_H
 #define RISCV_GPGPU_TOP_H
@@ -14,11 +8,10 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
-#include "../common/types.h"   // WarpContext, Instruction, WarpID, Opcode
+#include "../common/types.h"
 
 namespace riscv_gpgpu {
 
-// Forward declarations
 class WarpScheduler;
 class MemoryHierarchy;
 class ComputeUnit;
@@ -40,29 +33,28 @@ public:
     ~GPGPUTop();
 
     // ── Public API ────────────────────────────────────────────────────────────
-    void launchKernel    (uint32_t grid_x, uint32_t grid_y);
+    // Phase 6: program is now passed by the caller instead of being hardcoded.
+    // buildWarpContext stores it in kernel_program_ and uses it per warp.
+    void launchKernel(uint32_t grid_x, uint32_t grid_y,
+                      std::vector<Instruction> program);
+
     bool isKernelComplete() const;
 
     // Statistics
     uint64_t getTotalCycles()       const;
     uint64_t getTotalInstructions() const;
-    uint64_t getL1CacheHits()       const;   // was uint32_t – fixed to match MemoryHierarchy
-    uint64_t getL1CacheMisses()     const;   // was uint32_t – fixed to match MemoryHierarchy
+    uint64_t getL1CacheHits()       const;
+    uint64_t getL1CacheMisses()     const;
     uint32_t getDivergenceEvents()  const;
 
 private:
-    // ── Phase 5: SC_THREAD execution loop ─────────────────────────────────────
-    void simulationProcess();
-
-    // Builds a WarpContext for warp_id, pre-loaded with the kernel program
-    // and SAXPY register values.
+    void        simulationProcess();
     WarpContext buildWarpContext(WarpID warp_id) const;
 
-    // ── Data members ──────────────────────────────────────────────────────────
-    Config   config_;
+    Config             config_;
     sc_core::sc_clock  system_clock;
-    sc_core::sc_event  kernel_launch_event_;   // fired by launchKernel()
-    std::vector<Instruction> kernel_program_;  // set by launchKernel()
+    sc_core::sc_event  kernel_launch_event_;
+    std::vector<Instruction> kernel_program_;
 
     std::unique_ptr<WarpScheduler>            scheduler_;
     std::unique_ptr<MemoryHierarchy>          memory_;

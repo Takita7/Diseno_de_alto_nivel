@@ -1,15 +1,8 @@
-// compute_unit.cpp – Phase 4: functional warp execution
-//
-// executeWarp() is the new functional execution path that takes a
-// fully-formed WarpContext (registers + program), runs every instruction
-// through ALU / vector / memory helpers, and returns with ctx.state =
-// COMPLETE.  The legacy clockProcess/step machinery is kept for Phase 5.
-//
-// Memory model (Phase 4): a flat std::map<Address, uint32_t> (sim_memory_)
-// inside the module.  Phase 5 replaces this with a TLM initiator socket.
+// compute_unit.cpp – Phase 6: real memory, VBRANCH/VJOIN execution
 //
 
 #include "compute_unit.h"
+#include "../memory/memory_hierarchy.h"
 #include "../common/logging.h"
 #include <sstream>
 #include <algorithm>
@@ -23,16 +16,14 @@ ComputeUnit::ComputeUnit(sc_core::sc_module_name name, const Config& config)
       config_(config),
       unit_id_(config.unit_id)
 {
-    // Warp state tables (legacy path)
     warp_states_.resize(config_.max_warps, WarpState::IDLE);
     registers_.resize(config_.max_warps,
                       std::vector<uint32_t>(config_.threads_per_warp * 32, 0));
     shared_memory_.resize(config_.shared_mem_size, 0);
 
-    // SIMTController: child SC_MODULE, clock passed through
     SIMTController::Config simt_cfg;
     simt_ctrl_ = std::make_unique<SIMTController>("simt_ctrl", simt_cfg);
-    simt_ctrl_->clk(clk);   // hierarchical port binding
+    simt_ctrl_->clk(clk);
 
     SC_METHOD(clockProcess);
     sensitive << clk.pos();
@@ -44,21 +35,28 @@ ComputeUnit::~ComputeUnit() {
     LOG_INFO("ComputeUnit " + std::to_string(unit_id_) + " destroyed");
 }
 
+// ── Phase 6: external memory wiring ──────────────────────────────────────────
+
+void ComputeUnit::setMemory(MemoryHierarchy* mem) {
+    ext_memory_ = mem;
+    LOG_INFO("ComputeUnit " + std::to_string(unit_id_)
+             + ": external memory hierarchy connected");
+}
+
+uint32_t ComputeUnit::getDivergenceEvents() const {
+    return simt_ctrl_ ? simt_ctrl_->getTotalDivergenceEvents() : 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 4: executeWarp – functional execution path
+// executeWarp – functional execution path
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ComputeUnit::executeWarp(WarpContext& ctx) {
-    // Ensure register file is large enough
-    if (ctx.regs.size() < config_.threads_per_warp) {
-        ctx.regs.resize(config_.threads_per_warp,
-                        std::vector<uint32_t>(32, 0));
-    }
-    for (auto& t_regs : ctx.regs) {
+    if (ctx.regs.size() < config_.threads_per_warp)
+        ctx.regs.resize(config_.threads_per_warp, std::vector<uint32_t>(32, 0));
+    for (auto& t_regs : ctx.regs)
         if (t_regs.size() < 32) t_regs.resize(32, 0);
-    }
 
-    // Initialise SIMT: all threads active, divergence stack empty
     simt_ctrl_->initializeWarp(ctx.warp_id, config_.threads_per_warp);
     ctx.state = WarpState::RUNNING;
     ctx.pc    = 0;
@@ -73,13 +71,13 @@ void ComputeUnit::executeWarp(WarpContext& ctx) {
             break;
         }
 
-        if (instr.is_memory) {
-            executeMemOp(ctx, instr, mask);
-        } else if (instr.is_vector) {
-            executeVector(ctx, instr, mask);
-        } else {
-            executeALU(ctx, instr, mask);
-        }
+        // Dispatch – VBRANCH / VJOIN checked before is_branch flag to avoid
+        // falling into the ALU path for these opcodes.
+        if      (op == Opcode::VBRANCH)  { executeBranch(ctx, instr, mask); }
+        else if (op == Opcode::VJOIN)    { executeJoin  (ctx, instr, mask); }
+        else if (instr.is_memory)        { executeMemOp (ctx, instr, mask); }
+        else if (instr.is_vector)        { executeVector(ctx, instr, mask); }
+        else                             { executeALU   (ctx, instr, mask); }
 
         ++total_instructions_;
         ++ctx.pc;
@@ -100,12 +98,10 @@ void ComputeUnit::executeALU(WarpContext& ctx,
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
-
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = (op == Opcode::ADDI || op == Opcode::LUI)
                      ? static_cast<uint32_t>(instr.imm)
                      : ctx.regs[t][instr.rs2];
-
         switch (op) {
             case Opcode::ADD:
             case Opcode::ADDI: ctx.regs[t][instr.rd] = a + b;                               break;
@@ -120,7 +116,7 @@ void ComputeUnit::executeALU(WarpContext& ctx,
     }
 }
 
-// ── Vector (RVV-style: operate across active thread lanes) ────────────────────
+// ── Vector (RVV-style) ────────────────────────────────────────────────────────
 
 void ComputeUnit::executeVector(WarpContext& ctx,
                                   const Instruction& instr,
@@ -128,11 +124,9 @@ void ComputeUnit::executeVector(WarpContext& ctx,
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
-
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = ctx.regs[t][instr.rs2];
-        uint32_t c = ctx.regs[t][instr.rd];   // accumulator for VFMADD
-
+        uint32_t c = ctx.regs[t][instr.rd];
         switch (op) {
             case Opcode::VADD:   ctx.regs[t][instr.rd] = a + b;     break;
             case Opcode::VSUB:   ctx.regs[t][instr.rd] = a - b;     break;
@@ -143,7 +137,7 @@ void ComputeUnit::executeVector(WarpContext& ctx,
     }
 }
 
-// ── Memory (per-thread address, Phase 4 internal map) ─────────────────────────
+// ── Memory (ext_memory_ -> real cache; sim_memory_ -> Phase 4 fallback) ────────
 
 void ComputeUnit::executeMemOp(WarpContext& ctx,
                                  const Instruction& instr,
@@ -156,16 +150,59 @@ void ComputeUnit::executeMemOp(WarpContext& ctx,
             static_cast<int64_t>(ctx.regs[t][instr.rs1]) + instr.imm);
 
         if (op == Opcode::LW) {
-            auto it = sim_memory_.find(addr);
-            ctx.regs[t][instr.rd] = (it != sim_memory_.end()) ? it->second : 0u;
+            if (ext_memory_) {
+                uint32_t lat = 0;
+                ext_memory_->loadWord(addr, ctx.regs[t][instr.rd], lat);
+            } else {
+                auto it = sim_memory_.find(addr);
+                ctx.regs[t][instr.rd] = (it != sim_memory_.end()) ? it->second : 0u;
+            }
         } else {   // SW
-            sim_memory_[addr] = ctx.regs[t][instr.rs2];
+            if (ext_memory_) {
+                uint32_t lat = 0;
+                ext_memory_->storeWord(addr, ctx.regs[t][instr.rs2], lat);
+            } else {
+                sim_memory_[addr] = ctx.regs[t][instr.rs2];
+            }
         }
     }
 }
 
+// ── VBRANCH (Option A) ────────────────────────────────────────────────────────
+//
+// Threads where rs1[t] != 0  →  "take" the branch  →  masked off in fall-through
+// Threads where rs1[t] == 0  →  fall through        →  stay active
+//
+// To achieve this using simt_ctrl_->handleBranch (which sets active_mask =
+// "taken" threads), we invert the condition: pass conditions[t] = (rs1[t] == 0)
+// so that fall-through threads become the "taken" (active) set.
+//
+void ComputeUnit::executeBranch(WarpContext& ctx,
+                                  const Instruction& instr,
+                                  uint32_t mask) {
+    // Use a fixed 32-element array (max threads_per_warp)
+    bool conditions[32] = {};
+    uint32_t tpw = config_.threads_per_warp;
+
+    for (uint32_t t = 0; t < tpw; ++t) {
+        if ((mask >> t) & 1u) {
+            // Invert: fall-through threads (rs1==0) become "taken" in handleBranch
+            conditions[t] = (ctx.regs[t][instr.rs1] == 0);
+        }
+    }
+    simt_ctrl_->handleBranch(ctx.warp_id, conditions);
+}
+
+// ── VJOIN ─────────────────────────────────────────────────────────────────────
+
+void ComputeUnit::executeJoin(WarpContext& ctx,
+                                const Instruction& /*instr*/,
+                                uint32_t /*mask*/) {
+    simt_ctrl_->handleJoin(ctx.warp_id);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Legacy clock-driven path (kept for Phase 5 wiring)
+// Legacy clock-driven path 
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ComputeUnit::launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y) {
@@ -196,14 +233,13 @@ void ComputeUnit::step() {
 }
 
 bool ComputeUnit::isComplete() const {
-    for (const auto& state : warp_states_) {
+    for (const auto& state : warp_states_)
         if (state != WarpState::IDLE && state != WarpState::COMPLETE) return false;
-    }
     return true;
 }
 
-void ComputeUnit::clockProcess() { if (is_running_) step(); }
-void ComputeUnit::executeProcess() { /* Phase 5 */ }
+void ComputeUnit::clockProcess()   { if (is_running_) step(); }
+void ComputeUnit::executeProcess() { /* Phase 6 cleanup */ }
 
 void ComputeUnit::initializeWarp(WarpID warp_id) {
     warp_states_[warp_id] = WarpState::READY;
@@ -235,10 +271,9 @@ void ComputeUnit::executeInstruction(WarpID warp_id) {
 bool ComputeUnit::checkMemoryDependencies(WarpID /*warp_id*/) { return true; }
 
 void ComputeUnit::updateWarpState() {
-    for (size_t i = 0; i < warp_states_.size(); ++i) {
+    for (size_t i = 0; i < warp_states_.size(); ++i)
         if (warp_states_[i] == WarpState::RUNNING && total_cycles_ > 100)
             finalizeWarp(static_cast<WarpID>(i));
-    }
 }
 
 }  // namespace riscv_gpgpu
