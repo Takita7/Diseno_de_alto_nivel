@@ -1,14 +1,4 @@
-// top.cpp – GPGPUTop module implementation
-//
-// Phase 5 changes:
-//   - SC_THREAD(simulationProcess) registered in constructor
-//   - launchKernel: builds hardcoded SAXPY program, submits to scheduler,
-//     fires kernel_launch_event_
-//   - simulationProcess: waits for event, loops selectWarp → executeWarp →
-//     markWarpComplete until scheduler reports done
-//   - isKernelComplete: delegates to scheduler_->isComplete() instead of
-//     compute_units_[0]->isComplete()
-//   - buildWarpContext: constructs a ready-to-execute WarpContext for SAXPY
+// top.cpp – GPGPUTop Phase 6
 //
 
 #include "top.h"
@@ -37,7 +27,6 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     sched_config.policy              = WarpScheduler::SchedulingPolicy::ROUND_ROBIN;
     sched_config.enable_optimization = true;
     sched_config.batch_size          = 4;
-
     scheduler_ = std::make_unique<WarpScheduler>("scheduler", sched_config);
     scheduler_->clk(system_clock);
 
@@ -48,7 +37,6 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     mem_config.l2_cache_size   = config_.l2_cache_size;
     mem_config.cache_line_size = 128;
     mem_config.global_mem_size = 0;
-
     memory_ = std::make_unique<MemoryHierarchy>("memory", mem_config);
     memory_->clk(system_clock);
 
@@ -64,10 +52,13 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
         std::string cu_name = "cu_" + std::to_string(i);
         auto cu = std::make_unique<ComputeUnit>(cu_name.c_str(), cu_config);
         cu->clk(system_clock);
+
+        // Phase 6: wire real memory hierarchy into each compute unit
+        cu->setMemory(memory_.get());
+
         compute_units_.push_back(std::move(cu));
     }
 
-    // Register simulation loop as SC_THREAD (Phase 5)
     SC_THREAD(simulationProcess);
 
     LOG_INFO("GPGPU Top Module initialized with "
@@ -80,23 +71,24 @@ GPGPUTop::~GPGPUTop() {
 
 // ── Kernel launch ─────────────────────────────────────────────────────────────
 
-void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y) {
+void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y,
+                              std::vector<Instruction> program) {
     LOG_INFO("launchKernel: grid=" + std::to_string(grid_x)
-             + "x" + std::to_string(grid_y));
+             + "x" + std::to_string(grid_y)
+             + "  program=" + std::to_string(program.size()) + " instructions");
 
-    // Hardcoded SAXPY: r3[t] = r0[t]*r1[t] + r2[t]
-    //   r0 = alpha, r1 = x[t], r2 = y,  r3 = result
-    kernel_program_ = {
-        makeInstr(Opcode::VMUL, 3, 1, 0, 0),   // r3 = r1 * r0   (x * alpha)
-        makeInstr(Opcode::VADD, 3, 3, 2, 0),   // r3 = r3 + r2   (x*alpha + y)
-        makeInstr(Opcode::HALT)
-    };
-
+    kernel_program_ = std::move(program);
     scheduler_->submitKernel(0, grid_x, grid_y);
-    kernel_launch_event_.notify();   // wake simulationProcess
+    kernel_launch_event_.notify();
 }
 
 // ── Context builder ───────────────────────────────────────────────────────────
+// General-purpose register setup:
+//   r0[t] = 0                       (zero register)
+//   r1[t] = global thread ID        (warp_id * tpw + t)
+//   r2[t] = 0x10000 + tid * 4       (unique 4-byte-aligned memory address)
+//
+// Kernel programs derive computation values from these using ADDI / VMUL etc.
 
 WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
     WarpContext ctx;
@@ -111,9 +103,10 @@ WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
     ctx.active_mask = (tpw == 32) ? 0xFFFFFFFFu : (1u << tpw) - 1u;
 
     for (uint32_t t = 0; t < tpw; ++t) {
-        ctx.regs[t][0] = 2;                        // r0 = alpha
-        ctx.regs[t][1] = warp_id * tpw + t + 1;   // r1 = x[t] (unique per thread)
-        ctx.regs[t][2] = 10;                       // r2 = y
+        uint32_t global_tid    = warp_id * tpw + t;
+        ctx.regs[t][0]         = 0;                         // zero register
+        ctx.regs[t][1]         = global_tid;                // thread ID
+        ctx.regs[t][2]         = 0x10000 + global_tid * 4; // unique memory address
     }
     return ctx;
 }
@@ -122,15 +115,14 @@ WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
 
 void GPGPUTop::simulationProcess() {
     while (true) {
-        wait(kernel_launch_event_);   // sleep until launchKernel() fires
+        wait(kernel_launch_event_);
         LOG_INFO("simulationProcess: kernel execution started");
 
         while (!scheduler_->isComplete()) {
-            // Single-CU dispatch (Phase 5); multi-CU added in Phase 6
             WarpID warp_id = scheduler_->selectWarp(0);
 
             if (warp_id == WarpScheduler::INVALID_WARP_ID) {
-                wait(sc_core::SC_ZERO_TIME);   // yield – no warp ready yet
+                wait(sc_core::SC_ZERO_TIME);
                 continue;
             }
 
@@ -138,10 +130,7 @@ void GPGPUTop::simulationProcess() {
             compute_units_[0]->executeWarp(ctx);
             scheduler_->markWarpComplete(0, warp_id);
 
-            LOG_DEBUG("simulationProcess: warp " + std::to_string(warp_id)
-                      + " complete");
-
-            wait(sc_core::SC_ZERO_TIME);   // yield between warps
+            wait(sc_core::SC_ZERO_TIME);
         }
 
         LOG_INFO("simulationProcess: all warps complete");
@@ -151,15 +140,10 @@ void GPGPUTop::simulationProcess() {
 // ── Status and statistics ─────────────────────────────────────────────────────
 
 bool GPGPUTop::isKernelComplete() const {
-    // Before any kernel: queues are empty → true (correct for Phase 0 test)
-    // During execution: returns false
-    // After completion: returns true
     return scheduler_->isComplete();
 }
 
 uint64_t GPGPUTop::getTotalCycles() const {
-    // total_cycles_ is incremented by the clock-driven step() path,
-    // which is not used in Phase 5. Returns 0 until Phase 6 unifies paths.
     if (compute_units_.empty()) return 0;
     return compute_units_[0]->getTotalCycles();
 }
@@ -180,8 +164,10 @@ uint64_t GPGPUTop::getL1CacheMisses() const {
 }
 
 uint32_t GPGPUTop::getDivergenceEvents() const {
-    // Phase 6: aggregate from all CUs' SIMTControllers
-    return 0;
+    uint32_t total = 0;
+    for (const auto& cu : compute_units_)
+        total += cu->getDivergenceEvents();
+    return total;
 }
 
 }  // namespace riscv_gpgpu
