@@ -1,4 +1,4 @@
-// top.cpp – GPGPUTop Phase 6
+// top.cpp – GPGPUTop Phase 7
 //
 
 #include "top.h"
@@ -20,7 +20,6 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
 {
     LOG_INFO("Initializing GPGPU Top Module");
 
-    // ── Warp Scheduler ────────────────────────────────────────────────────────
     WarpScheduler::Config sched_config;
     sched_config.num_compute_units   = config_.num_compute_units;
     sched_config.max_warps_per_cu    = config_.max_warps_per_cu;
@@ -30,7 +29,6 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     scheduler_ = std::make_unique<WarpScheduler>("scheduler", sched_config);
     scheduler_->clk(system_clock);
 
-    // ── Memory Hierarchy ──────────────────────────────────────────────────────
     MemoryHierarchy::Config mem_config;
     mem_config.shared_mem_size = config_.shared_mem_size;
     mem_config.l1_cache_size   = config_.l1_cache_size;
@@ -40,7 +38,6 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
     memory_ = std::make_unique<MemoryHierarchy>("memory", mem_config);
     memory_->clk(system_clock);
 
-    // ── Compute Units ─────────────────────────────────────────────────────────
     for (uint32_t i = 0; i < config_.num_compute_units; ++i) {
         ComputeUnit::Config cu_config;
         cu_config.unit_id          = i;
@@ -52,10 +49,7 @@ GPGPUTop::GPGPUTop(sc_core::sc_module_name name, const Config& config)
         std::string cu_name = "cu_" + std::to_string(i);
         auto cu = std::make_unique<ComputeUnit>(cu_name.c_str(), cu_config);
         cu->clk(system_clock);
-
-        // Phase 6: wire real memory hierarchy into each compute unit
         cu->setMemory(memory_.get());
-
         compute_units_.push_back(std::move(cu));
     }
 
@@ -72,23 +66,22 @@ GPGPUTop::~GPGPUTop() {
 // ── Kernel launch ─────────────────────────────────────────────────────────────
 
 void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y,
-                              std::vector<Instruction> program) {
+                              std::vector<Instruction> program,
+                              uint32_t warp_id_offset) {
     LOG_INFO("launchKernel: grid=" + std::to_string(grid_x)
              + "x" + std::to_string(grid_y)
-             + "  program=" + std::to_string(program.size()) + " instructions");
+             + "  program=" + std::to_string(program.size()) + " instructions"
+             + "  warp_offset=" + std::to_string(warp_id_offset));
 
-    kernel_program_ = std::move(program);
+    kernel_program_   = std::move(program);
+    warp_id_offset_   = warp_id_offset;   // Phase 7: stored for buildWarpContext
     scheduler_->submitKernel(0, grid_x, grid_y);
     kernel_launch_event_.notify();
 }
 
 // ── Context builder ───────────────────────────────────────────────────────────
-// General-purpose register setup:
-//   r0[t] = 0                       (zero register)
-//   r1[t] = global thread ID        (warp_id * tpw + t)
-//   r2[t] = 0x10000 + tid * 4       (unique 4-byte-aligned memory address)
-//
-// Kernel programs derive computation values from these using ADDI / VMUL etc.
+// Phase 7: global_tid now adds warp_id_offset_ so that GPU 0 handles
+// threads [0..W*tpw-1] and GPU 1 handles threads [W*tpw..2W*tpw-1] etc.
 
 WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
     WarpContext ctx;
@@ -103,10 +96,11 @@ WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
     ctx.active_mask = (tpw == 32) ? 0xFFFFFFFFu : (1u << tpw) - 1u;
 
     for (uint32_t t = 0; t < tpw; ++t) {
-        uint32_t global_tid    = warp_id * tpw + t;
+        // Apply warp_id_offset_ so every GPU works on distinct thread IDs
+        uint32_t global_tid    = (warp_id + warp_id_offset_) * tpw + t;
         ctx.regs[t][0]         = 0;                         // zero register
-        ctx.regs[t][1]         = global_tid;                // thread ID
-        ctx.regs[t][2]         = 0x10000 + global_tid * 4; // unique memory address
+        ctx.regs[t][1]         = global_tid;                // unique thread ID
+        ctx.regs[t][2]         = 0x10000 + global_tid * 4;  // unique memory address
     }
     return ctx;
 }
