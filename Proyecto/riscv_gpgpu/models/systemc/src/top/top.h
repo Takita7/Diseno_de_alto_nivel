@@ -33,10 +33,14 @@ public:
     ~GPGPUTop();
 
     // ── Public API ────────────────────────────────────────────────────────────
-    // Phase 6: program is now passed by the caller instead of being hardcoded.
-    // buildWarpContext stores it in kernel_program_ and uses it per warp.
+    // warp_id_offset:
+    //   When SystemTop splits a kernel across N GPUs, each GPU receives a
+    //   non-overlapping slice of warp IDs.  The offset shifts buildWarpContext's
+    //   global_tid computation so that thread IDs and memory addresses are
+    //   unique across all GPUs.  Defaults to 0 for single-GPU usage.
     void launchKernel(uint32_t grid_x, uint32_t grid_y,
-                      std::vector<Instruction> program);
+                      std::vector<Instruction> program,
+                      uint32_t warp_id_offset = 0);
 
     bool isKernelComplete() const;
 
@@ -55,6 +59,7 @@ private:
     sc_core::sc_clock  system_clock;
     sc_core::sc_event  kernel_launch_event_;
     std::vector<Instruction> kernel_program_;
+    uint32_t           warp_id_offset_ = 0;   
 
     std::unique_ptr<WarpScheduler>            scheduler_;
     std::unique_ptr<MemoryHierarchy>          memory_;

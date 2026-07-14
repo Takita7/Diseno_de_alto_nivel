@@ -1,4 +1,4 @@
-// top_test.cpp – Phase 0 through Phase 7
+// top_test.cpp – Phase 0 through Phase 6
 //
 
 #include <systemc>
@@ -6,7 +6,6 @@
 #include <set>
 
 #include "top/top.h"
-#include "system_top/system_top.h"
 #include "memory/memory_hierarchy.h"
 #include "scheduler/warp_scheduler.h"
 #include "simt_controller/simt_controller.h"
@@ -84,12 +83,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     cu_config.shared_mem_size  = 4 * 1024;
     ComputeUnit cu_test("cu_test", cu_config);
     cu_test.clk(test_clock);
-
-    // Phase 7 – multi-GPU system (2 GPUs, same config as top)
-    SystemTop::Config sys_config;
-    sys_config.num_gpus   = 2;
-    sys_config.gpu_config = top_config;
-    SystemTop sys("system_top", sys_config);
+    // cu_test uses sim_memory_ (no setMemory call) – suitable for register-based tests
 
     sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
 
@@ -99,7 +93,6 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     Platform::printPhaseHeader(0, "Build & Initialization");
     LOG_SEP("Phase 0 Results");
     CHECK(top.isKernelComplete(), "GPGPUTop: isKernelComplete() before launch");
-    CHECK(sys.isComplete(),       "SystemTop: isComplete() before launch");
 
     // ═════════════════════════════════════════════════════════════════════════
     // Phase 1 – Memory Hierarchy
@@ -268,16 +261,20 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Phase 5 – Top Integration
+    // Phase 5 – Top Integration  (updated: launchKernel now takes a program)
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(5, "Top Integration");
 
+    // SAXPY kernel: uses buildWarpContext's r0=0, r1=tid, r2=mem_addr
+    //   r3 = alpha=2, r4 = x[t]=tid+1, r5 = y=10
+    //   r6 = alpha*x + y = 2*(tid+1)+10
+    // 6 instructions/warp (ADDI×3 + VMUL + VADD + HALT)
     std::vector<Instruction> saxpy_prog = {
-        makeInstr(Opcode::ADDI, 3, 0, 0,  2),
-        makeInstr(Opcode::ADDI, 4, 1, 0,  1),
-        makeInstr(Opcode::ADDI, 5, 0, 0, 10),
-        makeInstr(Opcode::VMUL, 6, 4, 3,  0),
-        makeInstr(Opcode::VADD, 6, 6, 5,  0),
+        makeInstr(Opcode::ADDI, 3, 0, 0,  2),   // r3 = alpha = 2
+        makeInstr(Opcode::ADDI, 4, 1, 0,  1),   // r4 = tid + 1  (x[t])
+        makeInstr(Opcode::ADDI, 5, 0, 0, 10),   // r5 = y = 10
+        makeInstr(Opcode::VMUL, 6, 4, 3,  0),   // r6 = x * alpha
+        makeInstr(Opcode::VADD, 6, 6, 5,  0),   // r6 = x*alpha + y
         makeInstr(Opcode::HALT)
     };
 
@@ -287,184 +284,134 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     CHECK(!top.isKernelComplete(), "isKernelComplete() = false after launch");
     sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
     CHECK(top.isKernelComplete(), "isKernelComplete() = true after sc_start");
-    CHECK(top.getTotalInstructions() == 12, "getTotalInstructions() = 12  (2×6)");
+    // 2 warps × 6 instructions = 12
+    CHECK(top.getTotalInstructions() == 12,
+          "getTotalInstructions() = 12  (2 warps × 6)");
 
-    LOG_SEP("5b: Second kernel (1 warp)");
+    LOG_SEP("5b: Second kernel (1 warp, cumulative check)");
     top.launchKernel(1, 1, saxpy_prog);
     sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
     CHECK(top.isKernelComplete(), "isKernelComplete() after second kernel");
-    CHECK(top.getTotalInstructions() == 18, "getTotalInstructions() = 18 cumulative");
+    // 12 + 6 = 18
+    CHECK(top.getTotalInstructions() == 18,
+          "getTotalInstructions() = 18 cumulative (12 + 6)");
 
     // ═════════════════════════════════════════════════════════════════════════
     // Phase 6 – Benchmarks
     // ═════════════════════════════════════════════════════════════════════════
     Platform::printPhaseHeader(6, "Benchmarks");
 
-    LOG_SEP("6a: SAXPY with real memory");
+    // ── 6a: SAXPY with real L1/L2 cache (via top) ─────────────────────────────
+    // Uses r2 (unique per-thread address from buildWarpContext) for SW/LW.
+    // SW is write-through/no-write-allocate → LW (first) misses L1, fills it.
+    // LW (second) hits L1.
+    LOG_SEP("6a: SAXPY with real memory – L1 miss then hit");
     {
         std::vector<Instruction> mem_saxpy = {
-            makeInstr(Opcode::ADDI, 3, 0, 0,  2),
-            makeInstr(Opcode::ADDI, 4, 1, 0,  1),
-            makeInstr(Opcode::ADDI, 5, 0, 0, 10),
-            makeInstr(Opcode::VMUL, 6, 4, 3,  0),
-            makeInstr(Opcode::VADD, 6, 6, 5,  0),
-            makeInstr(Opcode::SW,   0, 2, 6,  0),
-            makeInstr(Opcode::LW,   7, 2, 0,  0),
-            makeInstr(Opcode::LW,   8, 2, 0,  0),
+            makeInstr(Opcode::ADDI, 3, 0, 0,  2),   // r3 = alpha = 2
+            makeInstr(Opcode::ADDI, 4, 1, 0,  1),   // r4 = tid + 1
+            makeInstr(Opcode::ADDI, 5, 0, 0, 10),   // r5 = y = 10
+            makeInstr(Opcode::VMUL, 6, 4, 3,  0),   // r6 = alpha * x
+            makeInstr(Opcode::VADD, 6, 6, 5,  0),   // r6 = result
+            makeInstr(Opcode::SW,   0, 2, 6,  0),   // mem[r2] = r6  (write-through)
+            makeInstr(Opcode::LW,   7, 2, 0,  0),   // r7 = mem[r2]  (L1 miss → fill)
+            makeInstr(Opcode::LW,   8, 2, 0,  0),   // r8 = mem[r2]  (L1 hit)
             makeInstr(Opcode::HALT)
         };
-        uint64_t m_before = top.getL1CacheMisses();
-        uint64_t h_before = top.getL1CacheHits();
+        // 9 instructions × 1 warp
+
+        uint64_t misses_before = top.getL1CacheMisses();
+        uint64_t hits_before   = top.getL1CacheHits();
+
         top.launchKernel(1, 1, mem_saxpy);
         sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-        CHECK(top.isKernelComplete(),                          "Kernel complete");
-        CHECK(top.getL1CacheMisses() == m_before + 32,        "L1 misses += 32");
-        CHECK(top.getL1CacheHits()   == h_before + 32,        "L1 hits   += 32");
-        CHECK(top.getDivergenceEvents() == 0,                  "No divergence");
-        CHECK(top.getTotalInstructions() == 27,                "getTotalInstructions() = 27");
+
+        CHECK(top.isKernelComplete(), "Kernel complete");
+        // 32 threads × 1 miss each (first LW) = 32 new misses
+        CHECK(top.getL1CacheMisses() == misses_before + 32,
+              "L1 misses += 32 (one per thread, first LW)");
+        // 32 threads × 1 hit each (second LW) = 32 new hits
+        CHECK(top.getL1CacheHits() == hits_before + 32,
+              "L1 hits += 32 (one per thread, second LW)");
+        CHECK(top.getDivergenceEvents() == 0,
+              "No divergence in SAXPY");
+        // Cumulative: 18 + 9 = 27
+        CHECK(top.getTotalInstructions() == 27,
+              "getTotalInstructions() = 27 cumulative");
     }
 
-    LOG_SEP("6b: Divergent kernel");
+    // ── 6b: Divergent kernel – VBRANCH / VJOIN (via cu_test) ──────────────────
+    // r0[t] = t  →  thread 0 (r0=0) falls through VBRANCH
+    //              threads 1,2,3 (r0≠0) are masked until VJOIN
+    LOG_SEP("6b: Divergent kernel – thread 0 falls through, threads 1-3 masked");
     {
         WarpContext ctx = makeContext(3, 4, {
-            makeInstr(Opcode::VBRANCH, 0, 0, 0, 3),
-            makeInstr(Opcode::ADDI,    1, 0, 0, 100),
-            makeInstr(Opcode::ADD,     2, 1, 0, 0),
-            makeInstr(Opcode::VJOIN,   0, 0, 0, 0),
+            makeInstr(Opcode::VBRANCH, 0, 0, 0, 3),  // mask threads where r0≠0; skip to VJOIN
+            makeInstr(Opcode::ADDI,    1, 0, 0, 100), // thread 0 only: r1 = 0+100 = 100
+            makeInstr(Opcode::ADD,     2, 1, 0, 0),   // thread 0 only: r2 = r1+r0 = 100
+            makeInstr(Opcode::VJOIN,   0, 0, 0, 0),   // all threads rejoin
             makeInstr(Opcode::HALT)
         });
-        for (uint32_t t = 0; t < 4; ++t) ctx.regs[t][0] = t;
+        for (uint32_t t = 0; t < 4; ++t) ctx.regs[t][0] = t;  // r0[t] = t
+
         uint32_t div_before = cu_test.getDivergenceEvents();
         cu_test.executeWarp(ctx);
-        CHECK(ctx.regs[0][1] == 100, "Thread 0: r1=100");
-        CHECK(ctx.regs[1][1] ==   0, "Thread 1: r1=0 (masked)");
-        CHECK(cu_test.getDivergenceEvents() == div_before + 1, "Divergence event");
+
+        CHECK(ctx.state == WarpState::COMPLETE, "Warp COMPLETE");
+        CHECK(ctx.regs[0][1] == 100, "Thread 0: r1=100 (fell through)");
+        CHECK(ctx.regs[1][1] ==   0, "Thread 1: r1=0 (was masked)");
+        CHECK(ctx.regs[2][1] ==   0, "Thread 2: r1=0 (was masked)");
+        CHECK(ctx.regs[3][1] ==   0, "Thread 3: r1=0 (was masked)");
+        CHECK(ctx.regs[0][2] == 100, "Thread 0: r2=100");
+        CHECK(cu_test.getDivergenceEvents() == div_before + 1,
+              "Divergence event counted");
     }
 
-    LOG_SEP("6c: VFMADD");
+    // ── 6c: VFMADD vector fused multiply-add (via cu_test) ────────────────────
+    // r3[t]={1,2,3,4}, r4[t]={5,6,7,8}, r5[t]=10
+    // VFMADD r5, r3, r4  ->  r5[t] = r3[t]*r4[t] + r5[t]
+    //   = {1*5+10, 2*6+10, 3*7+10, 4*8+10} = {15, 22, 31, 42}
+    LOG_SEP("6c: VFMADD – fused multiply-add across 4 threads");
     {
         WarpContext ctx = makeContext(4, 4, {
-            makeInstr(Opcode::VFMADD, 5, 3, 4, 0),
+            makeInstr(Opcode::VFMADD, 5, 3, 4, 0),  // r5 = r3*r4 + r5
             makeInstr(Opcode::HALT)
         });
-        uint32_t a[] = {1,2,3,4}; uint32_t b[] = {5,6,7,8};
+        uint32_t a[] = {1,2,3,4};
+        uint32_t b[] = {5,6,7,8};
         for (uint32_t t = 0; t < 4; ++t) {
-            ctx.regs[t][3] = a[t]; ctx.regs[t][4] = b[t]; ctx.regs[t][5] = 10;
+            ctx.regs[t][3] = a[t];
+            ctx.regs[t][4] = b[t];
+            ctx.regs[t][5] = 10;
         }
+
         cu_test.executeWarp(ctx);
-        CHECK(ctx.regs[0][5] == 15, "Thread 0: 1*5+10=15");
-        CHECK(ctx.regs[1][5] == 22, "Thread 1: 2*6+10=22");
-        CHECK(ctx.regs[2][5] == 31, "Thread 2: 3*7+10=31");
-        CHECK(ctx.regs[3][5] == 42, "Thread 3: 4*8+10=42");
-    }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // Phase 7 – Multi-GPU (SystemTop)
-    // ═════════════════════════════════════════════════════════════════════════
-    Platform::printPhaseHeader(7, "Multi-GPU (SystemTop)");
-
-    // ── 7a: Even split – 4×1 kernel across 2 GPUs ────────────────────────────
-    // 4 total warps → GPU 0: 2 warps (offset 0), GPU 1: 2 warps (offset 2)
-    LOG_SEP("7a: Even split – 4 warps across 2 GPUs");
-    {
-        CHECK(sys.isComplete(), "sys.isComplete() = true before launch");
-
-        sys.launchKernel(4, 1, saxpy_prog);
-        CHECK(!sys.isComplete(), "sys.isComplete() = false after launch");
-
-        sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-
-        CHECK(sys.isComplete(), "sys.isComplete() = true after sc_start");
-        // 4 warps × 6 instructions = 24 total
-        CHECK(sys.getTotalInstructions() == 24,
-              "getTotalInstructions() = 24  (4 warps × 6)");
-        // Each GPU gets 2 warps × 6 = 12
-        CHECK(sys.getGPU(0).getTotalInstructions() == 12,
-              "GPU 0: 2 warps × 6 = 12 instructions");
-        CHECK(sys.getGPU(1).getTotalInstructions() == 12,
-              "GPU 1: 2 warps × 6 = 12 instructions");
-        CHECK(sys.getNumGPUs() == 2, "getNumGPUs() = 2");
-    }
-
-    // ── 7b: Uneven split – 3×1 kernel across 2 GPUs ──────────────────────────
-    // 3 total warps → GPU 0: 2 warps (offset 2), GPU 1: 1 warp (offset 4)
-    LOG_SEP("7b: Uneven split – 3 warps across 2 GPUs");
-    {
-        uint64_t gpu0_before = sys.getGPU(0).getTotalInstructions();
-        uint64_t gpu1_before = sys.getGPU(1).getTotalInstructions();
-        uint64_t total_before = sys.getTotalInstructions();
-
-        sys.launchKernel(3, 1, saxpy_prog);
-        sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-
-        CHECK(sys.isComplete(), "sys.isComplete() = true");
-        // GPU 0: 2 warps × 6 = 12 new
-        CHECK(sys.getGPU(0).getTotalInstructions() - gpu0_before == 12,
-              "GPU 0: 2 warps × 6 = 12 new instructions");
-        // GPU 1: 1 warp × 6 = 6 new
-        CHECK(sys.getGPU(1).getTotalInstructions() - gpu1_before == 6,
-              "GPU 1: 1 warp × 6 = 6 new instructions");
-        // Total: 3 warps × 6 = 18 new
-        CHECK(sys.getTotalInstructions() - total_before == 18,
-              "Total: 3 warps × 6 = 18 new instructions");
-    }
-
-    // ── 7c: Divergent kernel across 2 GPUs ────────────────────────────────────
-    // Condition: AND r4, r1, r3 (r3=1) -> r4 = global_tid & 1
-    //   Even threads (r4=0) fall through; odd threads masked.
-    //   Each warp has 16 even + 16 odd threads -> 1 divergence event per GPU.
-    LOG_SEP("7c: Divergent kernel – 1 warp per GPU (2 total)");
-    {
-        std::vector<Instruction> div_prog = {
-            makeInstr(Opcode::ADDI,    3, 0, 0, 1),   // r3 = 1
-            makeInstr(Opcode::AND,     4, 1, 3, 0),   // r4 = r1 & 1  (0=even, 1=odd)
-            makeInstr(Opcode::VBRANCH, 0, 4, 0, 2),   // odd threads masked, even fall through
-            makeInstr(Opcode::ADDI,    5, 0, 0, 100), // even threads only: r5=100
-            makeInstr(Opcode::VJOIN,   0, 0, 0, 0),   // reconverge
-            makeInstr(Opcode::HALT)
-        };
-
-        uint32_t div_before   = sys.getDivergenceEvents();
-        uint64_t total_before = sys.getTotalInstructions();
-
-        sys.launchKernel(2, 1, div_prog);
-        sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
-
-        CHECK(sys.isComplete(), "sys.isComplete() = true");
-        // 2 warps × 6 instructions = 12 new
-        CHECK(sys.getTotalInstructions() - total_before == 12,
-              "Total: 2 warps × 6 = 12 new instructions");
-        // 1 divergence event per GPU = 2 total
-        CHECK(sys.getDivergenceEvents() - div_before == 2,
-              "2 divergence events total (1 per GPU)");
-        CHECK(sys.getGPU(0).getDivergenceEvents() == 1,
-              "GPU 0: 1 divergence event");
-        CHECK(sys.getGPU(1).getDivergenceEvents() == 1,
-              "GPU 1: 1 divergence event");
+        CHECK(ctx.regs[0][5] == 15, "Thread 0: 1*5+10 = 15");
+        CHECK(ctx.regs[1][5] == 22, "Thread 1: 2*6+10 = 22");
+        CHECK(ctx.regs[2][5] == 31, "Thread 2: 3*7+10 = 31");
+        CHECK(ctx.regs[3][5] == 42, "Thread 3: 4*8+10 = 42");
+        CHECK(cu_test.getDivergenceEvents() == 1,
+              "No new divergence (still 1 total from 6b)");
     }
 
     // ── Final statistics ──────────────────────────────────────────────────────
     LOG_SEP("Final Statistics");
-    std::cout << "  single GPU (top)\n"
-              << "    instructions : " << top.getTotalInstructions() << "\n"
-              << "    L1 hits      : " << top.getL1CacheHits()       << "\n"
-              << "    L1 misses    : " << top.getL1CacheMisses()     << "\n"
-              << "    divergence   : " << top.getDivergenceEvents()  << "\n"
-              << "  multi-GPU (sys)\n"
-              << "    instructions : " << sys.getTotalInstructions() << "\n"
-              << "    L1 hits      : " << sys.getL1CacheHits()       << "\n"
-              << "    L1 misses    : " << sys.getL1CacheMisses()     << "\n"
-              << "    divergence   : " << sys.getDivergenceEvents()  << "\n"
-              << "    GPU 0 instr  : " << sys.getGPU(0).getTotalInstructions() << "\n"
-              << "    GPU 1 instr  : " << sys.getGPU(1).getTotalInstructions() << "\n";
+    std::cout << "  top – total instructions : " << top.getTotalInstructions() << "\n"
+              << "  top – L1 cache hits      : " << top.getL1CacheHits()       << "\n"
+              << "  top – L1 cache misses    : " << top.getL1CacheMisses()     << "\n"
+              << "  top – divergence events  : " << top.getDivergenceEvents()  << "\n"
+              << "  cu_test – instructions   : " << cu_test.getTotalInstructions() << "\n"
+              << "  cu_test – divergence     : " << cu_test.getDivergenceEvents()  << "\n";
 
+    // ── Final result ──────────────────────────────────────────────────────────
     LOG_SEP("");
     if (overall_pass)
-        std::cout << "[PASS] All Phase 0 – Phase 7 checks passed.\n\n";
+        std::cout << "[PASS] All Phase 0 – Phase 6 checks passed.\n\n";
     else
         std::cout << "[FAIL] One or more checks failed – see above.\n\n";
 
-    Platform::printSimulationStats(sys.getTotalInstructions(),
-                                   sys.getTotalInstructions());
+    Platform::printSimulationStats(top.getTotalCycles(),
+                                   top.getTotalInstructions());
     return overall_pass ? 0 : 1;
 }
