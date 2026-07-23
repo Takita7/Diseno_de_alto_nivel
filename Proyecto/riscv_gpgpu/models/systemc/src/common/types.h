@@ -5,6 +5,7 @@
 #define RISCV_GPGPU_TYPES_H
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace riscv_gpgpu {
@@ -27,21 +28,27 @@ enum class WarpState { IDLE, READY, RUNNING, STALLED, WAITING_MEM, COMPLETE };
 
 // ── Opcode ────────────────────────────────────────────────────────────────────
 // Encoding ranges:
-//   0x00–0x1F  Scalar ALU
+//   0x00–0x1F  Scalar integer ALU
+//   0x06,0x08  Scalar FP (FADD, FMUL)          
 //   0x20–0x2F  Memory
 //   0x30–0x3F  Branch / SIMT control
-//   0x40–0x5F  Vector (RVV-style)
+//   0x40–0x47  Vector integer
+//   0x48–0x4F  Vector FP                        
 //   0x60–0x6F  Control flow
 //   0x70–0x7F  SIMT barriers
 //   0xFF       Halt
 enum class Opcode : uint32_t {
-    // Scalar ALU
+    // Scalar integer ALU
     ADD    = 0x00,
     SUB    = 0x01,
     AND    = 0x02,
     OR     = 0x03,
     XOR    = 0x04,
     SLT    = 0x05,
+    // Scalar FP (registers hold IEEE 754 single-precision bits)
+    FADD   = 0x06,   // rd[t] = rs1[t] + rs2[t]  (float)
+    FMUL   = 0x08,   // rd[t] = rs1[t] * rs2[t]  (float)
+    // Scalar integer ALU (continued)
     ADDI   = 0x10,
     LUI    = 0x11,
     // Memory
@@ -50,25 +57,37 @@ enum class Opcode : uint32_t {
     // Branch / SIMT control
     BEQ    = 0x30,
     BNE    = 0x31,
-    // VBRANCH: threads where rs1[t] != 0 TAKE the branch (are masked off,
-    //          jump to pc + imm).  Threads where rs1[t] == 0 fall through
-    //          and continue executing the code until VJOIN.
-    //          At VJOIN the taken threads rejoin the active mask.
     VBRANCH = 0x32,
     VJOIN   = 0x33,
-    // Vector (RVV-style: operates across active thread lanes)
+    // Vector integer
     VADD   = 0x40,
     VSUB   = 0x41,
     VMUL   = 0x42,
-    VFMADD = 0x43,   // rd[t] = rs1[t] * rs2[t] + rd[t]
+    VFMADD = 0x43,   // rd[t] = rs1[t]*rs2[t] + rd[t]  (integer)
+    // Vector FP (registers hold IEEE 754 single-precision bits)
+    VFADD   = 0x48,  // rd[t] = rs1[t] + rs2[t]         (float)
+    VFSUB   = 0x49,  // rd[t] = rs1[t] - rs2[t]         (float)
+    VFMUL   = 0x4A,  // rd[t] = rs1[t] * rs2[t]         (float)
+    VFFMADD = 0x4B,  // rd[t] = rs1[t]*rs2[t] + rd[t]   (float)
     // Control
     JAL    = 0x60,
     JALR   = 0x61,
     // SIMT barriers
     BARRIER = 0x70,
-    // Halt – ends warp execution
+    // Halt
     HALT   = 0xFF
 };
+
+// ── Floating-point register helpers ──────────────────────────────────────────
+// Registers store uint32_t; these helpers reinterpret the bits as IEEE 754
+// single-precision float without any value conversion.
+// Used in ComputeUnit FP execution AND in tests to set/check FP register values.
+inline float    regAsFloat(uint32_t bits) {
+    float f; std::memcpy(&f, &bits, sizeof(f)); return f;
+}
+inline uint32_t floatAsReg(float f) {
+    uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b;
+}
 
 // ── Instruction ───────────────────────────────────────────────────────────────
 struct Instruction {
@@ -81,7 +100,7 @@ struct Instruction {
     bool     is_branch = false;
 };
 
-// Convenience builder (used in tests and kernel programs)
+// Convenience builder
 inline Instruction makeInstr(Opcode op,
                               uint8_t rd  = 0,
                               uint8_t rs1 = 0,
@@ -91,9 +110,9 @@ inline Instruction makeInstr(Opcode op,
     i.opcode    = static_cast<uint32_t>(op);
     i.rd = rd; i.rs1 = rs1; i.rs2 = rs2; i.imm = imm;
     uint32_t opc = i.opcode;
-    i.is_vector = (opc >= 0x40 && opc < 0x60);
+    i.is_vector = (opc >= 0x40 && opc < 0x60);   // covers both int and FP vector
     i.is_memory = (opc >= 0x20 && opc < 0x30);
-    i.is_branch = (opc >= 0x30 && opc < 0x40);  // covers VBRANCH and VJOIN
+    i.is_branch = (opc >= 0x30 && opc < 0x40);
     return i;
 }
 
@@ -105,8 +124,8 @@ struct WarpContext {
     uint32_t  pc          = 0;
     uint32_t  active_mask = 0;
     WarpState state       = WarpState::IDLE;
-    std::vector<std::vector<uint32_t>> regs;   // [thread][reg]
-    std::vector<std::vector<uint32_t>> vregs;  // [vreg][lane]
+    std::vector<std::vector<uint32_t>> regs;
+    std::vector<std::vector<uint32_t>> vregs;
     std::vector<Instruction>           program;
 };
 
@@ -121,5 +140,4 @@ struct MemTransaction {
 };
 
 }  // namespace riscv_gpgpu
-
 #endif  // RISCV_GPGPU_TYPES_H
