@@ -1,4 +1,4 @@
-// compute_unit.cpp – Phase 6: real memory, VBRANCH/VJOIN execution
+// compute_unit.cpp – Phase 8: floating-point execution
 //
 
 #include "compute_unit.h"
@@ -12,9 +12,7 @@ namespace riscv_gpgpu {
 // ── Constructor / destructor ──────────────────────────────────────────────────
 
 ComputeUnit::ComputeUnit(sc_core::sc_module_name name, const Config& config)
-    : sc_core::sc_module(name),
-      config_(config),
-      unit_id_(config.unit_id)
+    : sc_core::sc_module(name), config_(config), unit_id_(config.unit_id)
 {
     warp_states_.resize(config_.max_warps, WarpState::IDLE);
     registers_.resize(config_.max_warps,
@@ -35,7 +33,7 @@ ComputeUnit::~ComputeUnit() {
     LOG_INFO("ComputeUnit " + std::to_string(unit_id_) + " destroyed");
 }
 
-// ── Phase 6: external memory wiring ──────────────────────────────────────────
+// ── Phase 6: external memory ──────────────────────────────────────────────────
 
 void ComputeUnit::setMemory(MemoryHierarchy* mem) {
     ext_memory_ = mem;
@@ -47,9 +45,7 @@ uint32_t ComputeUnit::getDivergenceEvents() const {
     return simt_ctrl_ ? simt_ctrl_->getTotalDivergenceEvents() : 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// executeWarp – functional execution path
-// ─────────────────────────────────────────────────────────────────────────────
+// ── executeWarp ───────────────────────────────────────────────────────────────
 
 void ComputeUnit::executeWarp(WarpContext& ctx) {
     if (ctx.regs.size() < config_.threads_per_warp)
@@ -71,8 +67,6 @@ void ComputeUnit::executeWarp(WarpContext& ctx) {
             break;
         }
 
-        // Dispatch – VBRANCH / VJOIN checked before is_branch flag to avoid
-        // falling into the ALU path for these opcodes.
         if      (op == Opcode::VBRANCH)  { executeBranch(ctx, instr, mask); }
         else if (op == Opcode::VJOIN)    { executeJoin  (ctx, instr, mask); }
         else if (instr.is_memory)        { executeMemOp (ctx, instr, mask); }
@@ -84,13 +78,11 @@ void ComputeUnit::executeWarp(WarpContext& ctx) {
     }
 
     ctx.state = WarpState::COMPLETE;
-
     LOG_DEBUG("ComputeUnit " + std::to_string(unit_id_)
-              + ": warp " + std::to_string(ctx.warp_id)
-              + " complete, " + std::to_string(ctx.pc) + " instructions");
+              + ": warp " + std::to_string(ctx.warp_id) + " complete");
 }
 
-// ── Scalar ALU ────────────────────────────────────────────────────────────────
+// ── Scalar ALU (integer + FP) ─────────────────────────────────────────────────
 
 void ComputeUnit::executeALU(WarpContext& ctx,
                                const Instruction& instr,
@@ -98,25 +90,33 @@ void ComputeUnit::executeALU(WarpContext& ctx,
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
+
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = (op == Opcode::ADDI || op == Opcode::LUI)
                      ? static_cast<uint32_t>(instr.imm)
                      : ctx.regs[t][instr.rs2];
+
         switch (op) {
+            // ── Integer ───────────────────────────────────────────────────────
             case Opcode::ADD:
-            case Opcode::ADDI: ctx.regs[t][instr.rd] = a + b;                               break;
-            case Opcode::SUB:  ctx.regs[t][instr.rd] = a - b;                               break;
-            case Opcode::AND:  ctx.regs[t][instr.rd] = a & b;                               break;
-            case Opcode::OR:   ctx.regs[t][instr.rd] = a | b;                               break;
-            case Opcode::XOR:  ctx.regs[t][instr.rd] = a ^ b;                               break;
+            case Opcode::ADDI: ctx.regs[t][instr.rd] = a + b;                                break;
+            case Opcode::SUB:  ctx.regs[t][instr.rd] = a - b;                                break;
+            case Opcode::AND:  ctx.regs[t][instr.rd] = a & b;                                break;
+            case Opcode::OR:   ctx.regs[t][instr.rd] = a | b;                                break;
+            case Opcode::XOR:  ctx.regs[t][instr.rd] = a ^ b;                                break;
             case Opcode::SLT:  ctx.regs[t][instr.rd] = (int32_t(a) < int32_t(b)) ? 1u : 0u; break;
-            case Opcode::LUI:  ctx.regs[t][instr.rd] = b << 12;                             break;
+            case Opcode::LUI:  ctx.regs[t][instr.rd] = b << 12;                              break;
+            // ── Scalar FP (Phase 8) ───────────────────────────────────────────
+            case Opcode::FADD:
+                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) + regAsFloat(b)); break;
+            case Opcode::FMUL:
+                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) * regAsFloat(b)); break;
             default: break;
         }
     }
 }
 
-// ── Vector (RVV-style) ────────────────────────────────────────────────────────
+// ── Vector (integer + FP) ─────────────────────────────────────────────────────
 
 void ComputeUnit::executeVector(WarpContext& ctx,
                                   const Instruction& instr,
@@ -124,20 +124,33 @@ void ComputeUnit::executeVector(WarpContext& ctx,
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
+
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = ctx.regs[t][instr.rs2];
-        uint32_t c = ctx.regs[t][instr.rd];
+        uint32_t c = ctx.regs[t][instr.rd];   // accumulator
+
         switch (op) {
+            // ── Integer vector ─────────────────────────────────────────────────
             case Opcode::VADD:   ctx.regs[t][instr.rd] = a + b;     break;
             case Opcode::VSUB:   ctx.regs[t][instr.rd] = a - b;     break;
             case Opcode::VMUL:   ctx.regs[t][instr.rd] = a * b;     break;
             case Opcode::VFMADD: ctx.regs[t][instr.rd] = a * b + c; break;
+            // ── FP vector (Phase 8) ───────────────────────────────────────────
+            case Opcode::VFADD:
+                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) + regAsFloat(b)); break;
+            case Opcode::VFSUB:
+                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) - regAsFloat(b)); break;
+            case Opcode::VFMUL:
+                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) * regAsFloat(b)); break;
+            case Opcode::VFFMADD:
+                ctx.regs[t][instr.rd] = floatAsReg(
+                    regAsFloat(a) * regAsFloat(b) + regAsFloat(c));                break;
             default: break;
         }
     }
 }
 
-// ── Memory (ext_memory_ -> real cache; sim_memory_ -> Phase 4 fallback) ────────
+// ── Memory ────────────────────────────────────────────────────────────────────
 
 void ComputeUnit::executeMemOp(WarpContext& ctx,
                                  const Instruction& instr,
@@ -157,7 +170,7 @@ void ComputeUnit::executeMemOp(WarpContext& ctx,
                 auto it = sim_memory_.find(addr);
                 ctx.regs[t][instr.rd] = (it != sim_memory_.end()) ? it->second : 0u;
             }
-        } else {   // SW
+        } else {
             if (ext_memory_) {
                 uint32_t lat = 0;
                 ext_memory_->storeWord(addr, ctx.regs[t][instr.rs2], lat);
@@ -168,32 +181,19 @@ void ComputeUnit::executeMemOp(WarpContext& ctx,
     }
 }
 
-// ── VBRANCH (Option A) ────────────────────────────────────────────────────────
-//
-// Threads where rs1[t] != 0  →  "take" the branch  →  masked off in fall-through
-// Threads where rs1[t] == 0  →  fall through        →  stay active
-//
-// To achieve this using simt_ctrl_->handleBranch (which sets active_mask =
-// "taken" threads), we invert the condition: pass conditions[t] = (rs1[t] == 0)
-// so that fall-through threads become the "taken" (active) set.
-//
+// ── SIMT branch / join ────────────────────────────────────────────────────────
+
 void ComputeUnit::executeBranch(WarpContext& ctx,
                                   const Instruction& instr,
                                   uint32_t mask) {
-    // Use a fixed 32-element array (max threads_per_warp)
     bool conditions[32] = {};
     uint32_t tpw = config_.threads_per_warp;
-
     for (uint32_t t = 0; t < tpw; ++t) {
-        if ((mask >> t) & 1u) {
-            // Invert: fall-through threads (rs1==0) become "taken" in handleBranch
+        if ((mask >> t) & 1u)
             conditions[t] = (ctx.regs[t][instr.rs1] == 0);
-        }
     }
     simt_ctrl_->handleBranch(ctx.warp_id, conditions);
 }
-
-// ── VJOIN ─────────────────────────────────────────────────────────────────────
 
 void ComputeUnit::executeJoin(WarpContext& ctx,
                                 const Instruction& /*instr*/,
@@ -201,9 +201,7 @@ void ComputeUnit::executeJoin(WarpContext& ctx,
     simt_ctrl_->handleJoin(ctx.warp_id);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Legacy clock-driven path 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Legacy clock-driven path ──────────────────────────────────────────────────
 
 void ComputeUnit::launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y) {
     std::stringstream ss;
@@ -239,7 +237,7 @@ bool ComputeUnit::isComplete() const {
 }
 
 void ComputeUnit::clockProcess()   { if (is_running_) step(); }
-void ComputeUnit::executeProcess() { /* Phase 6 cleanup */ }
+void ComputeUnit::executeProcess() {}
 
 void ComputeUnit::initializeWarp(WarpID warp_id) {
     warp_states_[warp_id] = WarpState::READY;
