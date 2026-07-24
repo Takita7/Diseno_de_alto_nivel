@@ -32,6 +32,7 @@ set SCRIPT_DIR [file dirname [file normalize [info script]]]
 # HLS root directory:
 #   Evaluacion_3/HLS
 set HLS_DIR [file dirname $SCRIPT_DIR]
+cd $HLS_DIR
 
 set SOURCE_DIR [file join $HLS_DIR "src"]
 set TB_DIR     [file join $HLS_DIR "tb"]
@@ -53,13 +54,13 @@ set COSIM_OUTPUT  [file join $DATA_DIR "output_hls_cosim.raw"]
 # -----------------------------------------------------------------------------
 # Project configuration
 # -----------------------------------------------------------------------------
-
-set PROJECT_DIR   [file join $HLS_DIR "grayscale_hls_project"]
+set PROJECT_DIR "grayscale_hls_project"
 set SOLUTION_NAME "solution1"
 set TOP_FUNCTION  "grayscale_accel"
 
 # AMD Kria K26 device used by the KV260 starter kit.
-set TARGET_PART "xck26-sfvc784-2LV-c"
+#set TARGET_PART "xck26-sfvc784-2LV-c"
+set TARGET_PART "xcau15p-ffvb676-2-i"
 
 # 250 MHz corresponds to a 4 ns clock period.
 set CLOCK_PERIOD_NS 4.0
@@ -177,7 +178,7 @@ puts " Running C simulation"
 puts "============================================================"
 puts ""
 
-csim_design -clean
+csim_design -clean -ldflags {-B/usr/bin} -argv "$INPUT_RAW $CSIM_OUTPUT"
 
 
 # -----------------------------------------------------------------------------
@@ -206,8 +207,7 @@ puts " Running C/RTL co-simulation"
 puts "============================================================"
 puts ""
 
-cosim_design -rtl verilog
-
+cosim_design -rtl verilog -ldflags {-B/usr/bin} -argv "$INPUT_RAW $COSIM_OUTPUT"
 
 # -----------------------------------------------------------------------------
 # Export as a Vivado IP Catalog component
