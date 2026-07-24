@@ -223,6 +223,87 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 ---
 
+## Phase 5c: Software Stack — Simulation Completeness (codesign_dmedina gaps)
+
+**Goal**: Close the remaining gaps in the SystemC simulation so that the full SIMT execution model — scheduler, multi-warp dispatch, and divergence reconvergence — works end-to-end before moving to FPGA.
+
+**Independent Test**: A researcher can launch a kernel with multiple warps across multiple compute units, observe the WarpScheduler selecting warps by policy, and verify that divergent branches reconverge correctly before the kernel completes.
+
+- [ ] T046b [US1] Connect `WarpScheduler` into `GPGPUTop::simulationProcess()` in `models/systemc/top/top.cpp`
+	- Currently `simulationProcess()` calls `cu->step()` directly for every CU every cycle, ignoring the scheduler entirely.
+	- Required: call `scheduler_->selectWarp(cu_id)` before dispatching `cu->step()`, and call `scheduler_->markWarpComplete(cu_id, warp_id)` when `cu->isComplete()` returns true.
+	- Verification: add a test in `tests/systemc/test_scheduler_dispatch.cpp` that launches 4 warps across 2 CUs and confirms round-robin ordering via scheduler statistics.
+
+- [ ] T047b [US1] Implement reconvergence stack in `SIMTController` in `models/systemc/simt_controller/simt_controller.cpp`
+	- Currently `handleBranch()` records divergence but does not mask inactive lanes or push a reconvergence point onto a stack.
+	- Required: implement a per-warp divergence stack (push active mask + reconvergence PC on branch; pop and restore mask at join point); `ComputeUnit::executeWarpMultiLane()` must consult the active mask before executing each lane.
+	- Verification: extend `tests/systemc/test_simt_controller.cpp` with a divergent kernel (odd/even branch) and confirm that masked lanes do not execute the wrong path and that all lanes reconverge at the join point.
+
+- [ ] T048b [US1] Refactor `KernelBridge` to use `GPGPUTop` instead of a standalone `ComputeUnit` in `models/systemc/integration/kernel_bridge.cpp`
+	- Currently `KernelBridge::runOnHardware()` creates its own `MemoryHierarchy` and calls `ComputeUnit::step()` directly — bypassing the scheduler, SIMT controller, and multi-CU topology.
+	- Required: instantiate `GPGPUTop`, load ELF into `top.getMemoryHierarchy()`, call `top.configureKernel()` + `top.launchKernel()`, then drive `sc_start()` or a manual step loop until `top.isKernelComplete()`.
+	- Verification: re-run `test_systemc_integration.cpp` `VectorAddEndToEnd` through the refactored bridge and confirm results are identical.
+
+- [ ] T049b [US3] Add automated CUDA/C++ → RISC-V ELF build target in `CMakeLists.txt` and `scripts/`
+	- Currently kernel compilation requires manually invoking `clang --target=riscv32-unknown-elf`.
+	- Required: CMake custom target `compile_kernel` that takes a `.cu` or `.cpp` source and produces a `.elf` in `build/kernels/`; integrate into `benchmarks/workloads/*/` build rules.
+	- Verification: `cmake --build . --target compile_kernel` produces a valid ELF that passes `resolveEntrySymbol()` in `test_kernel_loader.cpp`.
+
+**Checkpoint**: Scheduler, SIMT reconvergence, and multi-CU dispatch are all exercised by the test suite. `KernelBridge` uses the full `GPGPUTop` stack.
+
+---
+
+## Phase 7: Kria FPGA Deployment (ARM Host + FPGA GPGPU)
+
+**Goal**: Run a CUDA-like kernel compiled to RISC-V on the Kria board — ARM PS executes the host software stack, PL implements the GPGPU, and data flows via AXI DMA.
+
+**Target platform**: AMD Kria KV260 or KR260 — ARM Cortex-A53 PS + Xilinx PL fabric.
+
+**Independent Test**: A researcher can run `vector_add` (N=1024) end-to-end: compile on host, transfer to Kria, load bitstream, execute on FPGA GPGPU, read back results, and verify correctness.
+
+### Hardware Interface Definition
+
+- [ ] T050 [US2] Define the GPGPU AXI register map and DMA interface in `docs/architecture/axi_interface.md` and `fpga/constraints/`
+	- Required registers: `CTRL` (start/reset), `STATUS` (idle/running/done/error), `PC_INIT` (entry point), `GRID_X/Y` (launch dimensions), `IRQ_ENABLE`.
+	- Required DMA channels: one AXI4 master for instruction memory load (ELF segments), one AXI4 master for data memory (H2D and D2H transfers).
+	- Deliverable: register map table, address offsets, and AXI4-Lite/AXI4 port widths documented in `docs/architecture/axi_interface.md`.
+
+### ARM Driver (Userspace)
+
+- [ ] T051 [US2] Implement ARM↔FPGA userspace driver in `driver/src/fpga_driver.cpp` and `driver/src/fpga_driver.h`
+	- Replaces the host-memory simulation in `loader.cpp` (`g_device_buffers`) with real hardware access.
+	- Required: open UIO device or `/dev/mem`; `mmap()` AXI-Lite register space; use `libdma` or kernel DMA proxy to transfer buffers; implement `allocateDeviceBuffer()`, `copyHostToDevice()`, `copyDeviceToHost()` against real FPGA memory.
+	- Build guard: `#ifdef FPGA_TARGET` so the simulation driver remains usable on x86.
+	- Verification: unit test in `tests/fpga/test_fpga_driver.cpp` that maps registers and reads `STATUS` register (expected: IDLE after reset).
+
+- [ ] T052 [US2] Implement ELF loader to FPGA instruction memory in `driver/src/fpga_elf_loader.cpp`
+	- Replaces `ElfLoader` (which writes to `MemoryHierarchy`) with AXI DMA transfers to the FPGA instruction memory.
+	- Required: parse ELF PT_LOAD segments; DMA each segment to its load address in FPGA global memory; write `PC_INIT` register with ELF entry point.
+	- Verification: after loading, read back first 16 bytes of instruction memory via DMA and compare against ELF segment content.
+
+### ARM Runtime Adaptation
+
+- [ ] T053 [US2] Adapt `gpgpuLaunchKernel()` to write FPGA control registers in `software/host_api/host_api.cpp`
+	- Required: write `GRID_X`, `GRID_Y`, `PC_INIT` to AXI-Lite registers; write `CTRL.start = 1` to begin execution.
+	- Build guard: `#ifdef FPGA_TARGET` to preserve simulation path.
+	- Verification: after writing `CTRL.start`, poll `STATUS` and confirm transition from IDLE → RUNNING within 10 ms.
+
+- [ ] T054 [US2] Adapt `gpgpuSynchronize()` to wait for FPGA completion IRQ or poll `STATUS` in `software/host_api/host_api.cpp`
+	- Required: either register a UIO interrupt handler for the GPGPU done IRQ, or poll `STATUS == DONE` with a timeout.
+	- Verification: after `gpgpuSynchronize()` returns, `STATUS` register reads DONE and result data is available in FPGA memory.
+
+### End-to-End Deployment
+
+- [ ] T055 [US2] Create Kria deployment script and cross-compilation Makefile in `scripts/deploy_kria.sh` and `fpga/`
+	- Required: cross-compile software stack for `aarch64-linux-gnu`; `scp` binary + kernel ELF to Kria; load FPGA bitstream via `fpgautil`; run test and capture output.
+	- Deliverable: `scripts/deploy_kria.sh` that takes `--bitstream`, `--kernel`, and `--test` arguments and produces a pass/fail report.
+	- Verification: `vector_add` (N=1024) produces correct results on Kria hardware; report captured in `docs/verification/kria_results.md`.
+
+**Checkpoint**: End-to-end CUDA → RISC-V ELF → ARM host → FPGA GPGPU → results verified on Kria hardware.
+
+---
+
+
 ## Phase 6: Polish & Cross-Cutting Concerns
 
 **Purpose**: Improve completeness, reproducibility, and maintainability across all implementation workstreams.
@@ -244,6 +325,8 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 - **User Story 1 (Phase 3)**: Depends on Foundational completion.
 - **User Story 2 (Phase 4)**: Depends on User Story 1 completion and the shared foundation.
 - **User Story 3 (Phase 5)**: Depends on User Story 1 and the shared foundation.
+- **Phase 5c**: Depends on Phase 5b (SystemC integration complete).
+- **Phase 7 (Kria Deployment)**: Depends on Phase 4 (HLS/RTL/FPGA path) and Phase 5c (simulation complete).
 - **Polish (Phase 6)**: Depends on all desired implementation workstreams being complete.
 
 ### User Story Dependencies
