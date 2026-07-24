@@ -59,8 +59,7 @@ set SOLUTION_NAME "solution1"
 set TOP_FUNCTION  "grayscale_accel"
 
 # AMD Kria K26 device used by the KV260 starter kit.
-#set TARGET_PART "xck26-sfvc784-2LV-c"
-set TARGET_PART "xcau15p-ffvb676-2-i"
+set TARGET_PART "xck26-sfvc784-2LV-c"
 
 # 250 MHz corresponds to a 4 ns clock period.
 set CLOCK_PERIOD_NS 4.0
