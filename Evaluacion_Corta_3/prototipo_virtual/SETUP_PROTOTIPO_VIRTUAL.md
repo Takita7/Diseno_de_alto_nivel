@@ -164,9 +164,3 @@ REPO_DIR=$HOME/Diseno_de_alto_nivel/Evaluacion_Corta_2 \
 SYSTEMC_HOME=/usr/local/systemc \
 bash run_all.sh
 ```
-
-Este es el script que satisface el requisito de "scripts para automatizar
-la construcción del prototipo virtual y correr todo el sistema" — los
-pasos 1-7 (instalación de gem5, SystemC, y compilación inicial del puente)
-son de una sola vez por máquina, y no tiene sentido "automatizarlos" en el
-sentido de correrlos repetidamente.
