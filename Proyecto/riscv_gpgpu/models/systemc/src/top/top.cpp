@@ -1,5 +1,4 @@
-// top.cpp – GPGPUTop Phase 10: BARRIER support
-//
+// top.cpp – GPGPUTop
 //
 
 #include "top.h"
@@ -74,9 +73,10 @@ void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y,
              + "  program=" + std::to_string(program.size()) + " instructions"
              + "  warp_offset=" + std::to_string(warp_id_offset));
 
-    kernel_program_  = std::move(program);
-    warp_id_offset_  = warp_id_offset;
-    total_warps_     = grid_x * grid_y;   // Phase 10: used by barrier check
+    kernel_program_       = std::move(program);
+    kernel_start_warp_id_ = scheduler_->getNextWarpId();   // capture before submit
+    warp_id_offset_       = warp_id_offset;
+    total_warps_          = grid_x * grid_y;
     scheduler_->submitKernel(0, grid_x, grid_y);
     kernel_launch_event_.notify();
 }
@@ -100,67 +100,80 @@ WarpContext GPGPUTop::buildWarpContext(WarpID warp_id) const {
         ctx.regs[t][0]      = 0;
         ctx.regs[t][1]      = global_tid;
         ctx.regs[t][2]      = 0x10000 + global_tid * 4;
+        ctx.regs[t][3]      = warp_id - kernel_start_warp_id_;  // local warp ID (0,1,2,...)
     }
     return ctx;
 }
 
 // ── Simulation loop (SC_THREAD) ───────────────────────────────────────────────
+//
+// Fan-out: each outer iteration tries to dispatch one warp from EVERY CU,
+// so all compute units make progress in parallel within each delta cycle.
+//
+// Barrier coordination: stalled warps from all CUs accumulate in barrier_queue.
+// The barrier fires globally when barrier_queue.size() == total_warps_,
+// which means every warp in the kernel (across all CUs) has arrived.
+// Resumed warps re-execute on their original CU.
 
 void GPGPUTop::simulationProcess() {
     while (true) {
         wait(kernel_launch_event_);
-        LOG_INFO("simulationProcess: kernel execution started");
+        LOG_INFO("simulationProcess: kernel execution started ("
+                 + std::to_string(config_.num_compute_units) + " CU(s))");
 
-        // Local barrier queue: warps stalled at a BARRIER instruction.
-        // Each entry holds the warp ID, the barrier ID it is waiting on,
-        // and the full saved WarpContext (registers + PC already past BARRIER).
-        struct StalledWarp { WarpID id; uint32_t bid; WarpContext ctx; };
+        struct StalledWarp {
+            WarpID      id;
+            uint32_t    cu_id;
+            uint32_t    bid;
+            WarpContext ctx;
+        };
         std::vector<StalledWarp> barrier_queue;
 
         while (!scheduler_->isComplete() || !barrier_queue.empty()) {
 
-            // ── Dispatch one warp from the scheduler ──────────────────────
-            WarpID warp_id = scheduler_->selectWarp(0);
+            // ── Fan out: dispatch one warp per CU ─────────────────────────
+            for (uint32_t cu_id = 0; cu_id < config_.num_compute_units; ++cu_id) {
+                WarpID warp_id = scheduler_->selectWarp(cu_id);
+                if (warp_id == WarpScheduler::INVALID_WARP_ID) continue;
 
-            if (warp_id != WarpScheduler::INVALID_WARP_ID) {
                 WarpContext ctx = buildWarpContext(warp_id);
                 uint32_t    bid = 0;
-                compute_units_[0]->executeWarp(ctx, &bid);
+                compute_units_[cu_id]->executeWarp(ctx, &bid);
 
                 if (ctx.state == WarpState::COMPLETE) {
-                    scheduler_->markWarpComplete(0, warp_id);
+                    scheduler_->markWarpComplete(cu_id, warp_id);
                 } else {   // STALLED at barrier
-                    // Detach from scheduler so isComplete() can return true
-                    // once all non-barrier warps are done.
-                    scheduler_->markWarpComplete(0, warp_id);
-                    barrier_queue.push_back({warp_id, bid, ctx});
+                    scheduler_->markWarpComplete(cu_id, warp_id); // detach
+                    barrier_queue.push_back({warp_id, cu_id, bid, ctx});
                     LOG_DEBUG("simulationProcess: warp " + std::to_string(warp_id)
-                              + " queued at barrier " + std::to_string(bid));
+                              + " (CU " + std::to_string(cu_id)
+                              + ") at barrier " + std::to_string(bid));
                 }
             }
 
-            // ── Check if the barrier is fully satisfied ───────────────────
-            // All scheduler warps must be gone AND all stalled warps must
-            // share the same barrier_id before we release.
+            // ── Global barrier check ──────────────────────────────────────
+            // Fires when ALL warps (across all CUs) are in the barrier_queue.
             if (scheduler_->isComplete() && !barrier_queue.empty()) {
-                uint32_t bid = barrier_queue[0].bid;
-                if (compute_units_[0]->allWarpsAtBarrier(bid, total_warps_)) {
-                    compute_units_[0]->clearBarrier(bid);
+                if (barrier_queue.size() == static_cast<size_t>(total_warps_)) {
+                    uint32_t bid = barrier_queue[0].bid;
+
+                    // Clear barrier table in every CU
+                    for (auto& cu : compute_units_)
+                        cu->clearBarrier(bid);
+
                     LOG_INFO("simulationProcess: barrier " + std::to_string(bid)
                              + " cleared – resuming "
-                             + std::to_string(barrier_queue.size()) + " warp(s)");
+                             + std::to_string(barrier_queue.size())
+                             + " warp(s) across "
+                             + std::to_string(config_.num_compute_units) + " CU(s)");
 
-                    // Resume each stalled warp from its saved context.
-                    // Resumed warps may hit another barrier; collect them for
-                    // the next iteration of the outer loop.
+                    // Resume each stalled warp on its original CU
                     std::vector<StalledWarp> next_queue;
                     for (auto& sw : barrier_queue) {
                         uint32_t next_bid = 0;
-                        compute_units_[0]->executeWarp(sw.ctx, &next_bid);
-                        if (sw.ctx.state == WarpState::STALLED) {
-                            next_queue.push_back({sw.id, next_bid, sw.ctx});
-                        }
-                        // COMPLETE warps fall off naturally
+                        compute_units_[sw.cu_id]->executeWarp(sw.ctx, &next_bid);
+                        if (sw.ctx.state == WarpState::STALLED)
+                            next_queue.push_back({sw.id, sw.cu_id, next_bid, sw.ctx});
                     }
                     barrier_queue = std::move(next_queue);
                 }
@@ -185,8 +198,11 @@ uint64_t GPGPUTop::getTotalCycles() const {
 }
 
 uint64_t GPGPUTop::getTotalInstructions() const {
-    if (compute_units_.empty()) return 0;
-    return compute_units_[0]->getTotalInstructions();
+    // Aggregate across all CUs
+    uint64_t total = 0;
+    for (const auto& cu : compute_units_)
+        total += cu->getTotalInstructions();
+    return total;
 }
 
 uint64_t GPGPUTop::getL1CacheHits() const {
@@ -206,4 +222,21 @@ uint32_t GPGPUTop::getDivergenceEvents() const {
     return total;
 }
 
-}  // namespace riscv_gpgpu
+
+// ── readWord ───────────────────────────────────────────────────────
+// Reads one 32-bit word from the memory hierarchy for test verification.
+// Does NOT update L1 hit/miss counters — use only after kernel completes.
+
+uint32_t GPGPUTop::readWord(Address addr) const {
+    if (!memory_) return 0;
+    uint32_t data = 0, latency = 0;
+    memory_->loadWord(addr, data, latency);
+    return data;
+}
+
+
+uint32_t GPGPUTop::getNextWarpId() const {
+    return scheduler_ ? scheduler_->getNextWarpId() : 0;
+}
+
+}  // riscv_gpgpu

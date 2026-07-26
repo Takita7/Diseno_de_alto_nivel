@@ -1,4 +1,4 @@
-// top_test.cpp – Phase 0 through Phase 9
+// regression_test.cpp – Full regression suite
 //
 
 #include <systemc>
@@ -601,7 +601,6 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     }
 
     // ── 9e: [DIRECT] fpSaxpy() on cu_test ────────────────────────────────────
-    // Replaces the inline Phase 8b test with a library call.
     LOG_SEP("9e: [DIRECT] fpSaxpy() via library");
     {
         WarpContext ctx = makeContext(10, 4, fpSaxpy());
@@ -621,8 +620,7 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
         }
     }
 
-    // ── 9f: [DIRECT] fpFmadd() on cu_test ────────────────────────────────────
-    // Replaces the inline Phase 8c test with a library call.
+    // ── [DIRECT] fpFmadd() on cu_test ────────────────────────────────────
     LOG_SEP("9f: [DIRECT] fpFmadd() via library");
     {
         WarpContext ctx = makeContext(11, 4, fpFmadd());
@@ -641,6 +639,156 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // Phase 11 – Parallel Reduction (barrier + cross-warp communication)
+    // ═════════════════════════════════════════════════════════════════════════
+    Platform::printPhaseHeader(11, "Parallel Reduction");
+
+    LOG_SEP("11a: 2-warp pairwise sum via BARRIER + cross-warp LW");
+    {
+        // Capture warp counter BEFORE launch to compute expected addresses
+        uint32_t W = top.getNextWarpId();  // first warp ID of this kernel
+
+        uint64_t instr_before = top.getTotalInstructions();
+        uint64_t miss_before  = top.getL1CacheMisses();
+        uint32_t div_before   = top.getDivergenceEvents();
+
+        top.launchKernel(2, 1, kernels::parallelReduction());
+        sc_core::sc_start(sc_core::sc_time(100, sc_core::SC_NS));
+
+        CHECK(top.isKernelComplete(),
+              "isKernelComplete() = true after barrier resolution");
+
+        // 2 warps x 15 instructions = 30
+        CHECK(top.getTotalInstructions() - instr_before == 30,
+              "getTotalInstructions() delta = 30  (2 warps x 15 instr)");
+
+        // 2 warps x 32 threads x 1 cross-warp LW = 64 misses
+        CHECK(top.getL1CacheMisses() - miss_before == 64,
+              "L1 misses delta = 64  (cross-warp LW, 32 per warp)");
+
+        // Homogeneous warps: no intra-warp disagreement
+        CHECK(top.getDivergenceEvents() - div_before == 0,
+              "Divergence events = 0  (each warp is homogeneous)");
+
+        // Verify computed results in memory.
+        // Warp 0 (local_id=0): global_tid_base = W*32
+        //   thread t: value = W*32+t+1, partner = (W+1)*32+t+1
+        //   r6[t] = W*32+t+1 + (W+1)*32+t+1 = 2*W*32 + 2*t + 34
+        //   stored at r2+8 = 0x10000 + W*32*4 + t*4 + 8
+        uint32_t w0_base = 0x10000 + W * 32 * 4;
+        uint32_t expected_t0 = 2 * W * 32 + 34;
+        uint32_t expected_t1 = 2 * W * 32 + 36;
+
+        CHECK(top.readWord(w0_base + 8)  == expected_t0,
+              "Warp-0 thread-0: r6 = " + std::to_string(expected_t0));
+        CHECK(top.readWord(w0_base + 12) == expected_t1,
+              "Warp-0 thread-1: r6 = " + std::to_string(expected_t1));
+
+        // Warp 1 (local_id=1): global_tid_base = (W+1)*32
+        //   r6[t] = same formula (symmetric sum)
+        uint32_t w1_base = 0x10000 + (W + 1) * 32 * 4;
+        CHECK(top.readWord(w1_base + 8)  == expected_t0,
+              "Warp-1 thread-0: r6 = " + std::to_string(expected_t0));
+    }
+    // ═════════════════════════════════════════════════════════════════════════
+    // Phase 12 – GEMM  (2×2 tile, K=4, via fpGemm())
+    // ═════════════════════════════════════════════════════════════════════════
+    Platform::printPhaseHeader(12, "GEMM (2x2 tile, K=4)");
+
+    LOG_SEP("12a: C = A x B, 4 threads compute one output element each");
+    {
+        // A = [[1,2,3,4],[5,6,7,8]]  B = [[1,2],[3,4],[5,6],[7,8]]
+        // Thread assignments: 0→C[0][0]=50  1→C[0][1]=60
+        //                     2→C[1][0]=114  3→C[1][1]=140
+        float A[2][4] = {{1,2,3,4},{5,6,7,8}};
+        float B[4][2] = {{1,2},{3,4},{5,6},{7,8}};
+        int rows[] = {0, 0, 1, 1};
+        int cols[] = {0, 1, 0, 1};
+
+        WarpContext ctx = makeContext(12, 4, kernels::fpGemm());
+        for (uint32_t t = 0; t < 4; ++t) {
+            int row = rows[t], col = cols[t];
+            ctx.regs[t][ 3] = floatAsReg(A[row][0]);
+            ctx.regs[t][ 4] = floatAsReg(A[row][1]);
+            ctx.regs[t][ 5] = floatAsReg(A[row][2]);
+            ctx.regs[t][ 6] = floatAsReg(A[row][3]);
+            ctx.regs[t][ 8] = floatAsReg(B[0][col]);
+            ctx.regs[t][ 9] = floatAsReg(B[1][col]);
+            ctx.regs[t][10] = floatAsReg(B[2][col]);
+            ctx.regs[t][11] = floatAsReg(B[3][col]);
+            ctx.regs[t][ 7] = floatAsReg(0.0f);   // accumulator init
+        }
+
+        InstructionCount instr_before = cu_test.getTotalInstructions();
+        cu_test.executeWarp(ctx);
+
+        CHECK(ctx.state == WarpState::COMPLETE, "Warp COMPLETE");
+        CHECK(cu_test.getTotalInstructions() - instr_before == 5,
+              "GEMM: 5 instructions (VFFMADD×4 + HALT)");
+
+        CHECK(regAsFloat(ctx.regs[0][7]) ==  50.0f, "C[0][0] = 50.0  (thread 0)");
+        CHECK(regAsFloat(ctx.regs[1][7]) ==  60.0f, "C[0][1] = 60.0  (thread 1)");
+        CHECK(regAsFloat(ctx.regs[2][7]) == 114.0f, "C[1][0] = 114.0 (thread 2)");
+        CHECK(regAsFloat(ctx.regs[3][7]) == 140.0f, "C[1][1] = 140.0 (thread 3)");
+
+        LOG_SEP("12a: Verification");
+        std::cout << "  A = [[1,2,3,4],[5,6,7,8]]  B = [[1,2],[3,4],[5,6],[7,8]]\n"
+                  << "  C (computed) = [["
+                  << regAsFloat(ctx.regs[0][7]) << ", "
+                  << regAsFloat(ctx.regs[1][7]) << "], ["
+                  << regAsFloat(ctx.regs[2][7]) << ", "
+                  << regAsFloat(ctx.regs[3][7]) << "]]\n";
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Phase 13 – 2D Convolution  (3×3 filter, 2×2 output tile)
+    // ═════════════════════════════════════════════════════════════════════════
+    Platform::printPhaseHeader(13, "2D Convolution (3x3 filter, 2x2 tile)");
+
+    LOG_SEP("13a: Input 4x4, Filter Gaussian-like [1,2,1 / 2,4,2 / 1,2,1]");
+    {
+        // Input (4×4):          Filter (3×3):
+        //  1  2  3  4           1 2 1
+        //  5  6  7  8           2 4 2
+        //  9 10 11 12           1 2 1
+        // 13 14 15 16
+
+        uint32_t neighborhoods[4][9] = {
+            { 1, 2, 3,  5,  6,  7,  9, 10, 11},  // thread 0 → out[0][0]
+            { 2, 3, 4,  6,  7,  8, 10, 11, 12},  // thread 1 → out[0][1]
+            { 5, 6, 7,  9, 10, 11, 13, 14, 15},  // thread 2 → out[1][0]
+            { 6, 7, 8, 10, 11, 12, 14, 15, 16}   // thread 3 → out[1][1]
+        };
+        uint32_t filter[9] = {1, 2, 1, 2, 4, 2, 1, 2, 1};
+
+        WarpContext ctx = makeContext(13, 4, kernels::conv2d3x3());
+        for (uint32_t t = 0; t < 4; ++t) {
+            for (int k = 0; k < 9; ++k) {
+                ctx.regs[t][3  + k] = neighborhoods[t][k];  // r3..r11
+                ctx.regs[t][12 + k] = filter[k];            // r12..r20
+            }
+            ctx.regs[t][21] = 0;   // accumulator init
+        }
+
+        InstructionCount instr_before = cu_test.getTotalInstructions();
+        cu_test.executeWarp(ctx);
+
+        CHECK(ctx.state == WarpState::COMPLETE, "Warp COMPLETE");
+        CHECK(cu_test.getTotalInstructions() - instr_before == 10,
+              "Conv2D: 10 instructions (VFMADD×9 + HALT)");
+
+        CHECK(ctx.regs[0][21] ==  96u, "out[0][0] =  96");
+        CHECK(ctx.regs[1][21] == 112u, "out[0][1] = 112");
+        CHECK(ctx.regs[2][21] == 160u, "out[1][0] = 160");
+        CHECK(ctx.regs[3][21] == 176u, "out[1][1] = 176");
+
+        LOG_SEP("13a: Convolution result");
+        std::cout << "  Output C = [["
+                  << ctx.regs[0][21] << ", " << ctx.regs[1][21] << "], ["
+                  << ctx.regs[2][21] << ", " << ctx.regs[3][21] << "]]\n";
+    }
+
     LOG_SEP("Final Statistics");
     std::cout << "  single GPU (top)\n"
               << "    instructions : " << top.getTotalInstructions() << "\n"
@@ -657,11 +805,14 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
 
     LOG_SEP("");
     if (overall_pass)
-        std::cout << "[PASS] All Phase 0 – Phase 9 checks passed.\n\n";
+        std::cout << "[PASS] All Phase 0 – Phase 13 checks passed.\n\n";
     else
         std::cout << "[FAIL] One or more checks failed – see above.\n\n";
 
-    Platform::printSimulationStats(sys.getTotalInstructions(),
-                                   sys.getTotalInstructions());
+    // Note: getTotalCycles() returns 0 in the functional/TLM model –
+    // the clock-driven step() path is never activated. Cycle counts
+    // come from the HLS synthesis step, not the SystemC model.
+    Platform::printSimulationStats(top.getTotalCycles(),
+                                   top.getTotalInstructions());
     return overall_pass ? 0 : 1;
 }
