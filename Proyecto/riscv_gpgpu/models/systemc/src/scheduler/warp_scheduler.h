@@ -1,4 +1,5 @@
 // warp_scheduler.h – Warp scheduler and dispatch model
+//
 
 #ifndef RISCV_GPGPU_WARP_SCHEDULER_H
 #define RISCV_GPGPU_WARP_SCHEDULER_H
@@ -43,6 +44,7 @@ public:
     // Statistics
     uint32_t getTotalWarpsDispatched()  const { return total_warps_dispatched_;  }
     uint32_t getTotalKernelsCompleted() const { return total_kernels_completed_; }
+    uint32_t getNextWarpId()          const { return kernel_warp_counter_; }   // Phase 11
 
 private:
     void scheduleProcess();
@@ -68,6 +70,6 @@ private:
     void balanceLoadAcrossUnits();
 };
 
-}  // namespace riscv_gpgpu
+}  // riscv_gpgpu
 
 #endif  // RISCV_GPGPU_WARP_SCHEDULER_H
