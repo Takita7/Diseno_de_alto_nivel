@@ -1,4 +1,5 @@
-// compute_unit.cpp – Phase 8: floating-point execution
+// compute_unit.cpp – Phase 10: BARRIER instruction support
+//
 //
 
 #include "compute_unit.h"
@@ -33,7 +34,7 @@ ComputeUnit::~ComputeUnit() {
     LOG_INFO("ComputeUnit " + std::to_string(unit_id_) + " destroyed");
 }
 
-// ── Phase 6: external memory ──────────────────────────────────────────────────
+// ── External memory + divergence stats ───────────────────────────────────────
 
 void ComputeUnit::setMemory(MemoryHierarchy* mem) {
     ext_memory_ = mem;
@@ -45,17 +46,34 @@ uint32_t ComputeUnit::getDivergenceEvents() const {
     return simt_ctrl_ ? simt_ctrl_->getTotalDivergenceEvents() : 0;
 }
 
+// ── Barrier delegation (Phase 10) ─────────────────────────────────────────────
+
+bool ComputeUnit::allWarpsAtBarrier(uint32_t barrier_id,
+                                     uint32_t total_warps) const {
+    return simt_ctrl_->allWarpsAtBarrier(barrier_id, total_warps);
+}
+
+void ComputeUnit::clearBarrier(uint32_t barrier_id) {
+    simt_ctrl_->clearBarrier(barrier_id);
+}
+
 // ── executeWarp ───────────────────────────────────────────────────────────────
 
-void ComputeUnit::executeWarp(WarpContext& ctx) {
+void ComputeUnit::executeWarp(WarpContext& ctx, uint32_t* barrier_id_out) {
     if (ctx.regs.size() < config_.threads_per_warp)
         ctx.regs.resize(config_.threads_per_warp, std::vector<uint32_t>(32, 0));
     for (auto& t_regs : ctx.regs)
         if (t_regs.size() < 32) t_regs.resize(32, 0);
 
+    // Re-initialise SIMT mask (all threads active, divergence stacks cleared).
+    // This is correct for both fresh starts and barrier resumes – after a
+    // barrier all threads are synchronised.
     simt_ctrl_->initializeWarp(ctx.warp_id, config_.threads_per_warp);
     ctx.state = WarpState::RUNNING;
-    ctx.pc    = 0;
+    // ctx.pc is NOT reset here – callers control the start PC:
+    //   buildWarpContext() sets pc = 0 for fresh warps.
+    //   simulationProcess() passes stalled contexts with pc already advanced
+    //   past the BARRIER instruction.
 
     while (ctx.pc < static_cast<uint32_t>(ctx.program.size())) {
         const Instruction& instr = ctx.program[ctx.pc];
@@ -65,6 +83,25 @@ void ComputeUnit::executeWarp(WarpContext& ctx) {
         if (op == Opcode::HALT) {
             ++total_instructions_;
             break;
+        }
+
+        if (op == Opcode::BARRIER) {
+            // Record this warp's arrival at the barrier
+            uint32_t bid = static_cast<uint32_t>(instr.imm);
+            simt_ctrl_->threadHitBarrier(ctx.warp_id, bid);
+
+            if (barrier_id_out) *barrier_id_out = bid;
+
+            // Advance past the BARRIER instruction so that when this warp is
+            // resumed it continues with the next instruction.
+            ++ctx.pc;
+            ++total_instructions_;
+            ctx.state = WarpState::STALLED;
+
+            LOG_DEBUG("ComputeUnit " + std::to_string(unit_id_)
+                      + ": warp " + std::to_string(ctx.warp_id)
+                      + " stalled at barrier " + std::to_string(bid));
+            return;   // yield – simulationProcess handles re-scheduling
         }
 
         if      (op == Opcode::VBRANCH)  { executeBranch(ctx, instr, mask); }
@@ -85,32 +122,25 @@ void ComputeUnit::executeWarp(WarpContext& ctx) {
 // ── Scalar ALU (integer + FP) ─────────────────────────────────────────────────
 
 void ComputeUnit::executeALU(WarpContext& ctx,
-                               const Instruction& instr,
-                               uint32_t mask) {
+                               const Instruction& instr, uint32_t mask) {
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
-
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = (op == Opcode::ADDI || op == Opcode::LUI)
                      ? static_cast<uint32_t>(instr.imm)
                      : ctx.regs[t][instr.rs2];
-
         switch (op) {
-            // ── Integer ───────────────────────────────────────────────────────
             case Opcode::ADD:
             case Opcode::ADDI: ctx.regs[t][instr.rd] = a + b;                                break;
             case Opcode::SUB:  ctx.regs[t][instr.rd] = a - b;                                break;
             case Opcode::AND:  ctx.regs[t][instr.rd] = a & b;                                break;
             case Opcode::OR:   ctx.regs[t][instr.rd] = a | b;                                break;
             case Opcode::XOR:  ctx.regs[t][instr.rd] = a ^ b;                                break;
-            case Opcode::SLT:  ctx.regs[t][instr.rd] = (int32_t(a) < int32_t(b)) ? 1u : 0u; break;
+            case Opcode::SLT:  ctx.regs[t][instr.rd] = (int32_t(a)<int32_t(b)) ? 1u : 0u;  break;
             case Opcode::LUI:  ctx.regs[t][instr.rd] = b << 12;                              break;
-            // ── Scalar FP (Phase 8) ───────────────────────────────────────────
-            case Opcode::FADD:
-                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) + regAsFloat(b)); break;
-            case Opcode::FMUL:
-                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) * regAsFloat(b)); break;
+            case Opcode::FADD: ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)+regAsFloat(b)); break;
+            case Opcode::FMUL: ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)*regAsFloat(b)); break;
             default: break;
         }
     }
@@ -119,32 +149,22 @@ void ComputeUnit::executeALU(WarpContext& ctx,
 // ── Vector (integer + FP) ─────────────────────────────────────────────────────
 
 void ComputeUnit::executeVector(WarpContext& ctx,
-                                  const Instruction& instr,
-                                  uint32_t mask) {
+                                  const Instruction& instr, uint32_t mask) {
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
-
         uint32_t a = ctx.regs[t][instr.rs1];
         uint32_t b = ctx.regs[t][instr.rs2];
-        uint32_t c = ctx.regs[t][instr.rd];   // accumulator
-
+        uint32_t c = ctx.regs[t][instr.rd];
         switch (op) {
-            // ── Integer vector ─────────────────────────────────────────────────
-            case Opcode::VADD:   ctx.regs[t][instr.rd] = a + b;     break;
-            case Opcode::VSUB:   ctx.regs[t][instr.rd] = a - b;     break;
-            case Opcode::VMUL:   ctx.regs[t][instr.rd] = a * b;     break;
+            case Opcode::VADD:    ctx.regs[t][instr.rd] = a + b;     break;
+            case Opcode::VSUB:    ctx.regs[t][instr.rd] = a - b;     break;
+            case Opcode::VMUL:    ctx.regs[t][instr.rd] = a * b;     break;
             case Opcode::VFMADD: ctx.regs[t][instr.rd] = a * b + c; break;
-            // ── FP vector (Phase 8) ───────────────────────────────────────────
-            case Opcode::VFADD:
-                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) + regAsFloat(b)); break;
-            case Opcode::VFSUB:
-                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) - regAsFloat(b)); break;
-            case Opcode::VFMUL:
-                ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a) * regAsFloat(b)); break;
-            case Opcode::VFFMADD:
-                ctx.regs[t][instr.rd] = floatAsReg(
-                    regAsFloat(a) * regAsFloat(b) + regAsFloat(c));                break;
+            case Opcode::VFADD:   ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)+regAsFloat(b)); break;
+            case Opcode::VFSUB:   ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)-regAsFloat(b)); break;
+            case Opcode::VFMUL:   ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)*regAsFloat(b)); break;
+            case Opcode::VFFMADD: ctx.regs[t][instr.rd] = floatAsReg(regAsFloat(a)*regAsFloat(b)+regAsFloat(c)); break;
             default: break;
         }
     }
@@ -153,30 +173,18 @@ void ComputeUnit::executeVector(WarpContext& ctx,
 // ── Memory ────────────────────────────────────────────────────────────────────
 
 void ComputeUnit::executeMemOp(WarpContext& ctx,
-                                 const Instruction& instr,
-                                 uint32_t mask) {
+                                 const Instruction& instr, uint32_t mask) {
     auto op = static_cast<Opcode>(instr.opcode);
     for (uint32_t t = 0; t < config_.threads_per_warp; ++t) {
         if (!((mask >> t) & 1u)) continue;
-
         Address addr = static_cast<Address>(
             static_cast<int64_t>(ctx.regs[t][instr.rs1]) + instr.imm);
-
         if (op == Opcode::LW) {
-            if (ext_memory_) {
-                uint32_t lat = 0;
-                ext_memory_->loadWord(addr, ctx.regs[t][instr.rd], lat);
-            } else {
-                auto it = sim_memory_.find(addr);
-                ctx.regs[t][instr.rd] = (it != sim_memory_.end()) ? it->second : 0u;
-            }
+            if (ext_memory_) { uint32_t lat=0; ext_memory_->loadWord(addr,ctx.regs[t][instr.rd],lat); }
+            else { auto it=sim_memory_.find(addr); ctx.regs[t][instr.rd]=(it!=sim_memory_.end())?it->second:0u; }
         } else {
-            if (ext_memory_) {
-                uint32_t lat = 0;
-                ext_memory_->storeWord(addr, ctx.regs[t][instr.rs2], lat);
-            } else {
-                sim_memory_[addr] = ctx.regs[t][instr.rs2];
-            }
+            if (ext_memory_) { uint32_t lat=0; ext_memory_->storeWord(addr,ctx.regs[t][instr.rs2],lat); }
+            else { sim_memory_[addr]=ctx.regs[t][instr.rs2]; }
         }
     }
 }
@@ -184,20 +192,16 @@ void ComputeUnit::executeMemOp(WarpContext& ctx,
 // ── SIMT branch / join ────────────────────────────────────────────────────────
 
 void ComputeUnit::executeBranch(WarpContext& ctx,
-                                  const Instruction& instr,
-                                  uint32_t mask) {
+                                  const Instruction& instr, uint32_t mask) {
     bool conditions[32] = {};
-    uint32_t tpw = config_.threads_per_warp;
-    for (uint32_t t = 0; t < tpw; ++t) {
+    for (uint32_t t = 0; t < config_.threads_per_warp; ++t)
         if ((mask >> t) & 1u)
             conditions[t] = (ctx.regs[t][instr.rs1] == 0);
-    }
     simt_ctrl_->handleBranch(ctx.warp_id, conditions);
 }
 
 void ComputeUnit::executeJoin(WarpContext& ctx,
-                                const Instruction& /*instr*/,
-                                uint32_t /*mask*/) {
+                                const Instruction&, uint32_t) {
     simt_ctrl_->handleJoin(ctx.warp_id);
 }
 
@@ -231,8 +235,8 @@ void ComputeUnit::step() {
 }
 
 bool ComputeUnit::isComplete() const {
-    for (const auto& state : warp_states_)
-        if (state != WarpState::IDLE && state != WarpState::COMPLETE) return false;
+    for (const auto& s : warp_states_)
+        if (s != WarpState::IDLE && s != WarpState::COMPLETE) return false;
     return true;
 }
 
@@ -251,12 +255,9 @@ void ComputeUnit::finalizeWarp(WarpID warp_id) {
 }
 
 void ComputeUnit::scheduleWarp() {
-    for (size_t i = 0; i < warp_states_.size(); ++i) {
-        if (warp_states_[i] == WarpState::READY) {
-            current_executing_warp_ = static_cast<WarpID>(i);
-            return;
-        }
-    }
+    for (size_t i = 0; i < warp_states_.size(); ++i)
+        if (warp_states_[i] == WarpState::READY)
+            { current_executing_warp_ = static_cast<WarpID>(i); return; }
 }
 
 void ComputeUnit::executeInstruction(WarpID warp_id) {
@@ -266,7 +267,7 @@ void ComputeUnit::executeInstruction(WarpID warp_id) {
     ++total_instructions_;
 }
 
-bool ComputeUnit::checkMemoryDependencies(WarpID /*warp_id*/) { return true; }
+bool ComputeUnit::checkMemoryDependencies(WarpID) { return true; }
 
 void ComputeUnit::updateWarpState() {
     for (size_t i = 0; i < warp_states_.size(); ++i)
