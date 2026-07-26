@@ -1,5 +1,6 @@
 // top.h – GPGPUTop module declaration
 //
+//
 
 #ifndef RISCV_GPGPU_TOP_H
 #define RISCV_GPGPU_TOP_H
@@ -32,19 +33,12 @@ public:
     GPGPUTop(sc_core::sc_module_name name, const Config& config);
     ~GPGPUTop();
 
-    // ── Public API ────────────────────────────────────────────────────────────
-    // warp_id_offset:
-    //   When SystemTop splits a kernel across N GPUs, each GPU receives a
-    //   non-overlapping slice of warp IDs.  The offset shifts buildWarpContext's
-    //   global_tid computation so that thread IDs and memory addresses are
-    //   unique across all GPUs.  Defaults to 0 for single-GPU usage.
     void launchKernel(uint32_t grid_x, uint32_t grid_y,
                       std::vector<Instruction> program,
                       uint32_t warp_id_offset = 0);
 
     bool isKernelComplete() const;
 
-    // Statistics
     uint64_t getTotalCycles()       const;
     uint64_t getTotalInstructions() const;
     uint64_t getL1CacheHits()       const;
@@ -59,7 +53,8 @@ private:
     sc_core::sc_clock  system_clock;
     sc_core::sc_event  kernel_launch_event_;
     std::vector<Instruction> kernel_program_;
-    uint32_t           warp_id_offset_ = 0;   
+    uint32_t           warp_id_offset_ = 0;
+    uint32_t           total_warps_    = 0;   // Phase 10: grid_x * grid_y
 
     std::unique_ptr<WarpScheduler>            scheduler_;
     std::unique_ptr<MemoryHierarchy>          memory_;

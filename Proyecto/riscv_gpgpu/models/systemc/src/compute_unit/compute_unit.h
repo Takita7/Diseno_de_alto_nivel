@@ -1,5 +1,6 @@
 // compute_unit.h – Compute unit model
 //
+//
 
 #ifndef RISCV_GPGPU_COMPUTE_UNIT_H
 #define RISCV_GPGPU_COMPUTE_UNIT_H
@@ -16,7 +17,6 @@
 
 namespace riscv_gpgpu {
 
-// Forward declaration – full header included in compute_unit.cpp
 class MemoryHierarchy;
 
 class ComputeUnit : public sc_core::sc_module {
@@ -41,17 +41,20 @@ public:
     void      step         ();
     bool      isComplete   () const;
 
-    // ── Phase 4: functional execution path ────────────────────────────────────
-    void executeWarp(WarpContext& ctx);
+    // ── Functional execution ──────────────────────────────────────────────────
+    // barrier_id_out (optional): if the warp stalls at a BARRIER instruction,
+    // the barrier's ID (instr.imm) is written here.  Pass nullptr to ignore.
+    void executeWarp(WarpContext& ctx, uint32_t* barrier_id_out = nullptr);
 
-    // ── Phase 6: external memory + divergence stats ───────────────────────────
-    // Call once from GPGPUTop after construction to wire real cache hierarchy.
-    // If never called, executeMemOp falls back to the internal sim_memory_ map.
+    // ── Phase 6: external memory ──────────────────────────────────────────────
     void setMemory(MemoryHierarchy* mem);
 
-    uint32_t getDivergenceEvents() const;
+    // ── Phase 10: barrier queries (delegate to simt_ctrl_) ───────────────────
+    bool allWarpsAtBarrier(uint32_t barrier_id, uint32_t total_warps) const;
+    void clearBarrier     (uint32_t barrier_id);
 
     // Statistics
+    uint32_t         getDivergenceEvents()  const;
     CycleCount       getTotalCycles()       const { return total_cycles_;       }
     InstructionCount getTotalInstructions() const { return total_instructions_; }
 
@@ -59,7 +62,6 @@ private:
     void clockProcess  ();
     void executeProcess();
 
-    // Legacy helpers
     void initializeWarp          (WarpID warp_id);
     void finalizeWarp            (WarpID warp_id);
     void scheduleWarp            ();
@@ -67,16 +69,12 @@ private:
     bool checkMemoryDependencies (WarpID warp_id);
     void updateWarpState         ();
 
-    // Phase 4 execution helpers
     void executeALU    (WarpContext& ctx, const Instruction& instr, uint32_t mask);
     void executeVector (WarpContext& ctx, const Instruction& instr, uint32_t mask);
     void executeMemOp  (WarpContext& ctx, const Instruction& instr, uint32_t mask);
-
-    // Phase 6: SIMT branch helpers
     void executeBranch (WarpContext& ctx, const Instruction& instr, uint32_t mask);
     void executeJoin   (WarpContext& ctx, const Instruction& instr, uint32_t mask);
 
-    // ── State ─────────────────────────────────────────────────────────────────
     Config        config_;
     ComputeUnitID unit_id_;
 
@@ -87,8 +85,8 @@ private:
     std::vector<uint8_t>                shared_memory_;
 
     std::unique_ptr<SIMTController>  simt_ctrl_;
-    std::map<Address, uint32_t>      sim_memory_;   // fallback; replaced by ext_memory_
-    MemoryHierarchy*                 ext_memory_ = nullptr;  // Phase 6
+    std::map<Address, uint32_t>      sim_memory_;
+    MemoryHierarchy*                 ext_memory_ = nullptr;
 
     CycleCount       total_cycles_           = 0;
     InstructionCount total_instructions_     = 0;
