@@ -14,9 +14,6 @@
 
 namespace riscv_gpgpu {
 
-// Note: CacheStatus is defined in common/types.h as:
-//   enum class CacheStatus : uint8_t { HIT_L1, HIT_L2, MISS, ... }
-
 class MemoryHierarchy : public sc_core::sc_module {
 public:
     struct Config {

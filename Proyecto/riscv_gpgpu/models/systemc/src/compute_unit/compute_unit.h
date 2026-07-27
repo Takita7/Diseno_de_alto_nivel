@@ -6,12 +6,10 @@
 #define RISCV_GPGPU_COMPUTE_UNIT_H
 
 #include <systemc>
-#include <array>
 #include <vector>
 #include <queue>
 #include <map>
 #include <memory>
-#include <cstdint>
 #include "../common/types.h"
 #include "../simt_controller/simt_controller.h"
 
