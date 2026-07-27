@@ -38,7 +38,7 @@
 
 - [x] T005 Define the baseline architecture interface contracts and parameter schema in `docs/architecture/interfaces.md` and `config/arch_config.yaml`
 - [x] T006 Implement the shared configuration and parameter parsing infrastructure in `config/` and `software/common/`
-- [x] T007 Create the SystemC project skeleton and common simulation utilities in `models/systemc/common/` and `models/systemc/README.md`
+- [x] T007 Create the SystemC project skeleton and common simulation utilities in `models/systemc/src/common/` and `models/systemc/README.md`
 - [x] T008 Implement the traceability and evidence-reporting framework in `docs/traceability/` and `scripts/collect_evidence.py`
 - [x] T009 Create the initial benchmark and measurement configuration templates in `benchmarks/` and `scripts/benchmark/`
 
@@ -60,11 +60,11 @@
 ### Implementation for User Story 1
 
 - [x] T012 [US1] Define the baseline ISA and execution semantics in `docs/architecture/isa.md`
-- [x] T013 [US1] Implement the baseline compute unit model in `models/systemc/compute_unit.cpp`
-- [x] T014 [US1] Implement the warp scheduler and dispatch model in `models/systemc/warp_scheduler.cpp`
-- [x] T015 [US1] Implement the SIMT controller and divergence/reconvergence behavior in `models/systemc/simt_controller.cpp`
-- [x] T016 [US1] Implement the memory hierarchy and shared-memory model in `models/systemc/memory_hierarchy.cpp`
-- [x] T017 [US1] Integrate the architecture components into an executable top-level SystemC model in `models/systemc/top.cpp`
+- [x] T013 [US1] Implement the baseline compute unit model in `models/systemc/src/compute_unit/compute_unit.cpp`
+- [x] T014 [US1] Implement the warp scheduler and dispatch model in `models/systemc/src/scheduler/warp_scheduler.cpp`
+- [x] T015 [US1] Implement the SIMT controller and divergence/reconvergence behavior in `models/systemc/src/simt_controller/simt_controller.cpp`
+- [x] T016 [US1] Implement the memory hierarchy and shared-memory model in `models/systemc/src/memory/memory_hierarchy.cpp`
+- [x] T017 [US1] Integrate the architecture components into an executable top-level SystemC model in `models/systemc/src/top/top.cpp`
 	- Implemented now: `top.cpp` fully wires `MemoryHierarchy`, `WarpScheduler`, `SIMTController`, and `ComputeUnit` instances. `GPGPUTop` owns per-CU signals for port binding, binds all `clk/reset` and `memory_ready/request` ports internally. `gpgpu_top` static library exports `launchKernel`, `configureKernel`, `getTotalCycles/Instructions`, `getL1CacheHits/Misses`, `getDivergenceEvents`.
 - [x] T018 [US1] Add configuration-driven scenario scripts and simulation entry points in `scripts/run_systemc_sim.sh` and `scripts/scenarios/`
 
@@ -158,12 +158,10 @@
 	- **SystemC hardware model**: real `MemoryHierarchy` (byte-addressable sparse memory, L1/L2 cache), full RV32I+M decoder (`riscv_isa.h`), real `ComputeUnit` fetch/decode/execute loop, `ElfLoader` (ELF32 parser), `KernelBridge` SW↔SC integration, `GPGPUTop` top-level with all ports bound, `WarpScheduler` and `SIMTController` `.cpp` implementations.
 	- **SIMT support**: `GPGPUTop` now exposes divergence metrics from `SIMTController`, distributes kernel blocks round-robin across compute units, and has a dedicated `test_simt_controller.cpp` validating active masks and reconvergence.
 	- **End-to-end test**: `test_systemc_integration.cpp` verifies ELF loading, CU register arithmetic, vector_add (N=8, H2D→bridge→D2H), and scalar_mul (N=4).
-	- 9/9 test suites pass (34 tests total).
+	- 10/11 CTest suites pass in this branch; current failing suite: `systemc_integration_tests` (test case `SystemCIntegration.CudaMultiUnitSimtEndToEnd`).
 - Still pending before calling the stack production-complete:
 	- Real LLVM backend/target work (TableGen, TargetLowering, SelectionDAG) instead of the `clang` wrapper.
 	- Custom GPGPU/SIMT instruction definitions and MC-layer assembler syntax.
-	- Real hardware binding (DMA, register-mapped MMIO) in the driver instead of host-memory simulation.
-	- Full Rodinia or GPGPU benchmark suite results through actual hardware or a cycle-accurate simulator.
 	- Real hardware binding (DMA, register-mapped MMIO) in the driver instead of host-memory simulation.
 	- Full Rodinia or GPGPU benchmark suite results through actual hardware or a cycle-accurate simulator.
 	- Multi-warp/multi-block execution in `KernelBridge` (currently runs single warp 0 only).
@@ -174,32 +172,33 @@
 
 **Goal**: Connect the SystemC hardware model to the software stack for end-to-end functional simulation.
 
-- [x] T036b [US1] Implement real byte-addressable `MemoryHierarchy` with L1/L2 cache simulation in `models/systemc/memory/memory_hierarchy.cpp`
+- [x] T036b [US1] Implement real byte-addressable `MemoryHierarchy` with L1/L2 cache simulation in `models/systemc/src/memory/memory_hierarchy.cpp`
 	- Sparse `byte_memory_` map; word-aligned L1/L2 cache sets; `writeBytes`/`readBytes` bulk access for ELF loading.
 - [x] T037b [US1] Implement RV32I + M-extension decoder in `models/systemc/integration/riscv_isa.h`
 	- Header-only; `RV32Instr` struct with `Op` enum covering all RV32I+M ops; `decodeRV32()`; `expandRVC()` for compressed instructions.
-- [x] T038b [US1] Rewrite `ComputeUnit` with real fetch/decode/execute in `models/systemc/compute_unit/compute_unit.cpp`
+- [x] T038b [US1] Rewrite `ComputeUnit` with real fetch/decode/execute in `models/systemc/src/compute_unit/compute_unit.cpp`
 	- Full RV32I+M execution; warp context (rf[32], pc, halted); detects `JALR x0, x1, 0` (ret) and return-sentinel PC as completion.
 - [x] T039b [US1] Implement ELF32 binary loader in `models/systemc/integration/elf_loader.h/.cpp`
 	- Manual ELF32 parser (no libelf); reads PT_LOAD segments into `MemoryHierarchy`; parses SHT_SYMTAB for function symbols; `findSymbol()` by name.
 - [x] T040b [US1] Implement `KernelBridge` SW↔SC integration in `models/systemc/integration/kernel_bridge.h/.cpp`
 	- Orchestrates: create standalone MemoryHierarchy → load ELF → copy H2D driver buffers → resolve entry symbol → set up registers (a0..a7=args, sp=0x20000000, ra=sentinel) → run CU step loop until complete → copy results D2H → print metrics (cycles, IPC, cache hit rate).
 	- Updated now: KernelBridge now preserves driver launch geometry, records the effective grid/block used during execution, surfaces the resolved entry symbol in metrics output, and dispatches blocks across a bounded pool of functional CUs.
-- [x] T041b [US1] Implement `GPGPUTop` with all port bindings in `models/systemc/top/top.cpp`
+- [x] T041b [US1] Implement `GPGPUTop` with all port bindings in `models/systemc/src/top/top.cpp`
 	- Wires ComputeUnits, WarpScheduler, MemoryHierarchy, SIMTController; binds all `clk/reset/memory_ready/memory_request` ports to internal signals.
-- [x] T042b [US1] Implement `WarpScheduler` and `SIMTController` stub `.cpp` files
-	- `warp_scheduler.cpp`: ROUND_ROBIN/PRIORITY/FIFO scheduling, multi-CU warp queues, load balancing.
-	- `simt_controller.cpp`: active mask management, divergence stack, per-warp thread activation.
+- [x] T042b [US1] Implement `WarpScheduler` and `SIMTController` `.cpp` files
+	- `models/systemc/src/scheduler/warp_scheduler.cpp`: ROUND_ROBIN/PRIORITY/FIFO scheduling, multi-CU warp queues, load balancing.
+	- `models/systemc/src/simt_controller/simt_controller.cpp`: active mask management, divergence mask stack, per-warp thread activation.
 - [x] T043b [US1] Add SystemC integration test suite in `tests/systemc/test_systemc_integration.cpp`
-	- 4 tests: `ElfLoaderBasic`, `ComputeUnitAddsRegisters`, `VectorAddEndToEnd` (N=8, H2D→bridge→D2H), `ScalarMultiply` (N=4). All pass.
+	- Current suite contains 5 tests: `ElfLoaderBasic`, `ComputeUnitAddsRegisters`, `VectorAddEndToEnd` (N=8, H2D→bridge→D2H), `ScalarMultiply` (N=4), `CudaMultiUnitSimtEndToEnd`.
+	- Branch check (2026-07-26): first 4 pass; `CudaMultiUnitSimtEndToEnd` currently fails and drives the `systemc_integration_tests` suite failure.
 - [x] T044b [US1] Fix CMake SystemC detection and build system
 	- `cmake/FindSystemC.cmake`: added `/usr/local/lib-linux64` search path.
 	- `models/CMakeLists.txt`: enabled `add_subdirectory(systemc)` guarded on `SystemC_FOUND`.
-	- `models/systemc/top/CMakeLists.txt`: split into `gpgpu_top` static library + `systemc_simulation` executable.
+	- `models/systemc/src/top/CMakeLists.txt`: split into `gpgpu_top` static library + `systemc_simulation` executable.
 	- `tests/systemc/CMakeLists.txt`: added `sc_gtest_main.cpp` for `sc_main()`→GTest bridge; dropped conflicting `GTest::Main`.
-	- All 9 test suites pass (34 tests total).
+	- Branch check (2026-07-26): 10/11 CTest suites pass; `systemc_integration_tests` currently fails `CudaMultiUnitSimtEndToEnd`.
 
-- [x] T045b [US1] Add SIMT controller validation and top-level block dispatch support in `tests/systemc/test_simt_controller.cpp` and `models/systemc/top/top.cpp`
+- [x] T045b [US1] Add SIMT controller validation and top-level block dispatch support in `tests/systemc/test_simt_controller.cpp` and `models/systemc/src/top/top.cpp`
 	- `SIMTController` now has a dedicated unit test covering active-mask initialization, branch masking, and join/reconvergence.
 	- `GPGPUTop::launchKernel()` distributes blocks round-robin across compute units and reports divergence metrics through `SIMTController`.
 
@@ -229,23 +228,22 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 **Independent Test**: A researcher can launch a kernel with multiple warps across multiple compute units, observe the WarpScheduler selecting warps by policy, and verify that divergent branches reconverge correctly before the kernel completes.
 
-- [ ] T046b [US1] Connect `WarpScheduler` into `GPGPUTop::simulationProcess()` in `models/systemc/top/top.cpp`
-	- Currently `simulationProcess()` calls `cu->step()` directly for every CU every cycle, ignoring the scheduler entirely.
-	- Required: call `scheduler_->selectWarp(cu_id)` before dispatching `cu->step()`, and call `scheduler_->markWarpComplete(cu_id, warp_id)` when `cu->isComplete()` returns true.
-	- Verification: add a test in `tests/systemc/test_scheduler_dispatch.cpp` that launches 4 warps across 2 CUs and confirms round-robin ordering via scheduler statistics.
+- [x] T046b [US1] Connect `WarpScheduler` into `GPGPUTop::simulationProcess()` in `models/systemc/src/top/top.cpp`
+	- Implemented now: `simulationProcess()` dispatches with `scheduler_->selectWarp(cu_id)` and marks completion with `scheduler_->markWarpComplete(cu_id, warp_id)`.
+	- Remaining hardening: add a dedicated scheduler-dispatch regression test (for example `tests/systemc/test_scheduler_dispatch.cpp`) to validate deterministic round-robin ordering under multi-CU load.
 
-- [ ] T047b [US1] Implement reconvergence stack in `SIMTController` in `models/systemc/simt_controller/simt_controller.cpp`
-	- Currently `handleBranch()` records divergence but does not mask inactive lanes or push a reconvergence point onto a stack.
-	- Required: implement a per-warp divergence stack (push active mask + reconvergence PC on branch; pop and restore mask at join point); `ComputeUnit::executeWarpMultiLane()` must consult the active mask before executing each lane.
-	- Verification: extend `tests/systemc/test_simt_controller.cpp` with a divergent kernel (odd/even branch) and confirm that masked lanes do not execute the wrong path and that all lanes reconverge at the join point.
+- [ ] T047b [US1] Complete reconvergence semantics in `SIMTController` in `models/systemc/src/simt_controller/simt_controller.cpp`
+	- Current status: active-mask divergence handling and mask stack push/pop are implemented and used by `ComputeUnit` lane masking.
+	- Remaining required: track/consume real reconvergence PC (today `pc_stack` is placeholder), and validate reconvergence behavior with an explicit divergent multi-lane scenario.
+	- Verification: extend `tests/systemc/test_simt_controller.cpp` with a divergent kernel (odd/even branch) and confirm masked lanes avoid wrong-path execution and reconverge at join.
 
 - [ ] T048b [US1] Refactor `KernelBridge` to use `GPGPUTop` instead of a standalone `ComputeUnit` in `models/systemc/integration/kernel_bridge.cpp`
-	- Currently `KernelBridge::runOnHardware()` creates its own `MemoryHierarchy` and calls `ComputeUnit::step()` directly — bypassing the scheduler, SIMT controller, and multi-CU topology.
+	- Current status: `KernelBridge::runOnHardware()` still creates its own `MemoryHierarchy` and drives functional workers directly (`ComputeUnit::step()`), so scheduler/top-level SystemC process remains bypassed.
 	- Required: instantiate `GPGPUTop`, load ELF into `top.getMemoryHierarchy()`, call `top.configureKernel()` + `top.launchKernel()`, then drive `sc_start()` or a manual step loop until `top.isKernelComplete()`.
 	- Verification: re-run `test_systemc_integration.cpp` `VectorAddEndToEnd` through the refactored bridge and confirm results are identical.
 
 - [ ] T049b [US3] Add automated CUDA/C++ → RISC-V ELF build target in `CMakeLists.txt` and `scripts/`
-	- Currently kernel compilation requires manually invoking `clang --target=riscv32-unknown-elf`.
+	- Current status: kernel compilation still depends on explicit `clang -target riscv32-unknown-elf` invocations in scripts/tests.
 	- Required: CMake custom target `compile_kernel` that takes a `.cu` or `.cpp` source and produces a `.elf` in `build/kernels/`; integrate into `benchmarks/workloads/*/` build rules.
 	- Verification: `cmake --build . --target compile_kernel` produces a valid ELF that passes `resolveEntrySymbol()` in `test_kernel_loader.cpp`.
 
@@ -377,7 +375,7 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
   - Add F-extension opcodes: `FLW`, `FSW`, `FADD_S`, `FSUB_S`, `FMUL_S`, `FDIV_S`, `FMADD_S`, `FMSUB_S`, `FNMADD_S`, `FNMSUB_S`, `FCVT_W_S`, `FCVT_S_W`, `FMV_X_W`, `FMV_W_X`, `FLT_S`, `FLE_S`, `FEQ_S`, `FSQRT_S`
   - Extend `RV32Instr` struct with `float_rs1`, `float_rs2`, `float_rs3`, `float_rd` fields
 
-- [ ] T066 [US1] Add 32 floating-point registers (f0-f31) to `ComputeUnit` warp context in `models/systemc/compute_unit/compute_unit.cpp`
+- [ ] T066 [US1] Add 32 floating-point registers (f0-f31) to `ComputeUnit` warp context in `models/systemc/src/compute_unit/compute_unit.cpp`
   - Add `float frf[32]` to `WarpContext` struct alongside existing `int32_t rf[32]`
   - Initialize all FP registers to 0.0f on reset
   - Implement `FLW`/`FSW` (load/store float from/to memory hierarchy)
@@ -407,7 +405,7 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
   - Pass `ThreadContext` (tid, ctaid, ntid) to driver for each thread
   - Verification: launch `vector_add` with N=256, grid=(8,1,1), block=(32,1,1) → 256 threads, each with correct tid
 
-- [ ] T069 [US1] Implement thread-to-CU scheduling in `models/systemc/top/top.cpp` and `warp_scheduler.cpp`
+- [ ] T069 [US1] Implement thread-to-CU scheduling in `models/systemc/src/top/top.cpp` and `models/systemc/src/scheduler/warp_scheduler.cpp`
   - Required: when `totalThreads > numCUs`, schedule threads in rounds (time-multiplexing)
   - `WarpScheduler` assigns threads to available CUs; when a CU completes, assign next pending thread
   - Track completion: all threads must complete before `gpgpuSynchronize()` returns
@@ -428,13 +426,13 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 **Independent Test**: Un kernel de reducción paralela (suma de N elementos) usando shared memory y `__syncthreads()` produce el resultado correcto.
 
-- [ ] T071 [US1] Implement per-block shared memory in `models/systemc/memory/memory_hierarchy.cpp`
+- [ ] T071 [US1] Implement per-block shared memory in `models/systemc/src/memory/memory_hierarchy.cpp`
   - Add `shared_memory_` map: `block_id → byte array` of size `SHARED_MEM_SIZE_BYTES` (default: 48KB per block)
   - `ld.shared` / `st.shared` PTX instructions → access `shared_memory_[ctaid]`
   - Shared memory is zeroed at block start, freed when all threads in block complete
   - Address space: `0x0001_0000` base for shared memory (document in `docs/architecture/memory_map.md`)
 
-- [ ] T072 [US1] Implement `bar.sync` barrier in `models/systemc/simt_controller/simt_controller.cpp`
+- [ ] T072 [US1] Implement `bar.sync` barrier in `models/systemc/src/simt_controller/simt_controller.cpp`
   - `bar.sync 0` → all threads in the same block must reach this point before any continue
   - Implementation: counter per block; when counter == `ntid.x * ntid.y * ntid.z`, release all waiting threads
   - `WarpScheduler` must handle blocked warps (do not schedule a warp waiting on barrier)
