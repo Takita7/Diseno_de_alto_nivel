@@ -6,7 +6,7 @@
 //
 
 #include "elf_loader.h"
-#include "../memory/memory_hierarchy.h"
+#include "../src/memory/memory_hierarchy.h"
 
 #include <cstdint>
 #include <cstring>

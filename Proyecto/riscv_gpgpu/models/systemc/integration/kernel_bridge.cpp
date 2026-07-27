@@ -17,10 +17,10 @@
 
 #include "kernel_bridge.h"
 #include "elf_loader.h"
-#include "../top/top.h"
-#include "../memory/memory_hierarchy.h"
-#include "../compute_unit/compute_unit.h"
-#include "../simt_controller/simt_controller.h"
+#include "../src/top/top.h"
+#include "../src/memory/memory_hierarchy.h"
+#include "../src/compute_unit/compute_unit.h"
+#include "../src/simt_controller/simt_controller.h"
 
 // Driver API
 #include "../../../driver/src/loader.h"

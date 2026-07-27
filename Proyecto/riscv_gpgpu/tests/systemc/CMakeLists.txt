@@ -39,7 +39,6 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_MODELS AND SystemC_FOUND)
             compute_unit
             simt_controller
             memory_hierarchy
-            systemc_integration
             SystemC::SystemC
         )
         add_test(NAME simt_compute_unit_tests COMMAND test_simt_compute_unit)
@@ -53,7 +52,7 @@ endif()
 # ── SystemC ↔ Software integration tests ─────────────────────────────────────
 # These do NOT require BUILD_SYSTEMC_MODELS — they use the SystemC integration
 # library which can be built independently when SystemC is available.
-if(BUILD_TESTS AND GTest_FOUND AND SystemC_FOUND)
+if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
     add_executable(test_systemc_integration test_systemc_integration.cpp sc_gtest_main.cpp)
     target_link_libraries(test_systemc_integration
         PRIVATE
@@ -70,6 +69,7 @@ if(BUILD_TESTS AND GTest_FOUND AND SystemC_FOUND)
     target_include_directories(test_systemc_integration PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/src
         ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/integration
         ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src
         ${CMAKE_CURRENT_SOURCE_DIR}/../../software/host_api

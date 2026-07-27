@@ -9,12 +9,16 @@
 
 #include <gtest/gtest.h>
 #include <systemc>
-#include "../../models/systemc/top/top.h"
+#include "../../models/systemc/src/top/top.h"
 
 using namespace riscv_gpgpu;
 
 // ── Shared module (created before sc_start in sc_main) ────────────────────────
 static GPGPUTop* g_top = nullptr;
+
+static std::vector<Instruction> makeNoOpProgram() {
+    return { makeInstr(Opcode::HALT) };
+}
 
 // ── Helper: run N functional steps on all CUs ─────────────────────────────────
 static void runSteps(uint32_t n_steps) {
@@ -32,18 +36,18 @@ protected:
 };
 
 TEST_F(PipelineIntegrationTest, KernelLaunchSucceeds) {
-    EXPECT_NO_THROW({ g_top->launchKernel(4, 1); });
+    EXPECT_NO_THROW({ g_top->launchKernel(4, 1, makeNoOpProgram()); });
 }
 
 TEST_F(PipelineIntegrationTest, KernelExecutionCompletes) {
     // With no loaded ELF, all CUs start in IDLE and immediately report complete.
-    g_top->launchKernel(2, 1);
+    g_top->launchKernel(2, 1, makeNoOpProgram());
     // isKernelComplete() should eventually be true (IDLE warps = complete)
     EXPECT_TRUE(g_top->isKernelComplete() || true);  // functional model: trivially passes
 }
 
 TEST_F(PipelineIntegrationTest, StatisticsCollected) {
-    g_top->launchKernel(1, 1);
+    g_top->launchKernel(1, 1, makeNoOpProgram());
     uint64_t cycles = g_top->getTotalCycles();
     uint64_t instructions = g_top->getTotalInstructions();
     EXPECT_GE(cycles, 0u);

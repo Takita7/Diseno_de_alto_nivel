@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 #include <array>
-#include "../../models/systemc/simt_controller/simt_controller.h"
+#include "../../models/systemc/src/simt_controller/simt_controller.h"
 
 using namespace riscv_gpgpu;
 

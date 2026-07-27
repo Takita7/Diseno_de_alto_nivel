@@ -78,7 +78,7 @@ void GPGPUTop::launchKernel(uint32_t grid_x, uint32_t grid_y,
     warp_id_offset_       = warp_id_offset;
     total_warps_          = grid_x * grid_y;
     scheduler_->submitKernel(0, grid_x, grid_y);
-    kernel_launch_event_.notify();
+    kernel_launch_event_.notify(sc_core::SC_ZERO_TIME);
 }
 
 // ── Context builder ───────────────────────────────────────────────────────────

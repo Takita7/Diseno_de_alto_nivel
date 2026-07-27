@@ -27,10 +27,10 @@
 #include "../../../software/host_api/host_api.h"
 
 // Hardware simulation
-#include "../integration/kernel_bridge.h"
-#include "../integration/elf_loader.h"
-#include "../memory/memory_hierarchy.h"
-#include "../compute_unit/compute_unit.h"
+#include "../../models/systemc/integration/kernel_bridge.h"
+#include "../../models/systemc/integration/elf_loader.h"
+#include "../../models/systemc/src/memory/memory_hierarchy.h"
+#include "../../models/systemc/src/compute_unit/compute_unit.h"
 
 using namespace riscv_gpgpu;
 namespace fs = std::filesystem;

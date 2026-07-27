@@ -8,7 +8,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 BIN_DIR="$BUILD_DIR/bin"
 SIM_DIR="$SCRIPT_DIR/scenarios"
@@ -47,15 +47,15 @@ if [ ! -d "$BUILD_DIR" ]; then
     echo "Build directory not found. Building..."
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
-    cmake .. -DBUILD_SYSTEMC_MODELS=ON
-    make
+    cmake "$PROJECT_ROOT" -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON
+    cmake --build . -j"$(nproc)"
 fi
 
 # Check if executable exists
 if [ ! -f "$BIN_DIR/systemc_simulation" ]; then
     echo "Building SystemC simulation..."
     cd "$BUILD_DIR"
-    make systemc_simulation
+    cmake --build . --target systemc_simulation -j"$(nproc)"
 fi
 
 # Create results directory
