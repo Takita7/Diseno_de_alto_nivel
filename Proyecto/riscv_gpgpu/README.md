@@ -1,159 +1,131 @@
-RISCV GPGPU — Build & Run
-==========================
+# RISC-V GPGPU — Build & Run
 
-Overview
+## Overview
 
-This repository contains an FPGA-oriented, SystemC-based baseline of an open RISC-V GPGPU research platform.
-The following sections show minimal commands to set up the environment, build the SystemC model, run simulations,
-execute tests, and run the verification/benchmark harnesses.
+FPGA-oriented, SystemC-based open RISC-V GPGPU research platform.  
+Target hardware: AMD Kria KV260/KR260 (ARM Cortex-A53 PS + Xilinx PL).
 
-Prerequisites
+```
+Application (.cu / .c)
+      │  clang -target riscv32-unknown-elf
+      ▼
+  RISC-V ELF kernel
+      │  software/ host_api → runtime → driver
+      ▼
+  KernelBridge  ←→  models/systemc/   (functional simulation, x86 host)
+      │              (SystemC + RV32I fetch/decode/execute)
+      │
+      ▼  (future — T050-T052)
+  FPGA fabric via AXI DMA   (Kria PL — hls/ → rtl/ → fpga/)
+```
+
+Block READMEs: [SystemC model](models/systemc/README.md) · [Software stack](software/README.md) · [HLS](hls/README.md)
+
+---
+
+## Prerequisites
 
 - Linux (Ubuntu 22.04+ recommended)
-- CMake 3.24+
-- A C++17-capable compiler (GCC/Clang)
-- SystemC development headers and libraries (SystemC 2.3.x)
+- CMake 3.24+ and a C++17 compiler (GCC/Clang)
+- SystemC 3.x (`/usr/local` — override with `SYSTEMC_HOME`)
+- Google Test (`libgtest-dev`, `libgmock-dev`)
+- LLVM/Clang cross tools: `clang`, `lld`, `binutils-riscv64-unknown-elf`
 - Python 3.10+ (for scripts)
-- Google Test (`libgtest-dev`, `libgmock-dev`) for C++ unit tests
-- LLVM/Clang tools (`clang`, `lld`, `llvm-dev`, `llvm-tools`) for compiler/runtime development
-- RISC-V cross binutils (`binutils-riscv64-unknown-elf`) for ELF inspection and disassembly
-- OpenCL ICD headers (`ocl-icd-opencl-dev`, `opencl-c-headers`, `opencl-clhpp-headers`) for runtime integration
-- Host dev packages: `libhwloc-dev`, `libnuma-dev`, `libelf-dev`, `libfdt-dev`, `libxml2-dev`, `libssl-dev`
 
-Quick setup
+---
 
-Load the project environment (optional helper):
+## Quick start
 
 ```bash
-# From project root
-source scripts/setup-env.sh
+source scripts/setup-env.sh       # optional: sets SYSTEMC_HOME, LLVM_HOME
+
+# Model only (no integration layer)
+cmake -S . -B build -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+
+# Full stack (SystemC + SW integration tests, requires clang cross toolchain)
+cmake -S . -B build -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON \
+      -DBUILD_SYSTEMC_INTEGRATION=ON
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
 ```
 
-Build (SystemC models + tests)
+---
+
+## Test status (branch `gpgpu/codesign_dmedina`, 2026-07-26)
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| `systemc_pipeline_tests` | 3 | ✅ |
+| `systemc_scheduler_tests` | — | ✅ |
+| `systemc_simt_controller_tests` | — | ✅ |
+| `systemc_compute_unit_tests` | 2 | ✅ |
+| `systemc_integration_tests` | 4/5 | 🔶 (1 divergence counter pending T047b) |
+| `compiler_tests` | — | ✅ |
+| `runtime_tests` | — | ✅ |
+| `driver_tests` | — | ✅ |
+| `host_api_tests` | — | ✅ |
+| `kernel_loader_tests` | — | ✅ |
+| SystemC standalone (`make regression`) | 13/13 phases | ✅ |
+
+---
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/run_systemc_sim.sh` | Build + run `systemc_simulation` executable |
+| `scripts/verify.sh` | Full verification harness |
+| `scripts/benchmark.sh` | Benchmark harness (results → `results/benchmarks/`) |
+| `scripts/demo_cuda_kernel_bundle.sh` | Compile CUDA-style kernel → ELF bundle artifacts |
+| `scripts/setup-env.sh` | Set `SYSTEMC_HOME`, `LLVM_HOME` in current shell |
+| `scripts/setup-software-dev.sh` | Install system packages + Python venv (needs sudo) |
+
+---
+
+## Repository layout
+
+```
+├── models/systemc/   SystemC functional model (src/ + integration/ + test/)
+├── software/         Host API, runtime, driver, kernel loader, LLVM backend scaffold
+├── hls/              HLS implementation (Vitis HLS — pending T022-T024)
+├── rtl/              RTL output from HLS (pending T025)
+├── fpga/             FPGA build scripts and deployment (pending T026, T050-T052)
+├── runtime/          Kernel-launch and status-poll runtime
+├── driver/           Userspace driver (simulation backend today, AXI FPGA driver pending)
+├── tests/            CMake-managed test suites
+├── benchmarks/       Benchmark workloads (vector_add, saxpy, Rodinia subset)
+├── docs/             Architecture docs, traceability, reproducibility guides
+├── config/           arch_config.yaml — shared architecture parameters
+└── specs/            Feature spec, plan, and tasks (tasks.md is the source of truth)
+```
+
+---
+
+## Development environment (Python / LLVM)
 
 ```bash
-mkdir -p build
-cd build
-cmake .. -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON
-make -j$(nproc)
+# Local virtualenv (preferred)
+python3 -m venv .venv && source .venv/bin/activate
+pip install pyyaml jinja2 lit numpy
+
+# System-wide setup (requires sudo)
+sudo ./scripts/setup-software-dev.sh
+source /opt/riscv-gpgpu-venv/bin/activate
+
+# Build LLVM with RISC-V target (for real backend work — T030)
+mkdir -p /opt/riscv-src && cd /opt/riscv-src
+git clone https://github.com/llvm/llvm-project.git
+mkdir llvm-project/build && cd llvm-project/build
+cmake -G Ninja ../llvm -DLLVM_ENABLE_PROJECTS="clang;lld" \
+      -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=RISCV
+ninja -j$(nproc)
 ```
 
-Run the SystemC simulation
+---
 
-Option A — via provided runner (recommended):
+## Contributing
 
-```bash
-# from project root
-./scripts/run_systemc_sim.sh --scenario baseline
-```
-
-## CUDA-style kernel bundle demo
-
-Run the demo script to generate a CUDA-like kernel, compile it to a RISC-V ELF binary, and produce a bundle manifest for hardware integration.
-
-```bash
-./scripts/demo_cuda_kernel_bundle.sh
-```
-
-The script prints the bundle manifest and binary metadata that the runtime/driver interface expects.
-The demo now builds a small CUDA-style `vector_add` kernel and always emits a decoded RISC-V disassembly under `build/cuda_demo/vector_add.disasm.txt`.
-It requires a RISC-V-capable disassembler in `PATH`; on Ubuntu/Debian, install `binutils-riscv64-unknown-elf` to get `riscv64-unknown-elf-objdump`, which correctly decodes the generated ELF32 RISC-V binary.
-The same demo also emits ELF header, section table, symbol table, relocation table, launch packet, SHA256 digest, and expected-output artifacts under `build/cuda_demo/`.
-
-Option B — run the built executable directly:
-
-```bash
-# from project root
-./build/bin/systemc_simulation
-```
-
-Run tests
-
-If `GTest` was found during configuration, run CTest from the build directory:
-
-```bash
-cd build
-ctest --output-on-failure
-```
-
-Run verification harness
-
-```bash
-# from project root
-./scripts/verify.sh
-```
-
-Run benchmarks (placeholder harness)
-
-```bash
-# from project root
-./scripts/benchmark.sh
-```
-
-Benchmark results are written to `results/benchmarks/summary.json` by default.
-
-Simulation scenarios (environment variables)
-
-The `scripts/scenarios/` directory contains example scenario scripts:
-
-- `baseline` — default baseline configuration
-- `high_throughput` — larger CU/warp counts
-- `power_efficient` — reduced resources and frequency
-
-Use the `--scenario` option with `run_systemc_sim.sh` to pick one, e.g.:
-
-```bash
-./scripts/run_systemc_sim.sh --scenario high_throughput
-```
-
-Notes & troubleshooting
-
-- If `cmake` fails to find SystemC, set `SYSTEMC_HOME` to the SystemC install root or install SystemC development packages.
-- If `GTest` is not available, tests will be skipped but the SystemC simulation will still build and run.
-- The `scripts/setup-env.sh` attempts to detect and set `SYSTEMC_HOME` and `LLVM_HOME` where possible.
-
-Contributing
-
-Please follow the project's contribution guidelines and keep changes traceable to `docs/traceability/`.
-
-Contributing — Software development setup
-
- - **Create a local Python virtualenv:** preferred to avoid system package conflicts (PEP 668).
-
-	 ```bash
-	 # From project root (recommended for local contribs)
-	 python3 -m venv .venv
-	 source .venv/bin/activate
-	 python -m pip install --upgrade pip
-	 python -m pip install pyyaml jinja2 lit numpy
-	 ```
-
- - **Use the project helper script to create a system-wide venv and install host packages** (requires sudo):
-
-	 ```bash
-	 # Run as root to install system packages and create a shared venv under /opt
-	 sudo ./scripts/setup-software-dev.sh
-	 # Activate the shared venv
-	 source /opt/riscv-gpgpu-venv/bin/activate
-	 ```
-
- - **Cloning recommended source repos (manual):**
-
-	 ```bash
-	 mkdir -p /opt/riscv-src && cd /opt/riscv-src
-	 git clone https://github.com/llvm/llvm-project.git
-	 git clone https://github.com/riscv/riscv-gnu-toolchain.git
-	 git clone https://github.com/pocl/pocl.git
-	 ```
-
- - **Build notes:** prefer `ninja` and an out-of-tree build for large projects (LLVM). Example:
-
-	 ```bash
-	 mkdir -p /opt/riscv-src/llvm-project/build && cd /opt/riscv-src/llvm-project/build
-	 cmake -G Ninja ../llvm -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=RISCV
-	 ninja -j$(nproc)
-	 ```
-
- - **If pip fails with "externally-managed-environment":** use a virtualenv as shown above, or install OS-packaged python libs via apt (not recommended for development).
-
-
+Follow contribution guidelines and keep changes traceable to `docs/traceability/`.  
+Task definitions and status live in `specs/001-open-riscv-gpgpu/tasks.md`.

@@ -1,13 +1,26 @@
 # RISC-V GPGPU – SystemC Functional Model
 
-SystemC/TLM functional model of a Ventus-inspired RISC-V GPGPU with RVV
-extensions, developed as part of a hardware/software co-design methodology
-targeting FPGA platforms (see companion paper).
+SystemC/TLM functional model of a Ventus-inspired RISC-V GPGPU, developed
+as part of a hardware/software co-design methodology targeting FPGA platforms.
 
 The model provides **functional validation and architectural exploration**
 before High-Level Synthesis (HLS). It is not cycle-accurate — instruction
 counts and cache statistics are exact, but timing measurements are not
 meaningful at this abstraction level.
+
+> **ISA note**: the model operates at two levels of abstraction.
+> The *virtual ISA mode* uses custom abstract opcodes (`VADD`, `VSUB`, …)
+> that represent SIMT-parallel operations — these are **not** RISC-V V
+> (RVV) instructions. The *binary execution mode* runs real `rv32im` ELF
+> binaries compiled with `-march=rv32im` (no V extension). RVV support
+> is a future work item.
+
+Two complementary execution modes coexist:
+
+| Mode | Entry point | Use case |
+|------|-------------|----------|
+| **Virtual ISA** | `GPGPUTop::launchKernel(grid_x, grid_y, vector<Instruction>)` | Architecture-level exploration with abstract opcodes |
+| **Binary execution** | `ComputeUnit::setEntryPoint` + `step()` + `KernelBridge` | Full-stack validation: Clang → RV32I ELF → fetch/decode/execute |
 
 ---
 
@@ -20,159 +33,176 @@ systemc/
 │   │   ├── types.h              shared data structures (WarpContext, Instruction, Opcode…)
 │   │   ├── kernel_programs.h    ready-to-launch kernel library  ← start here
 │   │   ├── logging.h            LOG_INFO / LOG_DEBUG / LOG_ERROR macros
-│   │   └── platform.h           printSimulationBanner, printPhaseHeader, GPGPU_CLOCK_PERIOD_NS
+│   │   └── platform.h           printSimulationBanner, printPhaseHeader
 │   ├── top/
 │   │   ├── top.h / top.cpp      GPGPUTop: single-GPU top-level module
+│   │   └── simulation_main.cpp  standalone executable entry point
 │   ├── system_top/
-│   │   ├── system_top.h/.cpp    SystemTop: multi-GPU wrapper (N × GPGPUTop)
+│   │   └── system_top.h/.cpp    SystemTop: multi-GPU wrapper (N × GPGPUTop)
 │   ├── scheduler/
-│   │   ├── warp_scheduler.h/.cpp  round-robin warp dispatch across CUs
+│   │   └── warp_scheduler.h/.cpp  round-robin / FIFO / priority warp dispatch
 │   ├── simt_controller/
-│   │   ├── simt_controller.h/.cpp IPDOM stack, divergence tracking, barriers
+│   │   └── simt_controller.h/.cpp IPDOM stack, divergence tracking, barriers
 │   ├── memory/
-│   │   ├── memory_hierarchy.h/.cpp L1/L2/global/shared memory (write-through)
+│   │   └── memory_hierarchy.h/.cpp L1/L2/global/shared memory (write-through)
+│   │       writeBytes / readBytes — bulk DMA-equivalent access for ELF loading
 │   └── compute_unit/
-│       ├── compute_unit.h/.cpp  ALU + RVV unit + memory ops + SIMT execution
-├── test/
-│   ├── Makefile
-│   ├── regression_test.cpp      full correctness suite (Phases 0–13)
-│   └── benchmark_test.cpp       stress benchmarks + design space exploration
-└── README.md                    ← you are here
+│       └── compute_unit.h/.cpp
+│           Virtual ISA mode:  executeWarp(WarpContext&)
+│           Binary mode:       setEntryPoint / setInitialRegisters / step()
+├── integration/                  SW↔SC bridge (requires BUILD_SYSTEMC_INTEGRATION=ON)
+│   ├── kernel_bridge.h/.cpp      orchestrates ELF load → H2D → CU step loop → D2H
+│   ├── elf_loader.h/.cpp         manual ELF32 parser, no libelf dependency
+│   └── riscv_isa.h               header-only RV32I+M decoder (decodeRV32 / expandRVC)
+└── test/
+    ├── Makefile
+    ├── regression_test.cpp        full correctness suite (Phases 0–13, all green)
+    ├── benchmark_test.cpp         stress benchmarks + design space exploration
+    └── top_test_v7.cpp            reference snapshot (multi-GPU, 9 phases)
 ```
 
 ---
 
 ## Build and run
 
+### Standalone (model only — no CMake)
+
 ```bash
 cd test/
 
 make all        # build both binaries
-make regression # build + run full regression suite (all phases pass → green)
+make regression # build + run full regression suite (Phases 0–13)
 make benchmark  # build + run stress benchmark + design space tables
 make clean      # remove build artefacts
 make info       # show SystemC path, source count
 ```
 
-**Requirement:** SystemC 2.3.4 at `/usr/local` (override with
-`make SYSTEMC_HOME=/your/path`).
+**Requirement:** SystemC 3.x at `/usr/local` (override with `SYSTEMC_HOME=/your/path`).
 
----
-
-## Running a new kernel in 30 seconds
-
-### 1. Add a function to `src/common/kernel_programs.h`
-
-```cpp
-// [TOP] Multiply every element by 2
-inline std::vector<Instruction> scaleByTwo() {
-    return {
-        makeInstr(Opcode::ADDI, 3, 0, 0, 2),   // r3 = 2
-        makeInstr(Opcode::VMUL, 4, 1, 3, 0),   // r4 = r1 * 2  (r1 = global_tid)
-        makeInstr(Opcode::HALT)
-    };
-}
-```
-
-### 2. Launch it from `benchmark_test.cpp` or `regression_test.cpp`
-
-```cpp
-top.launchKernel(4, 1, kernels::scaleByTwo());  // 4 warps
-sc_core::sc_start(sc_core::sc_time(200, sc_core::SC_NS));
-```
-
-### 3. Run
+### CMake (full project — includes integration tests)
 
 ```bash
-make benchmark
+cmake -S . -B build -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON
+cmake --build build -j
+
+# Enable the SW↔SC integration layer (requires clang + lld for RV32I kernels):
+cmake -S . -B build -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON -DBUILD_SYSTEMC_INTEGRATION=ON
+cmake --build build -j && ctest --test-dir build -R systemc
 ```
 
 ---
 
-## Register convention (`buildWarpContext`)
+## Execution modes
 
-Every warp context is initialised by `GPGPUTop::buildWarpContext` before
-`executeWarp` is called. The following registers are **pre-set** — do not
-overwrite them unless you know what you are doing:
+### Virtual ISA (architecture exploration)
+
+Kernels are expressed as `vector<Instruction>` using the abstract `Opcode` enum.
+Good for exploring scheduling, divergence, and memory access patterns without a
+compiler in the loop.
+
+```cpp
+GPGPUTop top("gpgpu", config);
+top.launchKernel(4, 1, kernels::vectorAdd());  // 4 warps, 1 warp/grid row
+sc_core::sc_start(sc_core::sc_time(200, SC_NS));
+```
+
+### Binary execution (end-to-end validation)
+
+Runs a real RV32I ELF compiled with Clang. The `step()` loop fetches machine
+words from `MemoryHierarchy`, decodes them with `riscv_isa.h`, and executes.
+This mirrors what the FPGA ARM driver will do:
+
+| Software (simulation) | FPGA (hardware) |
+|-----------------------|-----------------|
+| `ElfLoader::load()` → `mem.writeBytes()` | ARM DMA → FPGA instruction memory |
+| `cu.setEntryPoint(pc)` | Write `PC_INIT` register |
+| `cu.step()` loop | GPGPU fetch/decode/execute pipeline |
+| `mem.readBytes()` → D2H copy | ARM DMA ← FPGA data memory |
+
+```cpp
+// Compile kernel: clang -target riscv32-unknown-elf -march=rv32im ...
+ElfLoader elf;  elf.load("kernel.elf", mem);
+ComputeUnit cu("cu0", cfg);
+cu.setMemoryHierarchy(&mem);
+cu.setEntryPoint(elf.getEntryPoint());
+cu.setInitialRegisters(regs);   // a0..a7 = kernel args
+cu.setReturnSentinel(0x1);
+cu.launchKernel(0, 1, 1);
+while (!cu.isComplete()) cu.step();
+uint32_t result = cu.getRegister(0, 10);  // read a0
+```
+
+For multi-block workloads use `KernelBridge` (see `integration/kernel_bridge.h`).
+
+---
+
+## Register convention
+
+### Virtual ISA (`buildWarpContext`)
 
 | Register | Value | Meaning |
 |----------|-------|---------|
 | `r0[t]` | `0` | Zero register (always) |
 | `r1[t]` | `global_tid` | Unique thread ID across all warps and GPUs |
-| `r2[t]` | `0x10000 + global_tid × 4` | Unique 4-byte-aligned memory address per thread |
-| `r3[t]` | `local_warp_id` | 0 for the first warp of a kernel, 1 for the second, … |
-| `r4–r31` | `0` | Free for the kernel to use |
+| `r2[t]` | `0x10000 + global_tid × 4` | Unique 4-byte-aligned memory address |
+| `r3[t]` | `local_warp_id` | Warp index within this kernel launch |
+| `r4–r31` | `0` | Free for the kernel |
 
-`global_tid = (warp_id_offset + warp_id) × threads_per_warp + t`
+### Binary execution (RISC-V ABI)
 
-For [DIRECT] kernels (run via `cu.executeWarp(ctx)` without going through
-`launchKernel`), the caller sets ALL registers manually before the call.
+| Register | ABI name | Role |
+|----------|----------|------|
+| `x0` | `zero` | Always 0 |
+| `x1` | `ra` | Set to return sentinel (signals kernel completion) |
+| `x2` | `sp` | Stack pointer (set to `0x20000000`) |
+| `x10–x17` | `a0–a7` | Kernel arguments (pointer args carry device addresses) |
+| `x14` | `a4` | Block ID (injected per-worker by `KernelBridge`) |
+| `x15` | `a5` | Thread ID within block (injected per-worker) |
 
 ---
 
 ## Available opcodes (`types.h` → `enum class Opcode`)
 
 ### Scalar integer ALU
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `ADD`  | 0x00 | `rd = rs1 + rs2` |
-| `SUB`  | 0x01 | `rd = rs1 - rs2` |
-| `AND`  | 0x02 | `rd = rs1 & rs2` |
-| `OR`   | 0x03 | `rd = rs1 \| rs2` |
-| `XOR`  | 0x04 | `rd = rs1 ^ rs2` |
-| `SLT`  | 0x05 | `rd = (rs1 < rs2) ? 1 : 0` (signed) |
-| `ADDI` | 0x10 | `rd = rs1 + imm` |
-| `LUI`  | 0x11 | `rd = imm << 12` |
+| Opcode | Operation |
+|--------|-----------|
+| `ADD`, `SUB`, `AND`, `OR`, `XOR`, `SLT` | Standard R-type |
+| `ADDI`, `LUI` | Immediate forms |
 
-### Scalar FP (registers store IEEE 754 bits — use `floatAsReg` / `regAsFloat`)
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `FADD` | 0x06 | `rd = float(rs1) + float(rs2)` |
-| `FMUL` | 0x08 | `rd = float(rs1) × float(rs2)` |
+### Scalar FP (registers store IEEE 754 bits)
+| Opcode | Operation |
+|--------|-----------|
+| `FADD` | `rd = float(rs1) + float(rs2)` |
+| `FMUL` | `rd = float(rs1) × float(rs2)` |
 
 ### Memory
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `LW`   | 0x20 | `rd = mem[rs1 + imm]` (4-byte word) |
-| `SW`   | 0x21 | `mem[rs1 + imm] = rs2` (write-through) |
+| Opcode | Operation |
+|--------|-----------|
+| `LW` | `rd = mem[rs1 + imm]` (4-byte word) |
+| `SW` | `mem[rs1 + imm] = rs2` (write-through) |
 
-### SIMT control — VBRANCH / VJOIN (Option A semantics)
-| Opcode | Encoding | Semantics |
-|--------|----------|-----------|
-| `VBRANCH` | 0x32 | Threads where `rs1[t] == 0` **fall through** (stay active); threads where `rs1[t] != 0` are **masked** until the matching VJOIN. No divergence event is generated when all threads agree. |
-| `VJOIN`   | 0x33 | Restores masked threads from the IPDOM stack. |
+### SIMT control
+| Opcode | Semantics |
+|--------|-----------|
+| `VBRANCH` | Threads where `rs1[t] == 0` stay active; others masked until matching `VJOIN` |
+| `VJOIN` | Restores masked threads from IPDOM stack |
+| `BARRIER` | `imm` = barrier ID — suspends warp until all warps in kernel arrive |
 
-### Integer vector (RVV-style — operates on all active thread lanes)
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `VADD`   | 0x40 | `rd[t] = rs1[t] + rs2[t]` |
-| `VSUB`   | 0x41 | `rd[t] = rs1[t] - rs2[t]` |
-| `VMUL`   | 0x42 | `rd[t] = rs1[t] × rs2[t]` |
-| `VFMADD` | 0x43 | `rd[t] = rs1[t] × rs2[t] + rd[t]` (integer FMA) |
+### SIMT-parallel operations (virtual ISA only — not RVV)
+These opcodes exist only in the abstract virtual ISA mode.
+They represent operations that execute on all active thread lanes simultaneously.
+They have **no encoding in the RISC-V V extension** — compiled `rv32im`
+binaries cannot emit them.
 
-### FP vector
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `VFADD`   | 0x48 | `rd[t] = float(rs1[t]) + float(rs2[t])` |
-| `VFSUB`   | 0x49 | `rd[t] = float(rs1[t]) - float(rs2[t])` |
-| `VFMUL`   | 0x4A | `rd[t] = float(rs1[t]) × float(rs2[t])` |
-| `VFFMADD` | 0x4B | `rd[t] = float(rs1[t]) × float(rs2[t]) + float(rd[t])` |
-
-### Synchronisation
-| Opcode | Encoding | Semantics |
-|--------|----------|-----------|
-| `BARRIER` | 0x70 | `imm` = barrier ID. Suspends the warp until **all warps** in the kernel have reached the same barrier ID, then all resume together. Multiple distinct barrier IDs are supported per kernel. |
+| Opcode | Operation |
+|--------|-----------|
+| `VADD`, `VSUB`, `VMUL`, `VFMADD` | Integer SIMT-parallel |
+| `VFADD`, `VFSUB`, `VFMUL`, `VFFMADD` | FP SIMT-parallel |
 
 ### Control
-| Opcode | Encoding | Operation |
-|--------|----------|-----------|
-| `HALT` | 0xFF | End of warp program. |
-
-### FP helper functions (defined in `types.h`)
-```cpp
-floatAsReg(float f)    → uint32_t   // store a float value in a register
-regAsFloat(uint32_t b) → float      // read a float value from a register
-```
+| Opcode | Operation |
+|--------|-----------|
+| `HALT` | End of warp program |
 
 ---
 
@@ -230,18 +260,18 @@ sys.getDivergenceEvents();
 
 | Limitation | Notes |
 |-----------|-------|
-| **No cycle counts** | `getTotalCycles()` always returns 0. Cycle-accurate timing comes from the HLS synthesis step. |
-| **No ITOF** | No integer-to-float conversion instruction. FP kernels launched via `top.launchKernel()` use uniform float immediates (same value for all threads). Per-thread float data requires pre-loading from memory or using [DIRECT] kernels. |
-| **No ISA decoder** | Programs are hand-coded as `std::vector<Instruction>` using `makeInstr()`. A binary RISC-V decoder is outside the scope of the SystemC model. |
-| **TLM socket deferred** | `MemoryHierarchy` has no TLM target socket yet. The compute unit accesses memory via direct method calls (`loadWord`/`storeWord`). |
-| **Single-CU per GPGPUTop in practice** | The model supports N CUs (`num_compute_units`), but in `simulationProcess` all CUs share the same memory hierarchy instance. Setting `num_compute_units > 1` distributes warps correctly (verified in DSE-A) but all CU memory traffic goes through one L1/L2. |
+| **No cycle counts** | `getTotalCycles()` always returns 0 for the virtual ISA path. Binary mode (`step()`) counts cycles as instruction fetches, not wall-clock. Cycle-accurate timing comes from HLS synthesis. |
+| **No ITOF** | No integer-to-float conversion in the virtual ISA. FP kernels launched via `top.launchKernel()` use uniform float immediates. Per-thread float data requires pre-loading from memory or using [DIRECT] kernels. |
+| **Binary mode: single-thread per CU** | `KernelBridge` spawns one `ComputeUnit` per thread (one thread per block in current implementation). SIMT lane masking and divergence events are not generated in binary mode — each thread executes independently. This is T047b/T048b work. |
+| **TLM socket deferred** | `MemoryHierarchy` has no TLM target socket yet. Access is via direct method calls (`loadWord`/`storeWord`/`writeBytes`/`readBytes`). TLM binding is planned for Phase 4. |
+| **Single-CU memory in virtual ISA mode** | All CUs in a `GPGPUTop` share the same `MemoryHierarchy` instance. Setting `num_compute_units > 1` distributes warps correctly but all memory traffic goes through one L1/L2. |
+| **No RVV** | The RISC-V V extension is not implemented. The virtual ISA's `VADD`/`VFMADD`/etc. are abstract SIMT opcodes, not encoded RVV instructions. |
 
 ---
 
 ## Benchmark quick reference
 
-Run `make benchmark` from `test/`. Key metrics from the last run (5 GPUs,
-32 threads/warp, 1 CU/GPU):
+Run `make benchmark` from `test/`. Key metrics (5 GPUs, 32 threads/warp, 1 CU/GPU):
 
 | Benchmark | Warps | Instrs | L1 Hit% | Div |
 |-----------|-------|--------|---------|-----|
@@ -253,12 +283,6 @@ Run `make benchmark` from `test/`. Key metrics from the last run (5 GPUs,
 | B6 Parallel reduction | 10 | 150 | 0% | 0 |
 | B7 GEMM (2×2, K=4) | 1 | 5 | — | 0 |
 | B8 Conv2D (3×3) | 1 | 10 | — | 0 |
-| **Scalability** | 1→5 GPU | 24→120 | — | — |
-
-Design space exploration (DSE) results:
-- **Multi-CU (1/2/4):** load distributes as 120/60/30 instr/CU
-- **Lane width (32/16 tpw):** 24 vs 48 instructions for 128 threads
-- **IPDOM overhead:** 50% lane efficiency loss under full divergence
 
 ---
 
@@ -266,3 +290,4 @@ Design space exploration (DSE) results:
 
 ITCR School of Electronics Engineering — Master's programme MP6160  
 RISC-V GPGPU co-design project, 2025
+
