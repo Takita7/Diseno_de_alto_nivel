@@ -143,4 +143,37 @@ void MemoryHierarchy::invalidateCache() {
     LOG_INFO("MemoryHierarchy: caches invalidated");
 }
 
+// ── Bulk byte access (AXI DMA analog) ────────────────────────────────────────
+//
+// These implement the same contract as AXI4 DMA bursts on the FPGA:
+//   writeBytes = ARM → FPGA instruction/data memory transfer (ELF load, H2D copy)
+//   readBytes  = FPGA → ARM result transfer (D2H copy)
+//
+// Each byte is stored via a read-modify-write on the word-granular backing store.
+
+void MemoryHierarchy::writeBytes(Address addr, const uint8_t* data, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        Address byte_addr = addr + static_cast<Address>(i);
+        Address word_addr = byte_addr & ~static_cast<Address>(0x3);
+        uint32_t shift    = (byte_addr & 0x3u) * 8u;
+        uint32_t& word    = global_memory_[word_addr];
+        word = (word & ~(0xFFu << shift)) | (static_cast<uint32_t>(data[i]) << shift);
+        // Invalidate cache lines so subsequent loads see the new value.
+        l1_cache_.erase(word_addr);
+        l2_cache_.erase(word_addr);
+    }
+}
+
+void MemoryHierarchy::readBytes(Address addr, uint8_t* data, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        Address byte_addr = addr + static_cast<Address>(i);
+        Address word_addr = byte_addr & ~static_cast<Address>(0x3);
+        uint32_t shift    = (byte_addr & 0x3u) * 8u;
+        auto it = global_memory_.find(word_addr);
+        data[i] = (it != global_memory_.end())
+                  ? static_cast<uint8_t>((it->second >> shift) & 0xFFu)
+                  : 0u;
+    }
+}
+
 }  // namespace riscv_gpgpu

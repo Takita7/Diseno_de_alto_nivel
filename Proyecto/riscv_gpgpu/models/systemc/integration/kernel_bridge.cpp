@@ -135,52 +135,67 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint32_t effective_block_z = have_launch_args ? launch_args.block_z : 1;
     const uint32_t total_blocks = std::max<uint32_t>(1u,
         effective_grid_x * std::max<uint32_t>(1u, effective_grid_y) * std::max<uint32_t>(1u, effective_grid_z));
+    // Threads per block: for single-thread kernels this is 1; for SIMT kernels
+    // this is block_x * block_y * block_z (each gets its own a4/a5 values).
+    const uint32_t threads_per_block = std::max<uint32_t>(1u,
+        effective_block_x * std::max<uint32_t>(1u, effective_block_y) * std::max<uint32_t>(1u, effective_block_z));
+    const uint32_t total_threads = total_blocks * threads_per_block;
     const uint32_t live_units = std::max<uint32_t>(1u,
-        std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units, total_blocks));
+        std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units, total_threads));
 
     struct Worker {
         std::unique_ptr<ComputeUnit> cu;
         std::unique_ptr<SIMTController> simt;
-        uint32_t block_id = 0;
+        uint32_t block_id  = 0;
+        uint32_t thread_id = 0;
         bool active = false;
     };
 
-    auto makeWorker = [&](uint32_t block_id) {
+    // global_thread_id encodes both block and thread: maps (block_id, thread_id)
+    // to a4 (block_id) and a5 (thread_id) following RISC-V ABI/GPGPU convention.
+    auto makeWorker = [&](uint32_t global_thread_id) {
         Worker worker;
+        const uint32_t block_id  = global_thread_id / threads_per_block;
+        const uint32_t thread_id = global_thread_id % threads_per_block;
 
         ComputeUnit::Config cu_cfg;
-        cu_cfg.unit_id          = block_id;
-        cu_cfg.num_threads      = cfg_.threads_per_warp;
-        cu_cfg.threads_per_warp = cfg_.threads_per_warp;
+        cu_cfg.unit_id          = global_thread_id;
+        cu_cfg.num_threads      = 1;
+        cu_cfg.threads_per_warp = 1;
         cu_cfg.max_warps        = std::max<uint32_t>(1u, cfg_.max_warps_per_cu);
         cu_cfg.shared_mem_size  = cfg_.shared_mem_size;
         cu_cfg.max_cycles       = cfg_.max_sim_cycles;
 
-        const std::string cu_name = run_prefix + "_cu_" + std::to_string(block_id);
-        const std::string simt_name = run_prefix + "_simt_" + std::to_string(block_id);
+        const std::string cu_name   = run_prefix + "_cu_"   + std::to_string(global_thread_id);
+        const std::string simt_name = run_prefix + "_simt_" + std::to_string(global_thread_id);
 
         worker.simt = std::make_unique<SIMTController>(simt_name.c_str(), SIMTController::Config{});
         worker.cu   = std::make_unique<ComputeUnit>(cu_name.c_str(), cu_cfg);
         worker.cu->setMemoryHierarchy(&mem);
         worker.cu->setSIMTController(worker.simt.get());
         worker.cu->setEntryPoint(entry_pc);
-        auto worker_regs = regs;
-        worker_regs[30] = block_id;
+        auto worker_regs  = regs;
+        // a4 (x14) = block index, a5 (x15) = thread index within block.
+        // This mirrors what the FPGA hardware dispatcher writes into
+        // the register file before asserting the kernel start signal.
+        worker_regs[14] = block_id;
+        worker_regs[15] = thread_id;
         worker.cu->setInitialRegisters(worker_regs);
         worker.cu->setReturnSentinel(RETURN_SENTINEL);
         worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
 
-        worker.block_id = block_id;
-        worker.active = true;
+        worker.block_id  = block_id;
+        worker.thread_id = thread_id;
+        worker.active    = true;
         return worker;
     };
 
     std::vector<Worker> workers;
     workers.reserve(live_units);
 
-    uint32_t next_block = 0;
-    for (; next_block < total_blocks && workers.size() < live_units; ++next_block) {
-        workers.emplace_back(makeWorker(next_block));
+    uint32_t next_thread = 0;
+    for (; next_thread < total_threads && workers.size() < live_units; ++next_thread) {
+        workers.emplace_back(makeWorker(next_thread));
     }
 
     last_cycles_       = 0;
@@ -208,8 +223,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 last_instructions_ += worker.cu->getTotalInstructions();
                 worker.active = false;
 
-                if (next_block < total_blocks) {
-                    worker = makeWorker(next_block++);
+                if (next_thread < total_threads) {
+                    worker = makeWorker(next_thread++);
                 }
             }
         }

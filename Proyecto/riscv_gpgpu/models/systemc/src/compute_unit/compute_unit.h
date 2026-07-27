@@ -10,6 +10,7 @@
 #include <queue>
 #include <map>
 #include <memory>
+#include <array>
 #include "../common/types.h"
 #include "../simt_controller/simt_controller.h"
 
@@ -25,6 +26,9 @@ public:
         uint32_t threads_per_warp = 32;
         uint32_t max_warps        = 4;
         uint32_t shared_mem_size  = 16 * 1024;
+        // Maximum step() iterations before isComplete() is forced true.
+        // 0 = unlimited (default). Maps to PC_INIT timeout register on FPGA.
+        uint32_t max_cycles       = 0;
     };
 
     sc_core::sc_in<bool> clk{"clk"};
@@ -46,6 +50,21 @@ public:
 
     // ── Phase 6: external memory ──────────────────────────────────────────────
     void setMemory(MemoryHierarchy* mem);
+
+    // ── Binary execution API (mirrors FPGA ARM-driver register writes) ────────
+    // setMemoryHierarchy: alias of setMemory; name matches FPGA AXI port.
+    void setMemoryHierarchy(MemoryHierarchy* mem);
+    // setSIMTController: compatibility shim — bridge owns its own SIMTController
+    // for divergence metrics; this stores it but binary mode runs single-thread.
+    void setSIMTController(SIMTController* simt);
+    // setEntryPoint: initial PC — equivalent to writing the FPGA PC_INIT register.
+    void setEntryPoint(uint32_t pc);
+    // setInitialRegisters: full 32-register file snapshot for one warp.
+    void setInitialRegisters(std::array<uint32_t, 32> regs);
+    // setReturnSentinel: PC that signals kernel completion (ra = sentinel on entry).
+    void setReturnSentinel(uint32_t sentinel_pc);
+    // getRegister: read back a register after execution (e.g. result in a0).
+    uint32_t getRegister(uint32_t warp_id, uint32_t reg_id) const;
 
     // ── Phase 10: barrier queries (delegate to simt_ctrl_) ───────────────────
     bool allWarpsAtBarrier(uint32_t barrier_id, uint32_t total_warps) const;
@@ -83,6 +102,7 @@ private:
     std::vector<uint8_t>                shared_memory_;
 
     std::unique_ptr<SIMTController>  simt_ctrl_;
+    SIMTController*                  ext_simt_   = nullptr;  // injected by bridge
     std::map<Address, uint32_t>      sim_memory_;
     MemoryHierarchy*                 ext_memory_ = nullptr;
 
@@ -90,6 +110,13 @@ private:
     InstructionCount total_instructions_     = 0;
     WarpID           current_executing_warp_ = 0;
     bool             is_running_             = false;
+
+    // ── Binary execution mode state ───────────────────────────────────────────
+    bool                      binary_mode_             = false;
+    uint32_t                  binary_pc_               = 0;
+    uint32_t                  binary_return_sentinel_  = 0;
+    bool                      binary_halted_           = false;
+    std::array<uint32_t, 32>  binary_regs_             = {};
 };
 
 }  // namespace riscv_gpgpu

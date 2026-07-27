@@ -23,6 +23,7 @@ endif()
 # Build top-level module and executable
 if(BUILD_SYSTEMC_MODELS)
     add_subdirectory(src/top)
+    add_subdirectory(src/system_top)
 endif()
 
 message(STATUS "SystemC models configured successfully")

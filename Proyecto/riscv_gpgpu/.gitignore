@@ -17,6 +17,7 @@ Thumbs.db
 
 # C++ Build Artifacts
 build/
+build_*/
 debug/
 release/
 *.o
@@ -30,6 +31,11 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+
+# SystemC standalone test binaries (models/systemc/test/make)
+models/systemc/test/riscv_gpgpu_regression
+models/systemc/test/riscv_gpgpu_benchmark
+models/systemc/test/build/
 
 # Python
 __pycache__/

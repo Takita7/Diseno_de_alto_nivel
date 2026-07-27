@@ -76,8 +76,10 @@ struct Elf32_Sym {
 static constexpr uint32_t PT_LOAD   = 1;
 static constexpr uint32_t SHT_SYMTAB = 2;
 static constexpr uint32_t SHT_STRTAB = 3;
-static constexpr uint8_t  STT_FUNC  = 2;
-static constexpr uint8_t  STT_OBJECT = 1;
+static constexpr uint8_t  STT_FUNC   = 2;
+ static constexpr uint8_t  STT_OBJECT = 1;
+// STB_GLOBAL: accept .globl assembly labels even without .type (NOTYPE, bind=1)
+static constexpr uint8_t  STB_GLOBAL = 1;
 static constexpr uint8_t  ELF_ST_TYPE(uint8_t i) { return i & 0xF; }
 
 // ─── ElfLoader::load ──────────────────────────────────────────────────────────
@@ -194,8 +196,11 @@ bool ElfLoader::load(const std::string& path, MemoryHierarchy& mem) {
             Elf32_Sym sym;
             std::memcpy(&sym, buf.data() + sym_off + s, sizeof(sym));
 
-            uint8_t typ = sym.st_info & 0xF;
-            if (typ != STT_FUNC && typ != STT_OBJECT) continue;
+            uint8_t typ  = sym.st_info & 0xF;
+            uint8_t bind = (sym.st_info >> 4) & 0xF;
+            bool is_func_or_obj   = (typ == STT_FUNC || typ == STT_OBJECT);
+            bool is_global_notype = (typ == 0 && bind == STB_GLOBAL);  // ASM .globl
+            if (!is_func_or_obj && !is_global_notype) continue;
             if (sym.st_value == 0) continue;
 
             size_t name_off = shdrs[strtab_idx].sh_offset + sym.st_name;
