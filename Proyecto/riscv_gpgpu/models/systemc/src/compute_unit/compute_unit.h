@@ -65,6 +65,9 @@ public:
     void setReturnSentinel(uint32_t sentinel_pc);
     // getRegister: read back a register after execution (e.g. result in a0).
     uint32_t getRegister(uint32_t warp_id, uint32_t reg_id) const;
+    // getCurrentPC: returns the current fetch PC in binary mode (0 in virtual ISA mode).
+    // Used by KernelBridge for per-warp PC-divergence detection.
+    uint32_t getCurrentPC() const;
 
     // ── Phase 10: barrier queries (delegate to simt_ctrl_) ───────────────────
     bool allWarpsAtBarrier(uint32_t barrier_id, uint32_t total_warps) const;

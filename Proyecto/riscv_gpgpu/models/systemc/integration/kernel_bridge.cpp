@@ -140,15 +140,12 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint32_t threads_per_block = std::max<uint32_t>(1u,
         effective_block_x * std::max<uint32_t>(1u, effective_block_y) * std::max<uint32_t>(1u, effective_block_z));
     const uint32_t total_threads = total_blocks * threads_per_block;
-    const uint32_t live_units = std::max<uint32_t>(1u,
-        std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units, total_threads));
-
     struct Worker {
-        std::unique_ptr<ComputeUnit> cu;
+        std::unique_ptr<ComputeUnit>    cu;
         std::unique_ptr<SIMTController> simt;
         uint32_t block_id  = 0;
         uint32_t thread_id = 0;
-        bool active = false;
+        bool     active    = false;
     };
 
     // global_thread_id encodes both block and thread: maps (block_id, thread_id)
@@ -190,62 +187,155 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         return worker;
     };
 
-    std::vector<Worker> workers;
-    workers.reserve(live_units);
+    last_cycles_            = 0;
+    last_instructions_      = 0;
+    last_divergence_events_ = 0;
 
-    uint32_t next_thread = 0;
-    for (; next_thread < total_threads && workers.size() < live_units; ++next_thread) {
-        workers.emplace_back(makeWorker(next_thread));
-    }
+    // ── Choose execution strategy ─────────────────────────────────────────────
+    // When threads_per_warp > 1, run all threads in each warp in lockstep.
+    // After every instruction step, compare PCs across the warp: the first
+    // cycle where threads disagree marks a SIMT divergence event (mirrors
+    // what the FPGA SIMT controller tracks via handleBranch).
+    //
+    // When threads_per_warp == 1 (scalar kernels), fall back to the original
+    // independent single-thread-per-worker loop.
 
-    last_cycles_       = 0;
-    last_instructions_ = 0;
+    const uint32_t warp_size = (cfg_.threads_per_warp > 1 && threads_per_block > 1)
+                               ? std::min(cfg_.threads_per_warp, threads_per_block)
+                               : 1u;
 
-    uint64_t cycle = 0;
-    while (true) {
-        bool any_active = false;
+    if (warp_size > 1) {
+        // ── SIMT warp-level lockstep path ─────────────────────────────────────
+        struct WarpGroup {
+            std::vector<Worker> threads;
+            bool active             = true;
+            bool currently_diverged = false;
+        };
 
-        for (auto& worker : workers) {
-            if (!worker.active || !worker.cu) {
-                continue;
-            }
+        const uint32_t total_warps = (total_threads + warp_size - 1) / warp_size;
+        const uint32_t concurrent_warps = std::max<uint32_t>(1u,
+            std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units,
+                               total_warps));
 
-            any_active = true;
-            worker.cu->step();
-            ++cycle;
+        auto makeWarpGroup = [&](uint32_t warp_idx) {
+            WarpGroup wg;
+            uint32_t base = warp_idx * warp_size;
+            for (uint32_t t = 0; t < warp_size && base + t < total_threads; ++t)
+                wg.threads.emplace_back(makeWorker(base + t));
+            return wg;
+        };
 
-            if (cycle % 100000 == 0) {
-                std::cout << "[bridge]   ... " << cycle << " functional steps\n";
-            }
+        std::vector<WarpGroup> warp_groups;
+        warp_groups.reserve(concurrent_warps);
+        uint32_t next_warp = 0;
+        for (; next_warp < total_warps && warp_groups.size() < concurrent_warps; ++next_warp)
+            warp_groups.emplace_back(makeWarpGroup(next_warp));
 
-            if (worker.cu->isComplete()) {
-                last_cycles_       += worker.cu->getTotalCycles();
-                last_instructions_ += worker.cu->getTotalInstructions();
-                worker.active = false;
+        uint64_t cycle = 0;
+        while (true) {
+            bool any_active = false;
+            for (auto& wg : warp_groups) {
+                if (!wg.active) continue;
+                any_active = true;
 
-                if (next_thread < total_threads) {
-                    worker = makeWorker(next_thread++);
+                // Step all non-complete threads in this warp simultaneously.
+                for (auto& w : wg.threads)
+                    if (w.active && w.cu && !w.cu->isComplete())
+                        w.cu->step();
+                ++cycle;
+
+                if (cycle % 100000 == 0)
+                    std::cout << "[bridge]   ... " << cycle << " functional warp-steps\n";
+
+                // ── SIMT divergence detection: compare PCs across warp ────────
+                // A transition from uniform to non-uniform PC = one divergence event.
+                uint32_t ref_pc      = UINT32_MAX;
+                bool     pcs_uniform = true;
+                for (auto& w : wg.threads) {
+                    if (!w.active || !w.cu || w.cu->isComplete()) continue;
+                    uint32_t pc = w.cu->getCurrentPC();
+                    if (ref_pc == UINT32_MAX) ref_pc = pc;
+                    else if (pc != ref_pc) { pcs_uniform = false; break; }
+                }
+
+                if (!pcs_uniform && !wg.currently_diverged) {
+                    wg.currently_diverged = true;
+                    ++last_divergence_events_;
+                } else if (pcs_uniform && ref_pc != UINT32_MAX) {
+                    wg.currently_diverged = false;  // threads reconverged
+                }
+
+                // ── Collect completed threads; retire warp when all done ──────
+                bool all_done = true;
+                for (auto& w : wg.threads) {
+                    if (!w.active || !w.cu) continue;
+                    if (w.cu->isComplete()) {
+                        if (w.active) {
+                            last_cycles_       += w.cu->getTotalCycles();
+                            last_instructions_ += w.cu->getTotalInstructions();
+                            w.active = false;
+                        }
+                    } else {
+                        all_done = false;
+                    }
+                }
+
+                if (all_done) {
+                    wg.active = false;
+                    if (next_warp < total_warps)
+                        wg = makeWarpGroup(next_warp++);
                 }
             }
+            if (!any_active) break;
         }
 
-        if (!any_active) {
-            break;
+    } else {
+        // ── Single-thread-per-worker path (scalar kernels, threads_per_warp==1) ──
+        const uint32_t live_units = std::max<uint32_t>(1u,
+            std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units,
+                               total_threads));
+
+        std::vector<Worker> workers;
+        workers.reserve(live_units);
+        uint32_t next_thread = 0;
+        for (; next_thread < total_threads && workers.size() < live_units; ++next_thread)
+            workers.emplace_back(makeWorker(next_thread));
+
+        uint64_t cycle = 0;
+        while (true) {
+            bool any_active = false;
+            for (auto& worker : workers) {
+                if (!worker.active || !worker.cu) continue;
+                any_active = true;
+                worker.cu->step();
+                ++cycle;
+
+                if (cycle % 100000 == 0)
+                    std::cout << "[bridge]   ... " << cycle << " functional steps\n";
+
+                if (worker.cu->isComplete()) {
+                    last_cycles_       += worker.cu->getTotalCycles();
+                    last_instructions_ += worker.cu->getTotalInstructions();
+                    worker.active = false;
+                    if (next_thread < total_threads)
+                        worker = makeWorker(next_thread++);
+                }
+            }
+            if (!any_active) break;
         }
+
+        for (const auto& worker : workers)
+            if (worker.simt)
+                last_divergence_events_ += worker.simt->getTotalDivergenceEvents();
     }
 
     std::cout << "[bridge] Execution complete: "
               << last_cycles_ << " cycles, "
               << last_instructions_ << " instructions\n";
 
-    last_l1_hits_      = static_cast<uint32_t>(mem.getL1CacheHits());
-    last_l1_misses_    = static_cast<uint32_t>(mem.getL1CacheMisses());
-    last_divergence_events_ = 0;
-    for (const auto& worker : workers) {
-        if (worker.simt) {
-            last_divergence_events_ += worker.simt->getTotalDivergenceEvents();
-        }
-    }
+    last_l1_hits_   = static_cast<uint32_t>(mem.getL1CacheHits());
+    last_l1_misses_ = static_cast<uint32_t>(mem.getL1CacheMisses());
+    // last_divergence_events_ already set in the execution path above
     last_grid_x_       = effective_grid_x;
     last_grid_y_       = effective_grid_y;
     last_grid_z_       = effective_grid_z;

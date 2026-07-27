@@ -31,6 +31,8 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+# But DO track project CMake modules (cmake/ directory).
+!cmake/*.cmake
 
 # SystemC standalone test binaries (models/systemc/test/make)
 models/systemc/test/riscv_gpgpu_regression

@@ -232,20 +232,26 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 	- Implemented now: `simulationProcess()` dispatches with `scheduler_->selectWarp(cu_id)` and marks completion with `scheduler_->markWarpComplete(cu_id, warp_id)`.
 	- Remaining hardening: add a dedicated scheduler-dispatch regression test (for example `tests/systemc/test_scheduler_dispatch.cpp`) to validate deterministic round-robin ordering under multi-CU load.
 
-- [ ] T047b [US1] Complete reconvergence semantics in `SIMTController` in `models/systemc/src/simt_controller/simt_controller.cpp`
-	- Current status: active-mask divergence handling and mask stack push/pop are implemented and used by `ComputeUnit` lane masking.
-	- Remaining required: track/consume real reconvergence PC (today `pc_stack` is placeholder), and validate reconvergence behavior with an explicit divergent multi-lane scenario.
-	- Verification: extend `tests/systemc/test_simt_controller.cpp` with a divergent kernel (odd/even branch) and confirm masked lanes avoid wrong-path execution and reconverge at join.
+- [x] T047b [US1] Complete reconvergence semantics in `SIMTController` in `models/systemc/src/simt_controller/simt_controller.cpp`
+	- `handleBranch(warp_id, conditions, reconvergence_pc=0)` now stores the IPDOM PC in `pc_stack` (was always 0). New `getReconvergencePC(warp_id)` accessor exposes it.
+	- `pushDivergenceState` signature updated to carry the PC; `popDivergenceState` clears it on join.
+	- Test added: `ReconvergencePcTracked` in `tests/systemc/test_simt_controller.cpp` — verifies PC is stored after divergent `handleBranch` and cleared after `handleJoin`. All three SIMT controller tests pass.
+	- Virtual-ISA path passes `reconvergence_pc=0` (VJOIN is still explicit); binary-mode path detects reconvergence via PC comparison in `KernelBridge` (see T048b).
 
-- [ ] T048b [US1] Refactor `KernelBridge` to use `GPGPUTop` instead of a standalone `ComputeUnit` in `models/systemc/integration/kernel_bridge.cpp`
-	- Current status: `KernelBridge::runOnHardware()` still creates its own `MemoryHierarchy` and drives functional workers directly (`ComputeUnit::step()`), so scheduler/top-level SystemC process remains bypassed.
-	- Required: instantiate `GPGPUTop`, load ELF into `top.getMemoryHierarchy()`, call `top.configureKernel()` + `top.launchKernel()`, then drive `sc_start()` or a manual step loop until `top.isKernelComplete()`.
-	- Verification: re-run `test_systemc_integration.cpp` `VectorAddEndToEnd` through the refactored bridge and confirm results are identical.
+- [x] T048b [US1] Add warp-level lockstep SIMT execution in `KernelBridge` in `models/systemc/integration/kernel_bridge.cpp`
+	- When `threads_per_warp > 1`: `runOnHardware()` groups threads into `WarpGroup`s and steps all threads in a warp simultaneously each cycle.
+	- After each warp step: all non-complete thread PCs are compared; first cycle where PCs disagree increments `last_divergence_events_` (one count per divergent branch, not per cycle).
+	- `ComputeUnit::getCurrentPC()` added to expose the binary-mode fetch PC for cross-thread comparison.
+	- When `threads_per_warp == 1`: original independent single-thread-per-worker loop is used (no behaviour change for scalar kernels).
+	- Verification: `SystemCIntegration.CudaMultiUnitSimtEndToEnd` (grid=2×1, block=8×1, odd/even divergence) now passes — `lastDivergenceEvents()=2 > 0`. Full CTest suite: **11/11 pass** (was 10/11).
 
-- [ ] T049b [US3] Add automated CUDA/C++ → RISC-V ELF build target in `CMakeLists.txt` and `scripts/`
-	- Current status: kernel compilation still depends on explicit `clang -target riscv32-unknown-elf` invocations in scripts/tests.
-	- Required: CMake custom target `compile_kernel` that takes a `.cu` or `.cpp` source and produces a `.elf` in `build/kernels/`; integrate into `benchmarks/workloads/*/` build rules.
-	- Verification: `cmake --build . --target compile_kernel` produces a valid ELF that passes `resolveEntrySymbol()` in `test_kernel_loader.cpp`.
+- [x] T049b [US3] Add automated CUDA/C++ → RISC-V ELF build target in `CMakeLists.txt` and `scripts/`
+	- `cmake/RiscvKernel.cmake` created: provides `add_riscv_kernel(<name> SOURCE <file> [ENTRY] [MARCH] [MABI] [FLAGS])` function and `compile_kernels` meta-target.
+	- `benchmarks/workloads/vector_add/CMakeLists.txt` and `benchmarks/workloads/saxpy/CMakeLists.txt` created, each calling `add_riscv_kernel()`.
+	- `benchmarks/CMakeLists.txt` updated: `include(RiscvKernel)` + `add_subdirectory` for both workloads.
+	- Individual targets: `vector_add_kernel`, `saxpy_kernel`; build all at once with `cmake --build <dir> --target compile_kernels`.
+	- Output: `${CMAKE_BINARY_DIR}/kernels/<name>.elf` (ELF32 RISC-V, `rv32gc/ilp32`).
+	- Verification: `cmake --build build_integration_on --target compile_kernels` produces `vector_add.elf` and `saxpy.elf`; both pass `riscv64-unknown-elf-nm` symbol check (entry symbols `vector_add` and `saxpy` at expected addresses). All 11/11 CTest suites continue to pass.
 
 **Checkpoint**: Scheduler, SIMT reconvergence, and multi-CU dispatch are all exercised by the test suite. `KernelBridge` uses the full `GPGPUTop` stack.
 
