@@ -38,6 +38,12 @@ public:
     bool loadSharedMemory (Address addr, uint32_t& data);
     bool storeSharedMemory(Address addr, uint32_t  data);
 
+    // Bulk byte-granular access — maps 1:1 to AXI DMA transfers on FPGA.
+    // writeBytes: load ELF segments and H2D buffer copies into simulation memory.
+    // readBytes:  D2H result copies back to the driver/host.
+    void writeBytes(Address addr, const uint8_t* data, size_t len);
+    void readBytes (Address addr, uint8_t*       data, size_t len);
+
     bool cacheHit      (Address addr, CacheStatus& status);
     void invalidateCache();
 

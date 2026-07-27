@@ -1,6 +1,6 @@
 # CMakeLists.txt - Runtime
 
 # Subdirectories for runtime components
-# add_subdirectory(src)
+add_subdirectory(src)
 
-message(STATUS "Runtime subdirectory (ready for implementation)")
+message(STATUS "Runtime subdirectory configured")

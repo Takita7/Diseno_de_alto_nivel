@@ -26,13 +26,18 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Project features
 option(BUILD_SYSTEMC_MODELS "Build SystemC models" ON)
+option(BUILD_SYSTEMC_INTEGRATION "Build SystemC software integration layer" OFF)
 option(BUILD_TESTS "Build test suites" ON)
 option(BUILD_HLS "Build HLS implementation (requires Vitis HLS)" OFF)
 option(BUILD_BENCHMARKS "Build benchmark utilities" ON)
 option(BUILD_DOCUMENTATION "Build documentation" OFF)
 
 # Find required packages
-find_package(SystemC REQUIRED)
+if(BUILD_SYSTEMC_MODELS)
+    find_package(SystemC REQUIRED)
+else()
+    message(STATUS "BUILD_SYSTEMC_MODELS is OFF; skipping SystemC detection")
+endif()
 
 # Optional packages
 if(BUILD_TESTS)
@@ -46,10 +51,14 @@ if(BUILD_HLS)
 endif()
 
 # Add subdirectories
-add_subdirectory(models)
+# driver must come before software/runtime because host_api and runtime link against driver_lib.
+add_subdirectory(driver)
 add_subdirectory(software)
 add_subdirectory(runtime)
-add_subdirectory(driver)
+
+if(BUILD_SYSTEMC_MODELS OR SystemC_FOUND)
+    add_subdirectory(models)
+endif()
 
 if(BUILD_TESTS)
     add_subdirectory(tests)
@@ -63,6 +72,7 @@ endif()
 message(STATUS "RISCV_GPGPU Build Configuration:")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  SystemC Models: ${BUILD_SYSTEMC_MODELS}")
+message(STATUS "  SystemC Integration: ${BUILD_SYSTEMC_INTEGRATION}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  HLS: ${BUILD_HLS}")
 message(STATUS "  Benchmarks: ${BUILD_BENCHMARKS}")

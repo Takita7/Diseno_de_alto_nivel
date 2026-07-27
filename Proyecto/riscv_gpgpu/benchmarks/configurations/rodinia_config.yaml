@@ -1,0 +1,60 @@
+# Rodinia benchmark selection for RISCV GPGPU
+benchmark_suite:
+  enable_rodinia: true
+  enable_custom_micro: false
+  enable_design_space: false
+
+rodinia_benchmarks:
+  - bfs
+  - hotspot
+  - needle
+  - gaussian
+  - lavamds
+
+measurements:
+  enable_counters: true
+  counters:
+    - instruction_count
+    - cycle_count
+    - cache_misses
+    - memory_bandwidth
+  sample_frequency: 1000
+  enable_tracing: false
+
+workloads:
+  data_sizes:
+    small: 4096
+    medium: 16384
+    large: 65536
+  kernel_config:
+    default_grid_x: 16
+    default_grid_y: 1
+    default_block_x: 256
+    default_block_y: 1
+  iterations: 3
+  warmup_runs: 1
+
+architecture:
+  num_compute_units: 4
+  threads_per_warp: 32
+  shared_mem_size: 32768
+  l1_cache_size: 16384
+  l2_cache_size: 262144
+  clock_frequency: 100
+
+results:
+  output_dir: "results/benchmarks/rodinia"
+  format: "json"
+  detailed_per_kernel: true
+  detailed_per_warp: false
+
+analysis:
+  generate_plots: false
+  stat_level: "basic"
+  confidence_level: 0.95
+  generate_html_report: false
+
+logging:
+  log_level: "INFO"
+  log_file: "rodinia_benchmarks.log"
+  stdout_logging: true
