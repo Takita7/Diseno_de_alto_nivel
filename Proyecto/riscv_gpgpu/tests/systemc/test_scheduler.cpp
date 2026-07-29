@@ -4,7 +4,7 @@
 //
 
 #include <gtest/gtest.h>
-#include "../../models/systemc/scheduler/warp_scheduler.h"
+#include "../../models/systemc/src/scheduler/warp_scheduler.h"
 
 using namespace riscv_gpgpu;
 

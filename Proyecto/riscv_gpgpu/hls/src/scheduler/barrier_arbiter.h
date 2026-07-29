@@ -1,0 +1,100 @@
+// barrier_arbiter.h - HLS-synthesizable global barrier/launch arbiter
+//
+// Golden reference: GPGPUTop::simulationProcess()'s barrier_queue mechanics
+// (models/systemc/src/top/top.cpp) - specifically the release condition
+// `barrier_queue.size() == total_warps_` (top.cpp:157), global across every
+// CU, ported bit-faithfully per docs/hls/interfaces.md SS10.6 (the barrier
+// scope reversal - global, not block-scoped).
+//
+// One instance, system-wide - counts arrivals across every CuDispatchUnit
+// instead of each CU deciding release locally (docs/hls/interfaces.md
+// SS10.7). Deliberately decoupled from CuDispatchUnit: this class holds no
+// reference to any CuDispatchUnit and never inspects one directly. The
+// top-level wiring (not yet built - docs/hls/interfaces.md SS2.5's step 7)
+// is responsible for calling onEvent() here and the matching
+// CuDispatchUnit::recordResult() together, every time a warp_status_t comes
+// back from compute_pipeline, and for calling releaseBarrier() on every
+// CuDispatchUnit once releaseReady() is true, followed by
+// acknowledgeRelease() here. Keeping the two classes independent means each
+// is fully testable on its own (this file's smoke test builds real
+// CuDispatchUnit instances specifically to exercise that intended pairing,
+// without the two classes depending on each other's internals).
+//
+// Verification note on the release condition: `stalled_count_ ==
+// total_warps_` only becomes true if EVERY warp in the kernel is currently
+// stalled - if even one warp completes without ever reaching the barrier,
+// stalled_count_ can never reach total_warps_ again (done_count_ absorbs
+// it instead), so releaseReady() correctly never fires. This reproduces
+// simulationProcess()'s own inherited requirement (docs/hls/interfaces.md
+// SS10.7's "inherited assumption" note) - a kernel with non-uniform barrier
+// participation hangs the golden model too, in software - as a direct
+// consequence of the counter arithmetic, not a special case added here.
+
+#ifndef RISCV_GPGPU_HLS_BARRIER_ARBITER_H
+#define RISCV_GPGPU_HLS_BARRIER_ARBITER_H
+
+#include "../common/hls_config.h"
+#include "../common/hls_types.h"
+
+namespace riscv_gpgpu_hls {
+
+class BarrierArbiter {
+public:
+    // Called once per kernel launch. Latches total_warps and performs the
+    // SS10.6 hazard mitigation: a kernel bigger than the hardware's
+    // declared resident capacity is an invalid launch, not a silent hang.
+    void launch(warp_id_t total_warps) {
+        total_warps_   = total_warps;
+        stalled_count_ = 0;
+        done_count_    = 0;
+        launch_fault_  = (total_warps > warp_id_t(NUM_CUS * MAX_WARPS_PER_CU));
+    }
+
+    // Host-visible `status.fault` (docs/hls/interfaces.md SS2.5.6).
+    bool launchFault() const { return launch_fault_; }
+
+    // Call once per {cu_id, slot_id, new_state} transition, alongside the
+    // matching CuDispatchUnit::recordResult() - cu_id/slot_id aren't needed
+    // here, only the state, since this class counts, it doesn't route.
+    void onEvent(WarpStatusCode code) {
+        if (code == WarpStatusCode::COMPLETE) {
+            ++done_count_;
+        } else {   // STALLED_AT_BARRIER
+            ++stalled_count_;
+        }
+    }
+
+    // True once every warp in the kernel is simultaneously stalled at a
+    // barrier - matches simulationProcess()'s barrier_queue.size() ==
+    // total_warps_ check exactly, global across all CUs.
+    bool releaseReady() const {
+        return total_warps_ != 0 && stalled_count_ == total_warps_;
+    }
+
+    // Call after broadcasting release (CuDispatchUnit::releaseBarrier()) to
+    // every CU - resets the arrival counter for the kernel's next wave, if
+    // any. done_count_ is untouched; it accumulates across the whole kernel.
+    void acknowledgeRelease() {
+        stalled_count_ = 0;
+    }
+
+    // True once every warp in the kernel has reached COMPLETE, across every
+    // wave - the whole kernel is finished.
+    bool kernelComplete() const {
+        return total_warps_ != 0 && done_count_ == total_warps_;
+    }
+
+    warp_id_t totalWarps()   const { return total_warps_; }
+    warp_id_t stalledCount() const { return stalled_count_; }
+    warp_id_t doneCount()    const { return done_count_; }
+
+private:
+    warp_id_t total_warps_   = 0;
+    warp_id_t stalled_count_ = 0;
+    warp_id_t done_count_    = 0;
+    bool      launch_fault_  = false;
+};
+
+}  // namespace riscv_gpgpu_hls
+
+#endif  // RISCV_GPGPU_HLS_BARRIER_ARBITER_H

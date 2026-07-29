@@ -5,7 +5,8 @@
 
 #include <gtest/gtest.h>
 #include <systemc>
-#include "../../models/systemc/top/top.h"
+#include "../../models/systemc/src/top/top.h"
+#include "../../models/systemc/src/common/kernel_programs.h"
 
 using namespace riscv_gpgpu;
 
@@ -26,17 +27,33 @@ protected:
 TEST_F(PipelineIntegrationTest, KernelLaunchSucceeds) {
     // Test that kernel can be launched
     GPGPUTop top("gpgpu_top", config);
-    
+    // Zero-time sc_start() to leave elaboration and enter the simulation
+    // phase before launchKernel()'s immediate sc_event::notify() - matches
+    // models/systemc/test/regression_test.cpp's sequencing (line 96 there);
+    // without it SystemC throws E521 "immediate notification is not allowed
+    // during update phase or elaboration". Missing here originally - this
+    // GTest file predates launchKernel() requiring this and was never
+    // updated to match.
+    sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
+
     EXPECT_NO_THROW({
-        top.launchKernel(4, 1);
+        top.launchKernel(4, 1, kernels::intSaxpy());
     });
 }
 
 TEST_F(PipelineIntegrationTest, KernelExecutionCompletes) {
     // Test that kernel execution completes
     GPGPUTop top("gpgpu_top", config);
-    
-    top.launchKernel(4, 1);
+    // Zero-time sc_start() to leave elaboration and enter the simulation
+    // phase before launchKernel()'s immediate sc_event::notify() - matches
+    // models/systemc/test/regression_test.cpp's sequencing (line 96 there);
+    // without it SystemC throws E521 "immediate notification is not allowed
+    // during update phase or elaboration". Missing here originally - this
+    // GTest file predates launchKernel() requiring this and was never
+    // updated to match.
+    sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
+
+    top.launchKernel(4, 1, kernels::intSaxpy());
     
     // Run simulation for some cycles
     sc_core::sc_start(1000, sc_core::SC_NS);
@@ -48,8 +65,16 @@ TEST_F(PipelineIntegrationTest, KernelExecutionCompletes) {
 TEST_F(PipelineIntegrationTest, StatisticsCollected) {
     // Test that statistics are collected
     GPGPUTop top("gpgpu_top", config);
-    
-    top.launchKernel(4, 1);
+    // Zero-time sc_start() to leave elaboration and enter the simulation
+    // phase before launchKernel()'s immediate sc_event::notify() - matches
+    // models/systemc/test/regression_test.cpp's sequencing (line 96 there);
+    // without it SystemC throws E521 "immediate notification is not allowed
+    // during update phase or elaboration". Missing here originally - this
+    // GTest file predates launchKernel() requiring this and was never
+    // updated to match.
+    sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
+
+    top.launchKernel(4, 1, kernels::intSaxpy());
     sc_core::sc_start(1000, sc_core::SC_NS);
     
     uint64_t cycles = top.getTotalCycles();
@@ -62,8 +87,16 @@ TEST_F(PipelineIntegrationTest, StatisticsCollected) {
 TEST_F(PipelineIntegrationTest, CacheStatistics) {
     // Test cache hit/miss statistics
     GPGPUTop top("gpgpu_top", config);
-    
-    top.launchKernel(4, 1);
+    // Zero-time sc_start() to leave elaboration and enter the simulation
+    // phase before launchKernel()'s immediate sc_event::notify() - matches
+    // models/systemc/test/regression_test.cpp's sequencing (line 96 there);
+    // without it SystemC throws E521 "immediate notification is not allowed
+    // during update phase or elaboration". Missing here originally - this
+    // GTest file predates launchKernel() requiring this and was never
+    // updated to match.
+    sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
+
+    top.launchKernel(4, 1, kernels::intSaxpy());
     sc_core::sc_start(1000, sc_core::SC_NS);
     
     uint32_t l1_hits = top.getL1CacheHits();
@@ -76,8 +109,16 @@ TEST_F(PipelineIntegrationTest, CacheStatistics) {
 TEST_F(PipelineIntegrationTest, DivergenceTracking) {
     // Test divergence event tracking
     GPGPUTop top("gpgpu_top", config);
-    
-    top.launchKernel(4, 1);
+    // Zero-time sc_start() to leave elaboration and enter the simulation
+    // phase before launchKernel()'s immediate sc_event::notify() - matches
+    // models/systemc/test/regression_test.cpp's sequencing (line 96 there);
+    // without it SystemC throws E521 "immediate notification is not allowed
+    // during update phase or elaboration". Missing here originally - this
+    // GTest file predates launchKernel() requiring this and was never
+    // updated to match.
+    sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));
+
+    top.launchKernel(4, 1, kernels::intSaxpy());
     sc_core::sc_start(1000, sc_core::SC_NS);
     
     uint32_t divergence_events = top.getDivergenceEvents();
