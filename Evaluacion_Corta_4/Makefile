@@ -4,10 +4,10 @@
 # Estructura esperada:
 #   ec4/
 #   ├── src/        accelerator.cpp/h  bus.h  cpu.h  ram.h  storage.cpp/h
-#   ├── test/       top_test.cpp  images/  scripts/
-#   ├── rtl/        (Fase 3 – Verilog)
-#   ├── uvm/        (Fase 4 – UVM)
-#   └── Makefile    ← este archivo, en la raíz
+#   ├── test/       top_test.cpp  images/  scripts/  sim_main.cpp
+#   ├── rtl/        ram_axi4.sv
+#   ├── uvm/        UVM testbench
+#   └── Makefile    ← este archivo, en la raiz
 # =============================================================================
 
 # ── HERRAMIENTAS ───────────────────────────────────────────────────────────────
@@ -19,6 +19,7 @@ TARGET   := tlm_image
 # ── DIRECTORIOS ────────────────────────────────────────────────────────────────
 SRC_DIR   := src
 TEST_DIR  := test
+RTL_DIR   := rtl
 BUILD_DIR := build
 IMG_DIR   := $(TEST_DIR)/images
 SCRIPTS   := $(TEST_DIR)/scripts
@@ -29,19 +30,19 @@ INCLUDES     := -I$(SYSTEMC_HOME)/include -I$(SRC_DIR)
 LIBDIR       := $(SYSTEMC_HOME)/lib-linux64
 LIBS         := -L$(LIBDIR) -lsystemc -lpthread
 
-# ── FUENTES ────────────────────────────────────────────────────────────────────
-# Módulos SystemC en src/
+# ── Verilator ─────────────────────────────────────────────────────────────────
+VERILATOR     := verilator
+VL_DIR        := $(BUILD_DIR)/verilator
+VL_TARGET     := $(VL_DIR)/Vram_axi4
+RTL_TOP       := ram_axi4
+
+# ── FUENTES SystemC ────────────────────────────────────────────────────────────
 SRC_SRCS  := $(SRC_DIR)/storage.cpp \
              $(SRC_DIR)/accelerator.cpp
-
-# Top-level / testbench en test/
 TEST_SRCS := $(TEST_DIR)/top_test.cpp
-
 ALL_SRCS  := $(SRC_SRCS) $(TEST_SRCS)
 
 # ── OBJETOS Y DEPENDENCIAS ─────────────────────────────────────────────────────
-# src/  → build/src/<name>.o
-# test/ → build/test/<name>.o   (subdirectorio separado = sin conflicto de patrones)
 SRC_OBJS  := $(patsubst $(SRC_DIR)/%.cpp,  $(BUILD_DIR)/src/%.o,  $(SRC_SRCS))
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.cpp, $(BUILD_DIR)/test/%.o, $(TEST_SRCS))
 OBJS      := $(SRC_OBJS) $(TEST_OBJS)
@@ -49,7 +50,7 @@ DEPS      := $(OBJS:.o=.d)
 
 # ── PHONY ──────────────────────────────────────────────────────────────────────
 .PHONY: all dirs gen run exec rebuild clean clean-build clean-all info help \
-        view compare view-show
+        view compare view-show verilate run_vl clean_vl lint
 
 # ── TARGETS PRINCIPALES ────────────────────────────────────────────────────────
 all: dirs $(TARGET)
@@ -108,6 +109,42 @@ view-show: compare
 	open     $(IMG_DIR)/comparison.png 2>/dev/null || \
 	echo "  [!] No se pudo abrir imagen automáticamente"
 
+# ── VERILATOR ─────────────────────────────────────────────────────────────────
+# lint   - solo verifica sintaxis y semantica del RTL
+# verilate - genera el modelo C++ y compila junto con sim_main.cpp
+# run_vl   - corre el testbench C++ standalone
+# clean_vl - elimina solo los artefactos de Verilator
+
+lint:
+	@echo "[Lint] Verificando rtl/$(RTL_TOP).sv..."
+	$(VERILATOR) --lint-only -Wall $(RTL_DIR)/$(RTL_TOP).sv
+	@echo "[OK]  Lint limpio"
+
+verilate: | $(VL_DIR)
+	@echo "[VL]  Generando modelo C++ desde $(RTL_DIR)/$(RTL_TOP).sv..."
+	$(VERILATOR) --cc --exe --build --trace \
+		-CFLAGS "-std=c++17 -Wall" \
+		--Mdir $(VL_DIR) \
+		$(RTL_DIR)/$(RTL_TOP).sv \
+		$(abspath $(TEST_DIR)/sim_main.cpp)
+	@echo "[OK]  Verilator build completo: $(VL_TARGET)"
+
+run_vl: verilate
+	@echo "[Run] Corriendo testbench Verilator..."
+	$(VL_TARGET)
+
+run_vl_trace: verilate
+	@echo "[Run] Corriendo con VCD trace..."
+	$(VL_TARGET) +trace
+	@echo "[OK]  Waveforms en sim_main.vcd"
+
+$(VL_DIR):
+	@mkdir -p $(VL_DIR)
+
+clean_vl:
+	@rm -rf $(VL_DIR)
+	@echo "[OK]  Artefactos Verilator eliminados"
+
 # ── LIMPIEZA ───────────────────────────────────────────────────────────────────
 rebuild: clean all
 	@echo "✓ Rebuild completado"
@@ -142,16 +179,21 @@ help:
 	@echo "╔════════════════════════════════════════════════════════════════╗"
 	@echo "║              Targets disponibles                               ║"
 	@echo "╠════════════════════════════════════════════════════════════════╣"
-	@echo "║ make all          Compilar (default)                           ║"
+	@echo "║  --- SystemC (Phase 1/2) ---                                   ║"
+	@echo "║ make all          Compilar SystemC                             ║"
 	@echo "║ make gen          Generar imagen de prueba RAW                 ║"
 	@echo "║ make run          Compilar + generar imagen + simular          ║"
 	@echo "║ make exec         Simular (imagen ya existente)                ║"
-	@echo "║ make view         Ver salida en escala de grises               ║"
 	@echo "║ make compare      Generar figura: input.raw vs output.raw      ║"
-	@echo "║ make view-show    Abrir figura de comparación                  ║"
+	@echo "║  --- Verilator (Phase 5) ---                                   ║"
+	@echo "║ make lint         Lint del RTL con Verilator                   ║"
+	@echo "║ make verilate     Generar modelo C++ + compilar sim_main       ║"
+	@echo "║ make run_vl       Correr testbench C++ standalone              ║"
+	@echo "║ make run_vl_trace Igual pero con VCD trace                     ║"
+	@echo "║ make clean_vl     Eliminar artefactos Verilator                ║"
+	@echo "║  --- General ---                                               ║"
 	@echo "║ make rebuild      Limpiar y compilar todo                      ║"
 	@echo "║ make clean        Eliminar objetos y binario                   ║"
-	@echo "║ make clean-all    Eliminar todo (incluyendo imágenes)          ║"
-	@echo "║ make info         Mostrar configuración del build              ║"
-	@echo "║ make help         Este mensaje                                 ║"
+	@echo "║ make clean-all    Eliminar todo (incluyendo imagenes)          ║"
+	@echo "║ make info         Mostrar configuracion del build              ║"
 	@echo "╚════════════════════════════════════════════════════════════════╝"

@@ -1,6 +1,11 @@
 // =============================================================================
 // ram_axi4.sv  –  Memoria RAM 64 MB con interfaz AXI4 Full
 //
+// Parámetros:
+//   DATA_WIDTH  –  ancho del bus de datos en bits  (default: 32)
+//   ADDR_WIDTH  –  bits de dirección byte-addressable (default: 26 → 64 MB)
+//   ID_WIDTH    –  ancho del campo ID  (default: 4)
+//
 // Protocolo:
 //   - Burst type INCR (2'b01) soportado completamente
 //   - Burst type FIXED (2'b00) soportado (dirección no avanza)
@@ -9,14 +14,14 @@
 //   - Byte enables (wstrb) aplicados correctamente
 //
 // Paths independientes:
-//   Write: AW -> W beats -> B response
-//   Read:  AR -> R beats
+//   Write: AW → W beats → B response
+//   Read:  AR → R beats
 //   Ambos paths corren en paralelo sin interferencia.
 // =============================================================================
 `timescale 1ns/1ps
 
 module ram_axi4 #(
-    parameter int DATA_WIDTH = 32,  
+    parameter int DATA_WIDTH = 32,
     parameter int ADDR_WIDTH = 26,
     parameter int ID_WIDTH   = 4
 ) (
@@ -64,8 +69,8 @@ module ram_axi4 #(
 );
 
     // ── Constantes locales ───────────────────────────────────────────────────
-    localparam int STRB_WIDTH = DATA_WIDTH / 8;                 // bytes por beat
-    localparam int WORD_BITS  = $clog2(STRB_WIDTH);             // bits de offset intrapalabra
+    localparam int STRB_WIDTH = DATA_WIDTH / 8;             // bytes por beat
+    localparam int WORD_BITS  = $clog2(STRB_WIDTH);         // bits de offset intrapalabra
     localparam int MEM_DEPTH  = (1 << ADDR_WIDTH) / STRB_WIDTH; // palabras totales
 
     // ── Memoria ──────────────────────────────────────────────────────────────
@@ -73,7 +78,7 @@ module ram_axi4 #(
 
     // =========================================================================
     // WRITE PATH
-    // FSM: WS_IDLE -> WS_DATA -> WS_RESP -> WS_IDLE
+    // FSM: WS_IDLE → WS_DATA → WS_RESP → WS_IDLE
     // =========================================================================
     typedef enum logic [1:0] {
         WS_IDLE = 2'b00,
@@ -87,11 +92,11 @@ module ram_axi4 #(
     logic [ADDR_WIDTH-1:0] waddr_r;
     logic [1:0]            wburst_r;
 
-    // Próxima dirección de escritura 
+    // Próxima dirección de escritura (combinacional)
     logic [ADDR_WIDTH-1:0] w_next_addr;
     always_comb begin
         w_next_addr = (wburst_r == 2'b01) ? waddr_r + ADDR_WIDTH'(STRB_WIDTH)
-                                          : waddr_r;
+                                           : waddr_r;
     end
 
     always_ff @(posedge clk or negedge rst) begin
@@ -158,7 +163,7 @@ module ram_axi4 #(
 
     // =========================================================================
     // READ PATH
-    // FSM: RS_IDLE -> RS_DATA -> RS_IDLE
+    // FSM: RS_IDLE → RS_DATA → RS_IDLE
     // El primer beat se presenta en el mismo ciclo en que llega arvalid.
     // =========================================================================
     typedef enum logic [1:0] {
@@ -174,11 +179,11 @@ module ram_axi4 #(
     logic [7:0]            rbeat_r;
     logic [1:0]            rburst_r;
 
-    // Próxima dirección de lectura 
+    // Próxima dirección de lectura (combinacional)
     logic [ADDR_WIDTH-1:0] r_next_addr;
     always_comb begin
         r_next_addr = (rburst_r == 2'b01) ? raddr_r + ADDR_WIDTH'(STRB_WIDTH)
-                                          : raddr_r;
+                                           : raddr_r;
     end
 
     always_ff @(posedge clk or negedge rst) begin
@@ -242,4 +247,14 @@ module ram_axi4 #(
         end
     end
 
-endmodule
+    // =========================================================================
+    // Senales AXI4 intencionalmente no usadas por este slave:
+    //   awlen  : slave usa wlast para detectar ultimo beat (correcto per spec)
+    //   awsize : ancho de bus fijo = DATA_WIDTH bits, no se necesita decodificar
+    //   arsize : idem awsize para reads
+    // El assign dummy evita warnings de Verilator sin afectar la simulacion.
+    // =========================================================================
+    logic _unused;
+    assign _unused = &{awlen, awsize, arsize};
+
+endmodule 
