@@ -1,438 +1,369 @@
-# MP6160 – EC2: Sistema de Procesamiento de Imagen con SystemC TLM 2.0
-
-> **Diseño de Alto Nivel | II Cuatrimestre 2026**
-> Profesor: Luis G. León-Vega, Ph.D
+# EC4 — Diseño de Alto Nivel
+## Sistema de Procesamiento de Imágenes: TLM + RTL Verilog + UVM
 
 ---
 
-## Tabla de Contenidos
-1. [Descripción del Sistema](#descripción-del-sistema)
-2. [Requisitos e Instalación](#requisitos-e-instalación)
-3. [Compilación y Ejecución](#compilación-y-ejecución)
-4. [Organización del Repositorio](#organización-del-repositorio)
-5. [Organización de los Módulos](#organización-de-los-módulos)
-6. [Diagrama de Bloques](#diagrama-de-bloques)
-7. [Diagrama de Secuencias](#diagrama-de-secuencias)
-8. [Formato de Transacciones TLM](#formato-de-transacciones-tlm)
-9. [Mapa de Memoria](#mapa-de-memoria)
-10. [Resultados Obtenidos](#resultados-obtenidos)
-11. [Referencias](#referencias)
-12. [Declaración de Uso de IA](#declaración-de-uso-de-ia)
+## Descripción
+
+Sistema de procesamiento de imágenes 1080p RGB -> escala de grises, implementado en múltiples niveles de abstracción:
+
+- **SystemC TLM 2.0** — modelo behavioral del sistema completo (CPU, Bus, RAM, Acelerador)
+- **RTL SystemVerilog** — módulo RAM con interfaz AXI4 Full
+- **UVM** — ambiente de verificación del módulo RAM RTL
+- **Co-simulación Verilator** — integración SystemC + RTL Verilog
 
 ---
 
-## Descripción del Sistema
+## Requisitos
 
-Este proyecto modela a nivel de transacciones (TLM 2.0) un sistema embebido para
-procesamiento de imagen 1080p. El sistema implementa el siguiente flujo:
+### Software
 
-```
-Disco → CPU → RAM → Acelerador → RAM → CPU → Disco
-```
+| Herramienta          | Versión mínima | Propósito                |
+|----------------------|----------------|--------------------------|
+| g++                  | 11+            | Compilación C++17        |
+| SystemC              | 2.3.4          | Simulación TLM           |
+| Verilator            | 5.020+         | Transpilación RTL -> C++ |
+| Python 3             | 3.8+           | Scripts de imagen        |
+| VCS (EDA playground) | -              | UVM testbench            |
+| Pillow (PIL)         | -              | Visualización imágenes   |
 
-El acelerador convierte una imagen RAW RGB (1920×1080×3 bytes) a escala de grises
-usando una aproximación entera de la fórmula **ITU-R BT.601**:
-
-```
-Y = 0.299·R + 0.587·G + 0.114·B
-```
-
-Implementada en el acelerador como aritmética entera para evitar punto flotante:
-
-```cpp
-gray = (77·R + 150·G + 29·B) >> 8
-```
-
-Los coeficientes (77, 150, 29) son las aproximaciones enteras de los pesos BT.601
-escalados a 256.
-
----
-
-## Requisitos e Instalación
-
-### Dependencias
-
-| Herramienta | Versión mínima | Instalación (Ubuntu/Debian)        |
-|-------------|----------------|------------------------------------|
-| GCC / G++   | 9.0            | `sudo apt install build-essential` |
-| CMake       | 3.10           | `sudo apt install cmake`           |
-| SystemC     | 2.3.3          | Ver instrucciones abajo            |
-| Python 3    | 3.8            | `sudo apt install python3 python3-pip` |
-| NumPy       | 1.20           | `pip install numpy`                |
-| Pillow      | 8.0            | `pip install Pillow`               |
-
-### Instalación de SystemC
-
-SystemC no viene en los repositorios estándar de Ubuntu, hay que compilarlo desde
-la fuente oficial de Accellera.
-
-```bash
-# 1. Descargar el código fuente desde:
-#    https://www.accellera.org/downloads/standards/systemc
-#    (requiere registro gratuito en el sitio)
-tar -xzf systemc-2.3.4.tar.gz
-cd systemc-2.3.4
-
-# 2. Compilar e instalar
-mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local/systemc
-make -j$(nproc)
-sudo make install
-
-# 3. Verificar instalación
-ls /usr/local/systemc/include/systemc.h
-```
-
-> Alternativa: en algunas distribuciones está disponible como `libsystemc-dev`
-> vía `apt`, pero suele ser una versión más antigua. Se recomienda compilar
-> desde la fuente para tener TLM 2.0 completo.
-
----
-
-## Compilación y Ejecución
-
-```bash
-# 1. Clonar el repositorio
-git clone https://github.com/Takita7/Diseno_de_alto_nivel.git
-cd Evaluacion_Corta_2/test
-
-# 2. Compilar (ajustar la ruta si SystemC está en otro lugar)
-make all SYSTEMC_HOME=/usr/local/systemc
-
-# 3. Generar la imagen de prueba (patrón sintético 1920×1080 RGB)
-make gen
-
-# 4. Ejecutar la simulación completa (compila + corre + genera comparación)
-make run
-```
-
-También se puede ejecutar paso a paso:
-
-```bash
-make exec      # Ejecutar con imagen de entrada ya existente
-make view      # Ver salida en escala de grises
-make compare   # Generar figura comparativa input vs output
-make view-show # Abrir la figura de comparación automáticamente
-```
-
-Salida esperada en consola:
-
-```
-[CPU] PASO 1: Cargando imagen desde disco
-[STORAGE] Cargado: images/input.raw (6220800 bytes)
-[CPU] PASO 2: Escribiendo imagen en RAM
-[CPU] PASO 3: Configurando acelerador
-[CPU] PASO 4: Iniciando acelerador
-[ACCEL] Iniciando conversion RGB->Gray
-[ACCEL] Progreso: 204800 / 2073600 px (9%)
-...
-[ACCEL] Conversion completada
-[CPU] PASO 5: Leyendo imagen procesada
-[CPU] PASO 6: Guardando imagen en disco
-[STORAGE] Guardado: images/output.raw (2073600 bytes)
-[CPU] Simulacion completada en X ns
-```
-
-### Limpiar artefactos de compilación
-
-```bash
-make clean        # Elimina objetos y binario
-make clean-all    # Elimina también las imágenes generadas
-```
-
----
 
 ## Organización del Repositorio
 
 ```
-Evaluacion_Corta_2/
-├── src/
-│   ├── sc_main.cpp          # Punto de entrada: instancia módulos y binding
-│   ├── storage.h / .cpp     # Almacenamiento persistente (E/S de archivos)
-│   ├── ram.h                # Memoria RAM de 64 MB (target TLM)
-│   ├── bus.h                # Bus TLM 2.0 (router de transacciones)
-│   ├── accelerator.h / .cpp # Acelerador RGB→Grayscale (target + initiator)
-│   └── cpu.h                # CPU (iniciador, controla el flujo)
-├── test/
-│   ├── Makefile             # Sistema de compilación
-│   ├── images/              # Imágenes de entrada y salida (.raw y previews .png)
-│   ├── scripts/
-│   │   ├── gen_raw.py       # Genera imagen de prueba 1080p RAW RGB
-│   │   ├── view_raw.py      # Visualiza un archivo .raw como imagen
-│   │   └── compare_raw.py   # Genera comparación entrada vs salida
-│   └── archived/            # Versiones previas del sc_main durante desarrollo
-└── README.md
+Evaluacion_Corta_4/
+├── src/                        # Módulos SystemC 
+│   ├── accelerator.cpp/h       # Acelerador grayscale con registros AXI-like
+│   ├── bus.h                   # Router TLM (RAM 64MB + Acelerador)
+│   ├── cpu.h                   # CPU
+│   ├── ram.h                   # RAM original 
+│   ├── ram_axi4_model.h        # RAM behavioral AXI4 
+│   ├── tlm_to_axi4_bridge.h    # Puente TLM -> AXI4 
+│   ├── axi4_if.h               # Structs de los 5 canales AXI4 Full
+│   ├── ram_rtl_sc.h            # Wrapper SystemC sobre Vram_axi4
+│   └── storage.cpp/h           # Almacenamiento persistente
+│
+├── rtl/                        # RTL SystemVerilog
+│   └── ram_axi4.sv             # RAM 64MB con puerto AXI4 Full
+│
+├── UVM/                        # Ambiente UVM 
+│   ├── axi4_if.sv              # Interface 
+│   ├── axi4_seq_item.sv        # Transaction object
+│   ├── axi4_driver.sv          # Driver AXI4
+│   ├── axi4_monitor.sv         # Monitor 
+│   ├── axi4_agent.sv           # Agente (driver + sequencer + monitor)
+│   ├── axi4_scoreboard.sv      # Shadow memory
+│   ├── axi4_coverage.sv        # Cobertura funcional
+│   ├── axi4_sequences.sv       # Secuencias (wr_rd, burst, strb, stress)
+│   ├── axi4_env.sv             # Environment completo
+│   ├── axi4_test.sv            # Tests (smoke, burst, stress)
+│   ├── axi4_pkg.sv             # Package wrapper
+│   └── tb_top.sv               # Top-level UVM
+│
+├── test/                       # Testbenches y scripts
+│   ├── top_test.cpp            # SystemC + AXI4 behavioral
+│   ├── top_test_DPI.cpp        # SystemC + RTL Verilog
+│   ├── sim_main.cpp            # Testbench C++ standalone (Verilator)
+│   ├── images/
+│   │   ├── input.raw           # Imagen de entrada 1080p RAW RGB
+│   │   ├── output.raw          # Imagen de salida grayscale
+│   │   ├── output_golden.raw   # Referencia para verificación formal
+│   │   └── comparison.png      # Figura comparativa generada
+│   └── scripts/
+│       ├── gen_raw.py          # Genera imagen de prueba RAW
+│       ├── compare_raw.py      # Figura comparativa input vs output
+│       ├── view_raw.py         # Visualizar imagen RAW
+│       └── verify_golden.py    # Verificación formal vs golden
+│
+├── Makefile                    # Build system completo
+└── README.md                   # Este archivo
 ```
-
-> **Nota:** El `Makefile` se encuentra dentro de `test/` y referencia las fuentes
-> en `../src`. Todos los comandos `make` deben ejecutarse desde `test/`.
 
 ---
 
 ## Organización de los Módulos
 
-### `Storage` (`src/storage.h`)
-- **Tipo:** Módulo SC sin sockets TLM.
-- **Responsabilidad:** Leer `images/input.raw` desde disco y escribir `images/output.raw`.
-- **Métodos:** `load_image()` devuelve `std::vector<uint8_t>`; `save_image()`
-  recibe el vector y lo escribe.
-- **Nota:** Usa `std::ios::binary` obligatoriamente para evitar corrupción de
-  datos binarios.
+### Mapa de Memoria (Bus)
 
-### `RAM` (`src/ram.h`)
-- **Tipo:** Target TLM 2.0 con `simple_target_socket`.
-- **Capacidad:** 64 MB implementados como `std::vector<uint8_t>`.
-- **Interfaces:** `b_transport` para transacciones normales; `transport_dbg`
-  para inspección sin avance de tiempo.
-- **Latencia modelada:** 1 ns por byte transferido.
+| Región            | Base         | Fin          | Tamaño  |
+|-------------------|--------------|--------------|---------|
+| RAM (entrada RGB) | `0x00000000` | `0x005EC3FF` | ~6.2 MB |
+| RAM (salida gray) | `0x00600000` | `0x007FABFF` | ~2.0 MB |
+| RAM total         | `0x00000000` | `0x03FFFFFF` | 64 MB   |
+| Acelerador (regs) | `0x04000000` | `0x040000FF` | 256 B   |
 
-### `Bus` (`src/bus.h`)
-- **Tipo:** Router TLM 2.0 con dos target sockets y dos initiator sockets.
-- **Lógica de ruteo:**
-  - `addr ≤ 0x03FFFFFF` → RAM
-  - `0x04000000 ≤ addr ≤ 0x040000FF` → Acelerador (offset = addr − 0x04000000)
-- **Importante:** Las transacciones originadas en el acelerador van siempre
-  directo a RAM, sin pasar por la lógica de decodificación.
+### Registros del Acelerador
 
-### `Accelerator` (`src/accelerator.h`)
-- **Tipo:** Target TLM 2.0 (registros de control) + Initiator TLM 2.0 (acceso
-  a RAM).
-- **Registros:** SRC, DST, CNT, CTRL, STATUS (ver mapa de memoria).
-- **Hilo `SC_THREAD process_thread`:** espera un `sc_event` que se dispara
-  cuando el CPU escribe `1` en `REG_CTRL`. Procesa en bloques de 1 024 píxeles.
-- **Fórmula:** ITU-R BT.601 — aproximación entera `(77·R + 150·G + 29·B) >> 8`.
-- **Latencia modelada:** 100 ns por bloque de 1 024 píxeles procesados.
+| Offset | Nombre            | Función                                |
+|--------|-------------------|----------------------------------------|
+| `0x00` | `REG_INPUT_ADDR`  | Dirección base imagen RGB entrada      |
+| `0x04` | `REG_OUTPUT_ADDR` | Dirección base imagen grayscale salida |
+| `0x08` | `REG_NUM_PIXELS`  | Cantidad total de píxeles              |
+| `0x0C` | `REG_CONTROL`     | Bit 0 = START                          |
+| `0x10` | `REG_STATUS`      | 0=IDLE, 1=BUSY, 2=DONE, 3=ERROR        |
 
-### `CPU` (`src/cpu.h`)
-- **Tipo:** Initiator TLM 2.0 con `simple_initiator_socket`.
-- **Hilo `SC_THREAD run`:** implementa los 6 pasos del flujo del sistema.
-- **Helpers privados:** `tlm_write`, `tlm_read`, `write_reg`, `read_reg`
-  encapsulan la construcción del `tlm_generic_payload`.
-- **Transferencias:** burst de 64 KB para DMA de imagen; escrituras de 4
-  bytes para registros.
-- **Polling:** lee `REG_STATUS` cada 500 ns hasta que el acelerador reporta
-  `STATUS_DONE = 2`.
-
----
 
 ## Diagrama de Bloques
 
+### SystemC TLM
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Sistema TLM 2.0                            │
-│                                                                 │
-│  ┌─────────┐  TLM   ┌──────────────────────────────────────┐    │
-│  │   CPU   │◄──────►│              BUS                     │    │
-│  │(Master) │        │   (Router de Transacciones TLM 2.0)  │    │
-│  └────┬────┘        └──────────┬───────────────┬───────────┘    │
-│       │                        │               │                │
-│       │ set_storage()          │ ram_socket    │ accel_out      │
-│       ▼                        ▼               ▼                │
-│  ┌─────────┐           ┌────────────┐  ┌──────────────────┐     │
-│  │ Storage │           │    RAM     │  │   Accelerator    │     │
-│  │(Archivo)│           │  (64 MB)   │  │  (RGB→Grayscale) │     │
-│  └─────────┘           │  Target    │  │  Target + Init   │     │
-│   load/save            └────────────┘  └────────┬─────────┘     │
-│   archivos RAW               ▲                   │              │
-│                              │    init_socket    │              │
-│                              └───────────────────┘              │
-│                          (Accel accede RAM via Bus)             │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────┐      TLM       ┌─────────────┐      TLM       ┌──────────────────┐
+│             │ ─────────────> │             │ ─────────────> │      RAM         │
+│     CPU     │                │     Bus     │                │ directo/AXI4     │ 
+│             │ <───────────── │             │ <───────────── │                  │
+└─────────────┘                │             │                │                  │
+      │ TLM                    │             │      TLM       └──────────────────┘
+      │ write/read             │             │ ─────────────>
+      ▼                        │             │ <─────────────  ┌──────────────────┐
+┌──────────────────┐           └─────────────┘                 │  Acelerador      │
+│PersistentStorage │                    ▲                      │  (grayscale)     │
+│  (disco)         │                    │ TLM                  └──────────────────┘
+└──────────────────┘                    │
+                                ┌───────┴──────┐
+                                │  Acelerador  │
+                                │  mem_socket  │
+                                └──────────────┘
 ```
 
-### Roles TLM de cada módulo
+### Co-simulación SystemC + RTL Verilog
 
-| Módulo      | Rol TLM                           | Socket(s)                                          |
-|-------------|-----------------------------------|----------------------------------------------------|
-| CPU         | Initiator                         | `simple_initiator_socket`                          |
-| RAM         | Target                            | `simple_target_socket`                             |
-| Bus         | Target + Initiator (router)       | 2 target sockets, 2 initiator sockets              |
-| Accelerator | Target (regs) + Initiator (datos) | `simple_target_socket` + `simple_initiator_socket` |
-| Storage     | Sin TLM                           | E/S directa de archivos                            |
+```
+┌─────────┐   TLM   ┌─────────┐   TLM   ┌──────────────────────────────────┐
+│   CPU   │────────►│   Bus   │────────►│  RAM_RTL_SC (wrapper SystemC)    │
+│(SC pure)│◄────────│(SC pure)│◄────────│  ┌────────────────────────────┐  │
+└─────────┘         └─────────┘         │  │  Vram_axi4                 │  │
+                         │              │  │  (C++ generado por         │  │
+                         │ TLM          │  │   Verilator desde          │  │
+                         ▼              │  │   ram_axi4.sv)             │  │
+                    ┌──────────┐        │  └────────────────────────────┘  │
+                    │Acelerador│        └──────────────────────────────────┘
+                    │(SC pure) │
+                    └──────────┘
+```
+
+### Ambiente UVM 
+
+```
+┌─────────────────────────────────────────────────────┐
+│  axi4_env                                           │
+│  ┌────────────────────────────────┐                 │
+│  │  axi4_agent                    │                 │
+│  │  ┌────────────┐ ┌──────────┐   │ analysis_port   │
+│  │  │ Sequencer  │ │ Monitor  │ ──┼────────────────>│axi4_scoreboard
+│  │  └─────┬──────┘ └──────────┘   │                 │(shadow memory)
+│  │        │                       │ analysis_port   │
+│  │  ┌─────▼──────┐                │────────────────>│axi4_coverage
+│  │  │   Driver   │                │                 │(covergroup)
+│  │  └─────┬──────┘                │                 │
+│  └─────────┼──────────────────────┘                 │
+└────────────┼────────────────────────────────────────┘
+             │ AXI4 signals
+             ▼
+        ┌──────────┐
+        │ram_axi4  │  (DUT)
+        │  .sv     │
+        └──────────┘
+```
 
 ---
 
 ## Diagrama de Secuencias
 
+### Flujo del CPU 
+
 ```
-CPU              Storage        Bus            RAM         Accelerator
- │                  │             │              │               │
- │──load_image()───►│             │              │               │
- │◄──vector<uint8>──┘             │              │               │
- │                                │              │               │
- │──TLM_WRITE(0x0000, 64KB)──────►│              │               │
- │                                │─TLM_WRITE───►│               │
- │                                │◄──OK─────────┤               │
- │◄───────────────────────────────┤              │               │
- │        (x N chunks 64KB)       │              │               │
- │                                │              │               │
- │──TLM_WRITE(REG_SRC, 0x0000)───►│──────────────────TLM_WRITE──►│
- │──TLM_WRITE(REG_DST, 0x600000)─►│──────────────────TLM_WRITE──►│
- │──TLM_WRITE(REG_CNT, 2073600)──►│──────────────────TLM_WRITE──►│
- │──TLM_WRITE(REG_CTRL, 1)───────►│──────────────────TLM_WRITE──►│
- │                                │              │          start_ev_.notify()
- │                                │              │               │──[SC_THREAD]─┐
- │──poll REG_STATUS (cada 500ns)  │              │               │  mem_read()  │
- │                                │              │◄──TLM_READ────┤              │
- │                                │              │───data────────►              │
- │                                │              │               │  BT.709      │
- │                                │              │               │  convert     │
- │                                │              │◄──TLM_WRITE───┤              │
- │                                │              │               │◄─────────────┘
- │                                │              │          STATUS_DONE
- │◄──REG_STATUS == 2─────────────────────────────┤               │
- │                                │              │               │
- │──TLM_READ(0x800000, 64KB)─────►│              │               │
- │                                │─TLM_READ────►│               │
- │                                │◄──data───────┤               │
- │◄───────────────────────────────┤              │               │
- │        (x N chunks 64KB)       │              │               │
- │                                │              │               │
- │──save_image()──────────────────►              │               │
- │◄───────────────────────────────┘              │               │
- │                                               │               │
-[sc_stop()]
+CPU              Storage          Bus              RAM            Acelerador
+ │                  │              │                │                 │
+ │──load_image()───►│              │                │                 │
+ │<─ rgb[6.2MB]  ───│              │                │                 │
+ │                  │              │                │                 │
+ │──TLM_WRITE(0x0, rgb) ──────────>│                │                 │
+ │                  │              │──TLM_WRITE────>│                 │
+ │<─ OK ─────────────────────────  │<─ OK ──────────│                 │
+ │                  │              │                │                 │
+ │──TLM_WRITE(ACCEL_REG_SRC)──────>│                │                 │
+ │──TLM_WRITE(ACCEL_REG_DST)──────>│                │                 │
+ │──TLM_WRITE(ACCEL_REG_CNT)──────>│                │                 │
+ │──TLM_WRITE(ACCEL_REG_CTRL=1)───>│──────────────────────────────>START
+ │                  │              │                │                 │
+ │──poll STATUS ───>│(loop)        │                │                 │
+ │        (espera DONE)            │                │ <─AXI4_RD────   │
+ │                  │              │                │ ──AXI4_WR────>  │
+ │<─ STATUS=DONE ──────────────────────────────────────────────────── │
+ │                  │              │                │                 │
+ │──TLM_READ(0x600000, gray)──────>│                │                 │
+ │<─ gray[2MB] ──────────────────  │<─ gray ────────│                 │
+ │                  │              │                │                 │
+ │──save_image()───>│              │                │                 │
+ │<─ OK ─────────── │              │                │                 │
+```
+
+### Protocolo AXI4 Full — Escritura burst (N beats)
+
+```
+Master (bridge)          Slave (ram_axi4.sv)
+       │                        │
+  ─────┤ AW: awvalid=1,         │
+       │     awaddr, awlen=N-1  │
+       │ ──────────────────────>│
+       │<── awready=1 ──────────│  handshake AW
+       │                        │
+  ─────┤ W[0]: wdata, wlast=0   │
+       │ ──────────────────────>│
+       │<── wready=1 ───────────│  handshake W[0]
+       │                        │
+      ...   (beats 1..N-2)     ...
+       │                        │
+  ─────┤ W[N-1]: wdata,wlast=1  │
+       │ ──────────────────────>│
+       │<── wready=1 ───────────│  handshake W[N-1]
+       │                        │
+       │<── B: bvalid=1,bresp=0 │  respuesta OKAY
+  ─────┤ bready=1               │
+       │ ──────────────────────>│  handshake B
 ```
 
 ---
 
-## Formato de Transacciones TLM
+## Instrucciones de Compilación y Ejecución
 
-Todas las transacciones usan `tlm::tlm_generic_payload` con los siguientes
-campos:
+### SystemC TLM
 
-| Campo              | Tipo                                        | Valor usado                     |
-|--------------------|---------------------------------------------|---------------------------------|
-| `command`          | `TLM_READ_COMMAND` / `TLM_WRITE_COMMAND`    | Según la operación              |
-| `address`          | `uint64_t`                                  | Dirección en el espacio de bus  |
-| `data_ptr`         | `uint8_t*`                                  | Puntero al buffer de datos      |
-| `data_length`      | `unsigned int`                              | Bytes a transferir              |
-| `streaming_width`  | `unsigned int`                              | Igual a `data_length`           |
-| `byte_enable_ptr`  | `nullptr`                                   | No se usa                       |
-| `dmi_allowed`      | `false`                                     | DMI deshabilitado               |
-| `response_status`  | `TLM_INCOMPLETE_RESPONSE` → `TLM_OK_RESPONSE` | Se actualiza en el target     |
+```bash
+# Compilar y correr (genera imagen de prueba + simulacion)
+make run
 
-### Tipos de transacciones por módulo
+# Solo compilar
+make all
 
-| Origen → Destino  | Tipo        | Dirección (bus)           | Tamaño            |
-|-------------------|-------------|---------------------------|-------------------|
-| CPU → RAM         | WRITE burst | `0x00000000`              | 64 KB chunks      |
-| CPU → Accel regs  | WRITE       | `0x04000000 – 0x0400000C` | 4 bytes           |
-| CPU → Accel regs  | READ        | `0x04000010`              | 4 bytes           |
-| CPU → RAM         | READ burst  | `0x00600000`              | 64 KB chunks      |
-| Accel → RAM       | READ burst  | `0x00000000`              | 3 KB (1K px × 3)  |
-| Accel → RAM       | WRITE burst | `0x00600000`              | 1 KB (1K px)      |
+# Simular con imagen existente
+make exec
 
----
+# Verificar visualmente
+make compare
+```
 
-## Mapa de Memoria
+### Verificación RTL (Verilator standalone)
+
+```bash
+# Lint del RTL
+make lint
+
+# Compilar y correr testbench C++
+make run_vl
 
 ```
-Espacio de direcciones del Bus (32 bits)
-═══════════════════════════════════════════════════════
 
-  0x00000000  ┌─────────────────────────────────────┐
-              │           RAM (64 MB)               │
-              │                                     │
-  0x00000000  │  Imagen RGB de entrada              │  6 220 800 bytes
-  0x005EEFFF  │  (1920 × 1080 × 3 bytes)            │
-              │                                     │
-  0x005EF000  │  [sin usar]                         │
-  0x005FFFFF  │                                     │
-              │                                     │
-  0x00600000  │  Imagen Grayscale de salida         │  2 073 600 bytes
-  0x007F3FFF  │  (1920 × 1080 × 1 byte)             │
-              │                                     │
-  0x007F4000  │  [libre]                            │
-  0x03FFFFFF  │                                     │
-              └─────────────────────────────────────┘
+### UVM Testbench (EDA Playground / VCS)
 
-  0x04000000  ┌─────────────────────────────────────┐
-              │     Registros del Acelerador        │
-  +0x00       │  REG_SRC    (R/W)  dir. imagen RGB  │
-  +0x04       │  REG_DST    (R/W)  dir. imagen gris │
-  +0x08       │  REG_CNT    (R/W)  total píxeles    │
-  +0x0C       │  REG_CTRL   (R/W)  escribir 1=start │
-  +0x10       │  REG_STATUS (R)    0=IDLE 1=BUSY    │
-              │                    2=DONE           │
-  0x04000014  └─────────────────────────────────────┘
+**En EDA Playground (VCS):**
+- Design: `rtl/ram_axi4.sv`
+- Testbench: `uvm/axi4_*.sv`, `uvm/tb_top.sv`
+- Compile flags: `-sverilog -ntb_opts uvm-1.2 +define+UVM_NO_DPI`
+- Run flags: `+UVM_TESTNAME=smoke_test`
+
+**Tests disponibles:**
+```
++UVM_TESTNAME=smoke_test    # write-read + byte enables
++UVM_TESTNAME=burst_test    # burst de 32 beats
++UVM_TESTNAME=stress_test   # 20 transacciones aleatorias
+```
+
+### Co-simulación SystemC + RTL
+
+```bash
+# Generar librería Verilator 
+make verilate_lib
+
+# Compilar y correr sistema completo 
+make run_dpi
+
+# Verificación formal contra golden 
+make golden        # generar referencia 
+make verify_dpi    # comparar byte a byte
+```
+
+### Overrides
+
+```bash
+# SystemC en ruta no estándar
+make run SYSTEMC_HOME=/ruta/a/systemc
+
+# Ver todos los targets disponibles
+make help
 ```
 
 ---
 
 ## Resultados Obtenidos
 
-- La imagen de entrada (`test/images/input.raw`) es un patrón sintético 1920×1080 RGB
-  generado por `test/scripts/gen_raw.py`.
-- La imagen de salida (`test/images/output.raw`) contiene los valores de luminancia
-  calculados con BT.709.
-- La verificación visual se genera con `make compare`, produciendo
-  `test/images/comparison.png` con ambas imágenes lado a lado.
+### Verificación funcional por fase
 
-### Separación de capas
+| Fase                      | Test                   | Resultado                |
+|---------------------------|------------------------|--------------------------|
+| Phase 1 (TLM directo)     | Sistema completo 1080p | Output verificado        |
+| Phase 2 (AXI4 behavioral) | Sistema completo 1080p | Idéntico a Phase 1       |
+| Phase 3 (RTL Verilator)   | 5 tests dirigidos C++  | 12/12 PASS               |
+| Phase 4 (UVM)             | smoke + burst + stress | 0 errores                |
+| Phase 5 (co-simulación)   | Sistema completo 1080p | Verificación formal PASS |
 
-| Capa                    | Módulo(s)    | Mecanismo                              |
-|-------------------------|--------------|----------------------------------------|
-| Procesamiento funcional | `Accelerator`| `SC_THREAD`, aritmética BT.709         |
-| Comunicación TLM        | `Bus`, sockets | `tlm_generic_payload`, `b_transport` |
-| Almacenamiento temporal | `RAM`        | `std::vector<uint8_t>` de 64 MB        |
-| E/S persistente         | `Storage`    | `std::ifstream` / `std::ofstream`      |
+### Verificación formal Phase 5 vs Golden Phase 1
+
+```
+=== Verificacion formal: Phase 5 vs Golden ===
+[1] Tamanio: 2,073,600 bytes          [OK]
+[2] Comparacion byte a byte:          [OK] IDENTICO
+[3] Estadisticas de luminancia:
+        Golden    Output
+    Min     14        14
+    Max    240       240
+    Media  126.616   126.616          [OK]
+╔══════════════════════════════════════════════╗
+║  VERIFICACION FORMAL: PASS                   ║
+║  Phase 5 (RTL) == Phase 1 (golden)           ║
+╚══════════════════════════════════════════════╝
+```
+
+### Comparación de tiempos de simulación
+
+| Fase                      | Tiempo simulado | Observación             |
+|---------------------------|-----------------|-------------------------|
+| Phase 1 — TLM directo     | 16,791,570 ns   | RAM como `std::vector`  |
+| Phase 2 — AXI4 behavioral | 83,125,990 ns   | Overhead protocolo AXI4 |
+| Phase 5 — RTL Verilog     | 83,389,950 ns   | RTL cycle-accurate      |
+
+El overhead de Phase 5 vs Phase 2 (~264K ns, 0.3%) corresponde al costo de evaluar lógica RTL real vs el modelo behavioral en C++.
+
+### Cobertura UVM
+
+| Test        | Cobertura | Transacciones            |
+|-------------|-----------|--------------------------|
+| smoke_test  | 58%       | 3 WR + 2 RD              |
+| burst_test  | 48%       | 1 WR (32 beats) + 1 RD   |
+| stress_test | 64%       | 20 WR + 20 RD aleatorios |
+
+Los bins de cobertura no cubiertos corresponden a bursts >64 beats y accesos a la región grayscale (0x600000+), que no son ejercitados por los tests funcionales actuales.
 
 ---
 
-## Referencias
+## Declaración de Uso de Inteligencia Artificial
 
-- ITU-R BT.601-7, *"Studio encoding parameters of digital television for
-  standard 4:3 and wide-screen 16:9 aspect ratios"*, International
-  Telecommunication Union, 2011.
-- IEEE Std 1666-2023, *"IEEE Standard for Standard SystemC Language
-  Reference Manual"*, IEEE, 2023.
-- Accellera Systems Initiative, *SystemC Reference Implementation*,
-  https://github.com/accellera-official/systemc
+De acuerdo con la política del curso, se declara que se utilizó inteligencia artificial (Claude, Anthropic) durante el desarrollo de esta evaluación. A continuación se detallan los usos:
 
----
+| Área | Tipo de uso |
+|---|---|
+| Arquitectura del sistema | Consulta de conceptos (TLM 2.0, AXI4 Full, UVM) |
+| UVM environment | Generación de estructura base |
+| Makefile | Generación de targets Verilator |
+| Scripts Python | Generación de script de verificación |
+| Depuración | Diagnóstico de errores de compilación y timing |
 
-## Declaración de Uso de IA
+**Prompts principales utilizados:**
+- Consultas sobre el protocolo AXI4 Full (canales, handshake, burst)
+- Consultas sobre integración Verilator + SystemC
+- Depuración de race conditions en testbench SystemVerilog
+- Revisión de errores de linking (VlThreadPool)
+- Estructura del ambiente UVM para RAM slave
 
-De acuerdo con la política de uso de IA del curso MP6160, se declara el siguiente
-uso de inteligencia artificial en esta evaluación:
-
-**Herramienta utilizada:** Claude (Anthropic) — interfaz de chat web (claude.ai)
-
-### Resumen del uso
-
-Se utilizó Claude como apoyo conceptual durante el diseño del sistema, mediante
-una conversación guiada paso a paso en lugar de generación masiva de código.
-
-### Detalle por categoría
-
-| Categoría               | ¿Se usó? | Descripción                                                                 |
-|-------------------------|----------|-----------------------------------------------------------------------------|
-| Consulta de conceptos   | Sí       | TLM 2.0 (sockets, `b_transport`, `tlm_generic_payload`, `sc_event`); fórmula de conversión ITU-R BT.601 e implementación entera |
-| Revisión de código      | Sí       | Corrección de errores de síntaxis en los módulos                            |
-| Depuración              | No       | —                                                                           |
-| Generación de diagramas | Sí       | Diagrama de bloques (ASCII) y diagrama de secuencias                        |
-| Mejora de redacción     | Sí       | Estructuración del README técnico                                           |
-| Revisión de documentación | Sí     | Verificación de consistencia entre README y estructura real del repositorio |
-
-### Descripción detallada
-
-- **Consulta de conceptos:** se consultaron los fundamentos de TLM 2.0 antes de
-  escribir cada módulo, así como la fórmula de conversión RGB→escala de grises
-  BT.601 y su implementación como aproximación entera sin punto flotante.
-
-- **Consulta de documentación oficial:** se verificó que los patrones usados
-  (`simple_initiator_socket`/`simple_target_socket`, modelo `b_transport`) estuvieran
-  alineados con los ejemplos del repositorio oficial de Accellera
-  (`accellera-official/systemc`) y el estándar IEEE 1666-2023.
-
-- **Implementación guiada:** el equipo escribió el código de los cinco módulos
-  (`Storage`, `RAM`, `Bus`, `Accelerator`, `CPU`) guiándose por explicaciones
-  conceptuales y fragmentos de referencia generados con apoyo de Claude.
-  Durante la implementación se cometieron y corrigieron errores propios.
-
-- **Generación de diagramas:** el diagrama de bloques y el diagrama de secuencias
-  se generaron con apoyo de IA.
-
-- **Mejora de redacción y revisión:** se usó para estructurar el README técnico
-  y verificar la consistencia entre la documentación y la estructura real del repositorio.
+Todo el código fue revisado, entendido y validado por el equipo antes de su uso.
