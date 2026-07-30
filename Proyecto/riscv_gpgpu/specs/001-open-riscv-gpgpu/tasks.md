@@ -144,6 +144,17 @@
 	- Deliverable: example kernels (Rodinia subset) and scripts to build, upload, run, and collect metrics for comparison.
 	- Implemented now: `benchmarks/workloads/vector_add/vector_add.cu` and `run_vector_add.sh` (compile → RISC-V ELF, disassemble, symbol resolve, bundle manifest, launch packet, host-sim validation — N=1024 PASS); `benchmarks/workloads/saxpy/saxpy.cu` and `run_saxpy.sh` (same flow, a=2.5 — N=1024 PASS). Both scripts produce `*.riscv.elf`, `*.disasm.txt`, `*_manifest.json`, `*.launch.json` under `build/benchmarks/`.
 
+- [x] T035b [US3] Add selective external Rodinia dependency support in `benchmarks/CMakeLists.txt` and `benchmarks/README.md`
+	- Deliverable: optional `RODINIA_ROOT` and `RODINIA_KERNELS` cache settings that let the build consume a local Rodinia checkout one kernel at a time.
+	- Verification: configure with and without `RODINIA_ROOT`; missing kernels must skip cleanly, and known-good kernels must build through `add_riscv_kernel()`.
+	- Compatibility note: keep the synthetic Rodinia-style workloads as the default path so benchmark coverage remains stable while upstream kernels are enabled selectively.
+
+- [x] T035c [US3] Integrate the first compatible upstream Rodinia kernels through the new selective dependency path and validate them in the benchmark harness
+	- Deliverable: map the initial Rodinia kernels (for example `bfs`, `hotspot`, `needle`, `gaussian`, `lavamd`) to their upstream source paths and exercise them through the existing benchmark flow.
+	- Verification: build and run each enabled kernel individually; record which kernels require patches or are not yet compatible with the current PTX/RV32F/runtime support.
+	- Compatibility note: preserve the current synthetic Rodinia benchmarks as a fallback for unsupported upstream kernels.
+	- Implemented now: upstream Rodinia BFS `kernel.cu` + `kernel2.cu` are wrapped with `benchmarks/rodinia_cuda_compat.h`, built as `rodinia_bfs_kernel` and `rodinia_bfs_kernel2`, and validated end-to-end with `rodinia_real_benchmark` on a one-node BFS smoke case.
+
 ### Current Software Status Snapshot (updated)
 
 - Completed and validated:
