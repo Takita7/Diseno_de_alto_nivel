@@ -77,7 +77,18 @@ struct Instruction {
     bool        is_memory = false;
     bool        is_branch = false;
 };
-typedef Instruction instr_word_t;
+
+// On-chip storage/wire form of a program word (docs/hls/interfaces.md
+// SS13.2) - real RV32I/custom-opcode bit encoding, decoded into the
+// `Instruction` struct above (unchanged, still what every execute-stage
+// function reads) once per fetch via decodeInstruction()
+// (compute_unit/rv32i_codec.h). `instr_word_t` - the on-chip program-store
+// element type (CuDispatchUnit::program_[], compute_pipeline's program[]
+// parameter) - now names this raw form instead of `Instruction` directly;
+// neither of those call sites inspects instruction fields, so this rename
+// alone requires no changes to them (SS13.1).
+typedef ap_uint<32> raw_instr_t;
+typedef raw_instr_t instr_word_t;
 
 // Register-bit reinterpretation helpers - identical semantics to
 // types.h's regAsFloat/floatAsReg (bit reinterpretation only, no HLS-specific

@@ -30,33 +30,45 @@
 #include <map>
 
 #include "compute_unit/compute_pipeline.h"
+#include "compute_unit/rv32i_codec.h"
 #include "../../models/systemc/src/common/kernel_programs.h"
 
 using namespace riscv_gpgpu_hls;
 
 namespace {
 
-Instruction toHls(const riscv_gpgpu::Instruction& gi) {
-    Instruction hi;
-    hi.pc         = gi.pc;
-    hi.opcode     = static_cast<Opcode>(gi.opcode);
-    hi.rs1        = gi.rs1;
-    hi.rs2        = gi.rs2;
-    hi.rd         = gi.rd;
-    hi.imm        = gi.imm;
-    hi.is_vector  = gi.is_vector;
-    hi.is_memory  = gi.is_memory;
-    hi.is_branch  = gi.is_branch;
-    return hi;
-}
-
-// Copies a golden instruction sequence into a plain program[] array -
-// replaces the old feedProgram()'s stream-writing role now that
+// docs/hls/interfaces.md SS13: program[] now holds raw_instr_t (real
+// RV32I/custom-opcode encoded words), not decoded Instruction structs -
+// encodeInstructionExpanded() replaces the old field-by-field struct copy.
+// gi.is_vector/is_memory/is_branch and gi.pc aren't passed through: the
+// former are re-derived by decodeInstruction() from the opcode alone
+// (identical to how the golden model's own makeInstr() derives them,
+// types.h:112-114 - not new information), and the latter was never read
+// downstream (grep-confirmed before rv32i_codec.h was written).
+//
+// SS13.12: one golden instruction can expand to two raw words (LUI+ADDI),
+// so the output index is tracked separately from the input index - this is
+// exactly the kernel_programs.h::fpUniformSaxpy() case (ADDI loading a
+// float's raw bit pattern, which doesn't fit real RV32I's 12-bit ADDI
+// immediate). Copies a golden instruction sequence into a plain program[]
+// array - replaces the old feedProgram()'s stream-writing role now that
 // compute_pipeline reads a local array instead of a sequential stream
 // (docs/hls/interfaces.md SS10.8).
-void loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
-                  const std::vector<riscv_gpgpu::Instruction>& src) {
-    for (size_t i = 0; i < src.size(); ++i) program[i] = toHls(src[i]);
+// Returns the actual number of raw words written - the caller's program_len
+// (compute_pipeline's fetch-loop bound), which is NOT necessarily src.size()
+// once expansion (SS13.12) is possible. Every call site below uses this
+// return value, not src.size(), for exactly that reason.
+size_t loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
+                    const std::vector<riscv_gpgpu::Instruction>& src) {
+    size_t out_i = 0;
+    for (size_t i = 0; i < src.size(); ++i) {
+        const riscv_gpgpu::Instruction& gi = src[i];
+        raw_instr_t words[2];
+        int n = encodeInstructionExpanded(static_cast<Opcode>(gi.opcode),
+                                           gi.rd, gi.rs1, gi.rs2, gi.imm, words);
+        for (int k = 0; k < n; ++k) program[out_i++] = words[k];
+    }
+    return out_i;
 }
 
 // Standard per-lane register convention (matches kernel_programs.h's header
@@ -128,8 +140,8 @@ TEST(ComputePipeline, IntSaxpy) {
 
     auto program = riscv_gpgpu::kernels::intSaxpy(/*alpha=*/2, /*y=*/10);
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     warp_status_t st = cp.dispatchAndWait(0, 0, thread_mask_t(-1));
     EXPECT_EQ(st.code, WarpStatusCode::COMPLETE);
@@ -147,8 +159,8 @@ TEST(ComputePipeline, FpUniformSaxpy) {
 
     auto program = riscv_gpgpu::kernels::fpUniformSaxpy(2.0f, 3.0f, 1.0f);
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     EXPECT_EQ(cp.dispatchAndWait(0, 0, thread_mask_t(-1)).code, WarpStatusCode::COMPLETE);
 
@@ -165,8 +177,8 @@ TEST(ComputePipeline, DivergentOddEven) {
 
     auto program = riscv_gpgpu::kernels::divergentOddEven();
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     EXPECT_EQ(cp.dispatchAndWait(0, 0, thread_mask_t(-1)).code, WarpStatusCode::COMPLETE);
 
@@ -195,8 +207,8 @@ TEST(ComputePipeline, BarrierStallThenResume) {
     };
 
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     warp_status_t st1 = cp.dispatchAndWait(0, 0, thread_mask_t(-1));
     ASSERT_EQ(st1.code, WarpStatusCode::STALLED_AT_BARRIER);
@@ -230,8 +242,8 @@ TEST(ComputePipeline, MemoryRoundTrip) {
 
     auto program = riscv_gpgpu::kernels::memoryRoundTrip();
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     // 1 SW + 2 LW per active lane, 32 active lanes.
     const int kExpectedRequests = 3 * MAX_THREADS_PER_WARP;
@@ -296,8 +308,8 @@ TEST(ComputePipeline, FpGemm2x2TileK4) {
 
     auto program = riscv_gpgpu::kernels::fpGemm();
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     EXPECT_EQ(cp.dispatchAndWait(0, 0, thread_mask_t(0xF)).code, WarpStatusCode::COMPLETE);
     EXPECT_FLOAT_EQ(regAsFloat(regs[0][0][7]),  50.0f) << "C[0][0]";
@@ -330,8 +342,8 @@ TEST(ComputePipeline, Conv2d3x3) {
 
     auto program = riscv_gpgpu::kernels::conv2d3x3();
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     EXPECT_EQ(cp.dispatchAndWait(0, 0, thread_mask_t(0xF)).code, WarpStatusCode::COMPLETE);
     EXPECT_EQ(static_cast<uint32_t>(regs[0][0][21]),  96u) << "out[0][0]";
@@ -370,8 +382,8 @@ TEST(ComputePipeline, FpDivergentSaxpy) {
 
     auto program = riscv_gpgpu::kernels::fpDivergentSaxpy();
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len);
 
     EXPECT_EQ(cp.dispatchAndWait(0, 0, thread_mask_t(-1)).code, WarpStatusCode::COMPLETE);
 

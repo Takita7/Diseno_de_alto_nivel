@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "compute_unit/compute_pipeline.h"
+#include "compute_unit/rv32i_codec.h"
 #include "memory/memory_pipeline.h"
 #include "../../models/systemc/src/common/kernel_programs.h"
 
@@ -28,17 +29,24 @@ using namespace riscv_gpgpu_hls;
 
 namespace {
 
-Instruction toHls(const riscv_gpgpu::Instruction& gi) {
-    Instruction hi;
-    hi.pc = gi.pc; hi.opcode = static_cast<Opcode>(gi.opcode);
-    hi.rs1 = gi.rs1; hi.rs2 = gi.rs2; hi.rd = gi.rd; hi.imm = gi.imm;
-    hi.is_vector = gi.is_vector; hi.is_memory = gi.is_memory; hi.is_branch = gi.is_branch;
-    return hi;
-}
-
-void loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
-                  const std::vector<riscv_gpgpu::Instruction>& src) {
-    for (size_t i = 0; i < src.size(); ++i) program[i] = toHls(src[i]);
+// docs/hls/interfaces.md SS13/SS13.12: see test_compute_pipeline.cpp's
+// loadProgram() for the full rationale (identical here) - program[] now
+// holds raw_instr_t, and one golden instruction can expand to two raw
+// words (LUI+ADDI), so the output index is tracked separately.
+// Returns the actual number of raw words written - see
+// test_compute_pipeline.cpp's loadProgram() for why this must be used
+// instead of src.size() (SS13.12 expansion).
+size_t loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
+                    const std::vector<riscv_gpgpu::Instruction>& src) {
+    size_t out_i = 0;
+    for (size_t i = 0; i < src.size(); ++i) {
+        const riscv_gpgpu::Instruction& gi = src[i];
+        raw_instr_t words[2];
+        int n = encodeInstructionExpanded(static_cast<Opcode>(gi.opcode),
+                                           gi.rd, gi.rs1, gi.rs2, gi.imm, words);
+        for (int k = 0; k < n; ++k) program[out_i++] = words[k];
+    }
+    return out_i;
 }
 
 // Same shape as test_compute_pipeline.cpp's CpFixture (duplicated locally,
@@ -107,8 +115,8 @@ TEST(PipelineIntegration, MemoryRoundTripThroughRealMemoryPipeline) {
     static std::vector<ap_uint<32>> backing(1u << 20, ap_uint<32>(0));
 
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size(), backing.data());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len, backing.data());
 
     warp_status_t st = cp.dispatchAndWait(0, 0, thread_mask_t(-1));
     EXPECT_EQ(st.code, WarpStatusCode::COMPLETE);
@@ -155,8 +163,8 @@ TEST(PipelineIntegration, ParallelReductionAcrossTwoWarpsWithBarrier) {
     static std::vector<ap_uint<32>> backing(1u << 16, ap_uint<32>(0));  // covers 0x10000..0x1FFFF
 
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size(), backing.data());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len, backing.data());
 
     // ── Pre-barrier: dispatch both warps, both must stall at bid=0 ─────────
     warp_status_t stA1 = cp.dispatchAndWait(/*slot=*/0, /*warp_id=*/0, thread_mask_t(-1));
@@ -215,8 +223,8 @@ TEST(PipelineIntegration, BarrierRoundTripPreservesMemoryAcrossStall) {
     static std::vector<ap_uint<32>> backing(1u << 16, ap_uint<32>(0));  // covers 0x10000..0x1FFFF
 
     static CpFixture cp;
-    loadProgram(cp.program, program);
-    cp.start(regs, program.size(), backing.data());
+    size_t program_len = loadProgram(cp.program, program);
+    cp.start(regs, program_len, backing.data());
 
     warp_status_t st1 = cp.dispatchAndWait(0, 0, thread_mask_t(-1));
     ASSERT_EQ(st1.code, WarpStatusCode::STALLED_AT_BARRIER);

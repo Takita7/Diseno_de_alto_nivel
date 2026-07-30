@@ -1737,3 +1737,435 @@ immediately rather than re-deriving context.
    `compute_pipeline` and may no longer hold.
 
 ---
+
+## 13. RV32I + custom-opcode encoding (adopted pivot — implemented, §13.12)
+
+### 13.1 Relationship to §11/§12 — this is a narrower, different move
+
+**Do not confuse this with §12's plan.** §12 was a wholesale golden-reference
+switch: retarget `compute_pipeline` at `ComputeUnit::step()`/`executeRV32()`
+(the *binary execution path*, §11.1), pull in `codesign_dmedina`, and design
+a **real RVV** vector decode stage. §11.3 reconsidered that and it is **not
+adopted** — `ComputeUnit::executeWarp()` (the *virtual-ISA/SIMT path*, §11.1)
+stands as the golden reference, unchanged.
+
+This section is a different, self-contained decision: give the **existing**
+opcode semantics (`Opcode` enum in `hls_types.h`, exactly mirroring
+`types.h`, executed by `executeALU`/`executeVector`/`executeMemOp`/
+`executeBranch`/`executeJoin` exactly as already ported) a **real,
+spec-legal RV32I instruction encoding**, instead of the current
+host-constructed `Instruction` struct being the on-chip program
+representation directly. Standard ops (`ADD`, `ADDI`, `LW`, `BEQ`, ...) get
+real RV32I opcodes. GPGPU-specific ops that have no RV32I equivalent
+(`VADD`, `VBRANCH`, `BARRIER`, ...) get real RISC-V **custom-opcode space**
+(`custom-0`..`custom-3`, reserved by the spec for exactly this purpose — see
+RISC-V ISA Manual Vol. I, opcode map). Nothing about *what* the machine
+executes changes; only *how instructions are stored/transmitted on-chip*
+does.
+
+**Why this is a small, bounded change and not a rewrite** (confirmed by
+reading the actual call sites, not assumed):
+- `Instruction` (the decoded struct: `opcode`/`rs1`/`rs2`/`rd`/`imm`/
+  `is_vector`/`is_memory`/`is_branch`) stays **exactly as it is today**.
+  `executeALU`/`executeVector`/`executeMemOp`/`executeBranch`/`executeJoin`
+  all consume this struct already and need **zero changes**.
+- `CuDispatchUnit::loadProgram()`/`programArray()` (`cu_dispatch_unit.h:168-
+  185`) only ever copy `instr_word_t` elements opaquely — they never
+  inspect instruction fields. **Zero changes needed there.**
+- The only places that touch instruction *representation* directly are:
+  `hls_types.h` (where `instr_word_t` is defined), a new codec, the one
+  fetch line in `compute_pipeline.cpp`'s `executeOneWarp()`, and whatever
+  builds `program[]` arrays (today: `tests/hls/test_compute_pipeline.cpp`'s
+  `toHls()`, and the equivalent in `test_pipeline_integration.cpp`/
+  `test_hls_data_structures.cpp`).
+
+### 13.2 Architectural split: decoded form vs. wire/storage form
+
+Two distinct types, doing two distinct jobs:
+
+| Type | Role | Shape | Status |
+|---|---|---|---|
+| `Instruction` (`instr_word_t` today) | **Decoded, internal.** What every execute-stage function reads. | Struct: `opcode`, `rs1`, `rs2`, `rd`, `imm`, `is_vector`, `is_memory`, `is_branch` | Unchanged |
+| `raw_instr_t` (NEW — `instr_word_t` repointed to this) | **On-chip storage/wire form.** What `program[MAX_PROGRAM_LEN]` actually holds. | `ap_uint<32>`, real RV32I/custom bit encoding | New |
+
+`decodeInstruction(raw_instr_t) -> Instruction` runs once per fetched
+instruction, inside `executeOneWarp`'s loop, immediately before dispatch —
+replacing today's `const Instruction& instr = program[i];` with
+`const Instruction instr = decodeInstruction(program[i]);`. Everything after
+that line is untouched.
+
+`encodeInstruction(Opcode, rd, rs1, rs2, imm) -> raw_instr_t` is the
+inverse, used wherever a `program[]` array is built (today: only test code
+and, symmetrically, whatever compiler/assembler eventually targets this
+core — out of scope here). Its parameter order deliberately matches
+`makeInstr()` (`types.h:104`) so callers change from
+`makeInstr(Opcode::ADDI, rd, rs1, rs2, imm)` to
+`encodeInstruction(Opcode::ADDI, rd, rs1, rs2, imm)` with no reordering.
+
+### 13.3 Standard RV32I formats used (reference)
+
+Only the formats actually needed. Bit positions are the real RV32I spec
+positions — not invented.
+
+```
+R-type (register-register: ADD/SUB/AND/OR/XOR/SLT, and both custom groups)
+
+ 31           25 24     20 19     15 14  12 11      7 6      0
++---------------+---------+---------+------+---------+--------+
+|    funct7     |   rs2   |   rs1   |funct3|   rd    | opcode |
++---------------+---------+---------+------+---------+--------+
+        7            5         5       3        5         7
+
+I-type (register-immediate: ADDI, LW, JALR; custom-1's BARRIER reuses this)
+
+ 31                    20 19     15 14  12 11      7 6      0
++------------------------+---------+------+---------+--------+
+|      imm[11:0]         |   rs1   |funct3|   rd    | opcode |
++------------------------+---------+------+---------+--------+
+            12                5       3        5         7
+
+S-type (store: SW)
+
+ 31           25 24     20 19     15 14  12 11      7 6      0
++---------------+---------+---------+------+---------+--------+
+|  imm[11:5]    |   rs2   |   rs1   |funct3|imm[4:0] | opcode |
++---------------+---------+---------+------+---------+--------+
+
+B-type (branch: BEQ/BNE) — imm bits scrambled, LSB implicit 0 (2-byte align)
+
+ 31 30      25 24     20 19     15 14  12 11      8 7  6      0
++--+-----------+---------+---------+------+---------+-+--------+
+|12|imm[10:5]  |   rs2   |   rs1   |funct3|imm[4:1] |11| opcode |
++--+-----------+---------+---------+------+---------+-+--------+
+
+U-type (upper immediate: LUI)
+
+ 31                                    12 11      7 6      0
++----------------------------------------+---------+--------+
+|              imm[31:12]                |   rd    | opcode |
++----------------------------------------+---------+--------+
+
+J-type (jump: JAL) — imm bits scrambled, LSB implicit 0
+
+ 31 30        21 20 19        12 11      7 6      0
++--+-------------+--+-----------+---------+--------+
+|20|  imm[10:1]  |11|  imm[19:12]|   rd    | opcode |
++--+-------------+--+-----------+---------+--------+
+```
+
+### 13.4 Standard-opcode mapping (real RV32I, unmodified spec encoding)
+
+| Opcode(s) | Major opcode | Binary | Format | Selector |
+|---|---|---|---|---|
+| `ADD` | OP | `0110011` | R | funct3=`000`, funct7=`0000000` |
+| `SUB` | OP | `0110011` | R | funct3=`000`, funct7=`0100000` |
+| `AND` | OP | `0110011` | R | funct3=`111` |
+| `OR`  | OP | `0110011` | R | funct3=`110` |
+| `XOR` | OP | `0110011` | R | funct3=`100` |
+| `SLT` | OP | `0110011` | R | funct3=`010` |
+| `ADDI` | OP-IMM | `0010011` | I | funct3=`000` |
+| `LUI` | LUI | `0110111` | U | — |
+| `LW` | LOAD | `0000011` | I | funct3=`010` |
+| `SW` | STORE | `0100011` | S | funct3=`010` |
+| `BEQ` | BRANCH | `1100011` | B | funct3=`000` |
+| `BNE` | BRANCH | `1100011` | B | funct3=`001` |
+| `JAL` | JAL | `1101111` | J | — |
+| `JALR` | JALR | `1100111` | I | funct3=`000` |
+
+These funct3/funct7 assignments are copied directly from the real RV32I
+spec (not custom choices) — a real disassembler/toolchain reads them
+correctly. `BEQ`/`BNE`/`JAL`/`JALR` decode to real `Instruction`s but stay
+unhandled by `executeALU`'s switch, exactly matching today's behavior and
+the golden model's own "unimplemented dead opcode space"
+(`compute_pipeline.cpp:97-100`) — decoding them correctly is still worth
+doing for forward-compatibility and honest disassembly, even though nothing
+currently acts on them.
+
+### 13.5 `custom-0` (`0001011`) — vector-lane and scalar-float ops
+
+R-type shape. `funct7` first selects a *group*, `funct3` then selects the
+op within it — the same two-level pattern the real RV32M extension uses
+(`funct7=0000001` under the shared `OP` opcode to add MUL/DIV alongside
+ADD/SUB) — not an invented technique.
+
+**Group 0 (`funct7 = 0000000`) — integer/float vector ops:**
+
+| funct3 | Op |
+|---|---|
+| `000` | `VADD` |
+| `001` | `VSUB` |
+| `010` | `VMUL` |
+| `011` | `VFMADD` |
+| `100` | `VFADD` |
+| `101` | `VFSUB` |
+| `110` | `VFMUL` |
+| `111` | `VFFMADD` |
+
+**Group 1 (`funct7 = 0000001`) — scalar float ops:**
+
+| funct3 | Op |
+|---|---|
+| `000` | `FADD` |
+| `001` | `FMUL` |
+| `010`-`111` | *reserved* |
+
+All ten ops read `rs1`/`rs2` and write `rd`; the `VF*MADD` pair additionally
+*read* `rd` as their accumulator input before overwriting it
+(`compute_pipeline.cpp:121,125` — `a*b+c` where `c = regs[t][instr.rd]`),
+which is exactly why R-type's 3-register shape is sufficient and no 4th
+operand field is needed anywhere in this design.
+
+`funct7` values other than `0000000`/`0000001` are reserved.
+
+**Explicit non-goal**: `FADD`/`FMUL` here do **not** implement real RV32F.
+Real RV32F uses the `OP-FP` major opcode (`1010011`) and a distinct `f0`-
+`f31` register file; this design keeps them on the same integer `regs[]`
+via `regAsFloat`/`floatAsReg` bit-reinterpretation, matching current/golden
+behavior exactly. Placing them under `custom-0` instead of `OP-FP` is a
+deliberate, honest choice — it doesn't claim RV32F compliance it doesn't
+have (Q&A resolved earlier this session).
+
+### 13.6 `custom-1` (`0101011`) — control ops
+
+R-type shape by default; `BARRIER` reinterprets the same word as I-type
+(same funct3 field position, `rs2`+`funct7` bits become `imm[11:0]` instead)
+— again mirroring real spec precedent (`SYSTEM`'s opcode varies field
+interpretation by sub-selector too: `ECALL`/`EBREAK` vs. CSR instructions).
+
+| funct3 | Op | Format | Fields actually read by execute |
+|---|---|---|---|
+| `000` | `VBRANCH` | R | `rs1` only (`compute_pipeline.cpp:191`: `regs[t][instr.rs1] == 0`) |
+| `001` | `VJOIN` | R | none (`executeJoin` takes no `Instruction` at all) |
+| `010` | `BARRIER` | I | `imm[11:0]` only → `barrier_id` (sign-extended into `imm_t`, but `barrier_id_t` is unsigned — see note below) |
+| `011` | `HALT` | R | none |
+| `100`-`111` | *reserved* | — | — |
+
+`VBRANCH`'s `rs2`/`rd`/`funct7` bits and `HALT`/`VJOIN`'s entire operand
+field are unread by execute today, same as now (`makeInstr(Opcode::VJOIN,
+0,0,0,0)` already passes all-zero operands) — the decoder still populates
+`Instruction`'s fields structurally for consistency/future use (e.g. a
+future explicit reconvergence PC on `VBRANCH`, per §12 step 4's
+`divergence_stack.h` extension, which this design doesn't foreclose since
+the field is already there and simply unread), it's only execute that
+ignores them.
+
+**`BARRIER`'s immediate width — 12 bits, range 0-4095.** Confirmed sufficient:
+`BarrierArbiter` (§2.5.5) tracks one running arrival counter per kernel, not
+per-`barrier_id` state (`MAX_CONCURRENT_BARRIERS` was already removed this
+session, §2.5.4) — `barrier_id` only needs to be unique enough to route a
+release event, not sized against a large concurrent-barrier table. 4096
+distinct IDs is generous headroom. Real RV32I I-type immediates are
+sign-extended into a 32-bit `imm_t`; `decodeInstruction` will cast to
+`barrier_id_t` (unsigned) at the point of use, matching how `BARRIER`'s imm
+is used today (`compute_pipeline.cpp:240`: `barrier_id_t(instr.imm)`).
+
+### 13.7 `custom-2`/`custom-3` — reserved, unused
+
+`custom-2`/`rv128` (`1011011`) and `custom-3`/`rv128` (`1111011`) are left
+completely unallocated. No design pressure to use them now; kept as
+headroom for a future extension (e.g. if `custom-0`/`custom-1` ever fill up,
+or a real RVV migration wants a clean, separate major opcode rather than
+reusing these).
+
+### 13.8 Codec function contracts
+
+```cpp
+// hls/src/compute_unit/rv32i_codec.h (new file, header-only — matches
+// cu_dispatch_unit.h/barrier_arbiter.h/mem_arbiter.h's existing pattern
+// for small, dependency-light HLS components)
+
+raw_instr_t encodeInstruction(Opcode op, uint8_t rd = 0, uint8_t rs1 = 0,
+                               uint8_t rs2 = 0, int32_t imm = 0);
+// Mirrors makeInstr()'s parameter order/defaults exactly (types.h:104) so
+// every existing call site converts by renaming the function, not
+// reordering arguments. Internally: switch on `op`, look up its major
+// opcode/format/funct3/funct7 from the tables above, pack fields into the
+// matching bit positions.
+
+Instruction decodeInstruction(raw_instr_t word);
+// Internally: read opcode[6:0] first. If it's one of §13.4's standard
+// opcodes, decode using that format + funct3/funct7 -> map back to the
+// matching Opcode enum value. If it's custom-0/custom-1, use §13.5/§13.6's
+// tables. Populate is_vector/is_memory/is_branch exactly as makeInstr()
+// does today (opcode-value-range checks, types.h:112-114) - unchanged
+// logic, just fed by a decoded opcode instead of a passed-in one.
+```
+
+No implementation yet — this is the contract the next session's step 3
+implements against.
+
+### 13.9 Worked examples (hand-encoded, for sanity-checking before implementation)
+
+`encodeInstruction(Opcode::ADD, /*rd=*/3, /*rs1=*/1, /*rs2=*/2, /*imm=*/0)`:
+
+```
+ 31           25 24     20 19     15 14  12 11      7 6      0
++---------------+---------+---------+------+---------+--------+
+|   0000000     |  00010  |  00001  | 000  |  00011  |0110011 |
++---------------+---------+---------+------+---------+--------+
+   funct7=0        rs2=2     rs1=1   ADD      rd=3       OP
+```
+
+`encodeInstruction(Opcode::VFMADD, /*rd=*/6, /*rs1=*/4, /*rs2=*/3, /*imm=*/0)`:
+
+```
+ 31           25 24     20 19     15 14  12 11      7 6      0
++---------------+---------+---------+------+---------+--------+
+|   0000000     |  00011  |  00100  | 011  |  00110  |0001011 |
++---------------+---------+---------+------+---------+--------+
+  funct7=grp0      rs2=3     rs1=4  VFMADD    rd=6      custom-0
+```
+
+`encodeInstruction(Opcode::BARRIER, 0, 0, 0, /*imm=*/5)`:
+
+```
+ 31                    20 19     15 14  12 11      7 6      0
++------------------------+---------+------+---------+--------+
+|   000000000101         |  00000  | 010  |  00000  |0101011 |
++------------------------+---------+------+---------+--------+
+     imm[11:0]=5            rs1=0   BARRIER  rd=0      custom-1
+```
+
+`encodeInstruction(Opcode::HALT)`:
+
+```
+ 31           25 24     20 19     15 14  12 11      7 6      0
++---------------+---------+---------+------+---------+--------+
+|   0000000     |  00000  |  00000  | 011  |  00000  |0101011 |
++---------------+---------+---------+------+---------+--------+
+    (unused)      (unused)  (unused)  HALT    (unused)  custom-1
+```
+
+Each of these round-trips through `decodeInstruction()` back to the exact
+`Instruction` that `makeInstr()`/`toHls()` produce today for the same
+kernel-program calls in `kernel_programs.h` — the basis for step 6's
+bit-exact regression check.
+
+### 13.10 Explicit non-goals (scope boundary)
+
+- **Not RVV.** No vector-length register, no `LMUL`/`SEW` configuration, no
+  real vector register file. `custom-0`'s "vector" ops remain fixed-width
+  (one op = one SIMT-lane-parallel operation across the warp, exactly as
+  today) — a real RVV decode stage is still a materially larger, separate
+  future item (§12 step 5's estimate stands if that's ever pursued).
+- **Not real RV32F.** §13.5's non-goal note above.
+- **Not a compiler/assembler.** This only defines the on-chip encoding and
+  the `encodeInstruction`/`decodeInstruction` codec. Anything that
+  currently builds `program[]` arrays by calling `makeInstr()`/`toHls()`
+  switches to calling `encodeInstruction()` instead — still hand-built
+  test/host code, not a new toolchain.
+
+### 13.11 Implementation procedure — DONE, all 7 steps
+
+1. **Done.** `hls_types.h`: `raw_instr_t = ap_uint<32>` added; `instr_word_t`
+   repointed to it. `Instruction` struct untouched.
+2. **Done.** `hls/src/compute_unit/rv32i_codec.h` implements §13.8's
+   contract against §13.4/§13.5/§13.6's tables, plus §13.12's
+   `encodeInstructionExpanded()` (found necessary during implementation,
+   not part of the original design).
+3. **Done.** `compute_pipeline.cpp`'s `executeOneWarp` fetch line now reads
+   `decodeInstruction(program[i])`. No other line in the file changed.
+4. **Done**, with one correction found via real execution (§13.12):
+   `test_compute_pipeline.cpp`/`test_pipeline_integration.cpp`/
+   `test_gpgpu_top.cpp`'s `toHls()`+`loadProgram()` pairs (identical in all
+   three) now call `encodeInstructionExpanded()` through a single
+   `loadProgram()` that tracks a separately-growing output index and
+   **returns the actual raw-word count** (§13.12 explains why this return
+   value, not `src.size()`, must feed every `program_len`/`cp.start()` call
+   site). `test_hls_data_structures.cpp`'s one `Instruction`-streaming test
+   was rewritten to round-trip through the codec instead (still validates
+   the same fields).
+5. **Done, on real execution, not just compilation.** Built a real GTest
+   (from `/home/sebastian/gem5/ext/googletest`, no prebuilt binary was
+   available in this environment) and ran all four affected targets plus
+   the untouched scheduler suite:
+   - `test_hls_data_structures`: 9/9 pass.
+   - `test_compute_pipeline`: 8/8 pass (initially 7/8 — see §13.12 for the
+     one real failure found and its fix).
+   - `test_pipeline_integration`: 3/3 pass.
+   - `test_gpgpu_top`: 3/3 pass.
+   - `test_mem_arbiter`: 4/4 pass (unaffected, confirms nothing about the
+     scheduler broke).
+   - `test_cu_dispatch_unit`/`test_barrier_arbiter`: 8/8 and 6/6 pass.
+     (First attempt used `-std=c++14` and failed to link -
+     `CuDispatchUnit::INVALID_SLOT`, a `static constexpr int` with no
+     out-of-class definition, needs one pre-C++17. Re-verified at
+     `-std=c++17` - the real standard `CMakeLists.txt:9` actually builds
+     this project with, where `static constexpr` members are implicitly
+     `inline` and no out-of-class definition is needed - and both pass
+     cleanly. Not a real issue: an artifact of the first verification
+     command's flags, not of `cu_dispatch_unit.h` or anything in this
+     section.)
+6. **Done.** This section, `specs/001-open-riscv-gpgpu/tasks.md`, and the
+   task tracker.
+7. **Done.** §13.10's non-goals stand unchanged; RVV is not touched by
+   anything in §13.12 either.
+
+### 13.12 Found during implementation: `ADDI`'s 12-bit immediate isn't wide
+### enough for `kernel_programs.h`'s constant-loading idiom — `LUI`+`ADDI`
+### expansion, flagged for later software revisions
+
+**What broke.** `ComputePipeline.FpUniformSaxpy` failed on first real run
+(not caught by design review — found by actually executing the test, per
+this project's standing rigor). Root cause: `kernel_programs.h`'s
+`fpUniformSaxpy()` loads float constants via
+`makeInstr(Opcode::ADDI, rd, /*rs1=*/0, 0, floatAsReg(alpha))` — e.g.
+`floatAsReg(2.0f)` = `0x40000000`. The golden SystemC model's
+`Instruction::imm` is an unconstrained `int32_t`, so this "just works" in
+simulation. **Real RV32I's `ADDI` has only a 12-bit signed immediate**
+(±2047) — §13.4's encoding is spec-correct, and correctly truncated the
+upper 20 bits, which is exactly why the loaded value came back as 0.
+
+**Why this is a real RV32I fact, not a bug in this design.** No single
+RV32I instruction can load an arbitrary 32-bit constant — this is exactly
+why real toolchains use the standard `li rd, imm32` pseudo-op, which
+assemblers expand to `lui rd, %hi(imm32)` + `addi rd, rd, %lo(imm32)`.
+
+**Scope, checked before implementing (not assumed):** every kernel in
+`kernel_programs.h` was read. Only `fpUniformSaxpy()`'s three `ADDI`s
+(loading `alpha`/`x`/`y`'s float bit patterns) hit this — `intSaxpy()`'s
+`ADDI`s use small integers (fit in 12 bits fine), `divergentOddEven()`'s
+and `parallelReduction()`'s `ADDI`s load small integers too, and
+`fpGemm()`/`conv2d3x3()`/`fpSaxpy()`/`fpFmadd()`/`fpDivergentSaxpy()` are
+`[DIRECT]` kernels whose float operands are pre-seeded directly into
+registers by the calling test, never loaded via `ADDI`. No kernel combines
+an out-of-range `ADDI` with a `BARRIER`/`VBRANCH` depending on absolute
+instruction position, so expansion never shifts a position-sensitive
+target.
+
+**Fix: `encodeInstructionExpanded()`** (`rv32i_codec.h`, next to
+`encodeInstruction()`). Detects the pattern (`ADDI`, `rs1==0`, immediate
+outside ±2047) and emits the standard two-word `LUI`+`ADDI` split instead
+of one word, using the same rounding formula real assemblers use
+(`hi20 = (imm + 0x800) >> 12; lo12 = imm - (hi20 << 12);` — rounds toward
+the `LUI` value that makes the `ADDI`'s sign-extended low 12 bits combine
+back to the exact original `imm` regardless of bit 11). Every other
+opcode/immediate combination still emits exactly one word. Returns the
+word count (1 or 2) so callers can track a growing output index.
+
+**Consequence that had to be hunted down separately:** program length is
+no longer always `src.size()`. Every `loadProgram()` (three near-identical
+copies, one per affected test file) was changed to return the actual
+expanded word count, and every call site that previously passed
+`program.size()`/`golden.size()` into `cp.start()`/`compute_pipeline()`/
+`top.launchKernel()` now uses that returned count instead. This was a
+second real bug (silently truncating `fpUniformSaxpy`'s program 3 words
+short, stopping before `VFMUL`/`VFADD`/`HALT` ever ran) — caught the same
+way, by executing the test rather than trusting the fix in isolation.
+
+**Flag for later software revisions (why the user asked this be
+documented):** the *golden SystemC model itself* still uses this
+unconstrained-immediate `ADDI` idiom — `kernel_programs.h` is unchanged,
+and correctly so, since it's the golden reference and the SystemC
+simulation has no 12-bit constraint to violate. If a future real compiler
+targets this HLS core directly (§12/§13.10's "not a compiler" boundary),
+it needs to know: (1) any constant load wider than 12 bits **must** be
+expressed as `LUI`+`ADDI` at the source/IR level, exactly like a real
+RISC-V backend, not as a single wide-immediate pseudo-instruction, and (2)
+this HLS port's own `encodeInstructionExpanded()` already does this
+expansion automatically for hand-built test/golden-translation programs,
+but a real compiler's own code generator is responsible for doing it
+itself for anything it emits directly — `encodeInstructionExpanded()`
+should not be relied on as a permanent crutch once a real toolchain exists.
+
+---

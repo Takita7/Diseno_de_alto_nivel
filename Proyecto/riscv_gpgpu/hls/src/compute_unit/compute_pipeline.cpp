@@ -66,6 +66,7 @@
 
 #include "compute_pipeline.h"
 #include "../simt_controller/divergence_stack.h"
+#include "rv32i_codec.h"
 
 namespace riscv_gpgpu_hls {
 
@@ -220,7 +221,7 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
 #pragma HLS LOOP_TRIPCOUNT max=MAX_PROGRAM_LEN
         if (i >= static_cast<uint32_t>(MAX_PROGRAM_LEN)) break;  // static bound - see hls_config.h's open MAX_PROGRAM_LEN sizing note
 
-        const Instruction& instr = program[i];
+        const Instruction instr = decodeInstruction(program[i]);   // SS13.2 - program[] now holds raw_instr_t
         thread_mask_t mask = simt.getActiveMask();
         Opcode       op    = instr.opcode;
 

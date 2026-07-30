@@ -21,6 +21,7 @@
 #include "scheduler/gpgpu_top.h"
 #include "scheduler/mem_arbiter.h"
 #include "compute_unit/compute_pipeline.h"
+#include "compute_unit/rv32i_codec.h"
 #include "memory/memory_pipeline.h"
 #include "../../models/systemc/src/common/kernel_programs.h"
 
@@ -28,17 +29,24 @@ using namespace riscv_gpgpu_hls;
 
 namespace {
 
-Instruction toHls(const riscv_gpgpu::Instruction& gi) {
-    Instruction hi;
-    hi.pc = gi.pc; hi.opcode = static_cast<Opcode>(gi.opcode);
-    hi.rs1 = gi.rs1; hi.rs2 = gi.rs2; hi.rd = gi.rd; hi.imm = gi.imm;
-    hi.is_vector = gi.is_vector; hi.is_memory = gi.is_memory; hi.is_branch = gi.is_branch;
-    return hi;
-}
-
-void loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
-                  const std::vector<riscv_gpgpu::Instruction>& src) {
-    for (size_t i = 0; i < src.size(); ++i) program[i] = toHls(src[i]);
+// docs/hls/interfaces.md SS13/SS13.12: see test_compute_pipeline.cpp's
+// loadProgram() for the full rationale (identical here) - program[] now
+// holds raw_instr_t, and one golden instruction can expand to two raw
+// words (LUI+ADDI), so the output index is tracked separately.
+// Returns the actual number of raw words written - see
+// test_compute_pipeline.cpp's loadProgram() for why this must be used
+// instead of golden.size() below (SS13.12 expansion).
+size_t loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
+                    const std::vector<riscv_gpgpu::Instruction>& src) {
+    size_t out_i = 0;
+    for (size_t i = 0; i < src.size(); ++i) {
+        const riscv_gpgpu::Instruction& gi = src[i];
+        raw_instr_t words[2];
+        int n = encodeInstructionExpanded(static_cast<Opcode>(gi.opcode),
+                                           gi.rd, gi.rs1, gi.rs2, gi.imm, words);
+        for (int k = 0; k < n; ++k) program[out_i++] = words[k];
+    }
+    return out_i;
 }
 
 }  // namespace
@@ -46,7 +54,7 @@ void loadProgram(instr_word_t program[MAX_PROGRAM_LEN],
 TEST(GpgpuTop, SingleWarpKernelRunsToCompletionAutonomously) {
     auto golden = riscv_gpgpu::kernels::intSaxpy(/*alpha=*/2, /*y=*/10);
     static instr_word_t dram_program[MAX_PROGRAM_LEN];
-    loadProgram(dram_program, golden);
+    size_t program_len = loadProgram(dram_program, golden);
 
     // static, not stack-local: compute_pipeline's thread below is detached,
     // not joined - it's a free-running kernel that never returns, so it's
@@ -73,12 +81,12 @@ TEST(GpgpuTop, SingleWarpKernelRunsToCompletionAutonomously) {
     for (int i = 0; i < NUM_CUS; ++i) {
         cp[i] = std::thread([&, i]() {
             compute_pipeline(cu_id_t(i), dispatch_out[i], top.cu(i).programArray(),
-                              golden.size(), top.cu(i).regsArray(),
+                              program_len, top.cu(i).regsArray(),
                               mem_req[i], mem_resp[i], status_in[i]);
         });
     }
 
-    ASSERT_TRUE(top.launchKernel(dram_program, golden.size(), /*total_warps=*/1));
+    ASSERT_TRUE(top.launchKernel(dram_program, program_len, /*total_warps=*/1));
 
     int rounds = 0;
     while (!top.kernelComplete()) {
@@ -98,7 +106,7 @@ TEST(GpgpuTop, SingleWarpKernelRunsToCompletionAutonomously) {
 TEST(GpgpuTop, TwoWarpBarrierKernelDrivenEntirelyByTheScheduler) {
     auto golden = riscv_gpgpu::kernels::parallelReduction();
     static instr_word_t dram_program[MAX_PROGRAM_LEN];
-    loadProgram(dram_program, golden);
+    size_t program_len = loadProgram(dram_program, golden);
 
     // static for the same reason as the single-warp test above: three
     // separate threads here (compute_pipeline, mem_arbiter, memory_pipeline)
@@ -128,7 +136,7 @@ TEST(GpgpuTop, TwoWarpBarrierKernelDrivenEntirelyByTheScheduler) {
     for (int i = 0; i < NUM_CUS; ++i) {
         cp[i] = std::thread([&, i]() {
             compute_pipeline(cu_id_t(i), dispatch_out[i], top.cu(i).programArray(),
-                              golden.size(), top.cu(i).regsArray(),
+                              program_len, top.cu(i).regsArray(),
                               cu_mem_req[i], cu_mem_resp[i], status_in[i]);
         });
     }
@@ -139,7 +147,7 @@ TEST(GpgpuTop, TwoWarpBarrierKernelDrivenEntirelyByTheScheduler) {
         memory_pipeline(mem_req_single, mem_resp_single, backing.data());
     });
 
-    ASSERT_TRUE(top.launchKernel(dram_program, golden.size(), /*total_warps=*/2))
+    ASSERT_TRUE(top.launchKernel(dram_program, program_len, /*total_warps=*/2))
         << "2 <= NUM_CUS*MAX_WARPS_PER_CU, must be accepted";
 
     int rounds = 0;
@@ -166,10 +174,10 @@ TEST(GpgpuTop, TwoWarpBarrierKernelDrivenEntirelyByTheScheduler) {
 TEST(GpgpuTop, OverCapacityLaunchIsRejectedNotSilentlyHung) {
     auto golden = riscv_gpgpu::kernels::intSaxpy(2, 10);
     static instr_word_t dram_program[MAX_PROGRAM_LEN];
-    loadProgram(dram_program, golden);
+    size_t program_len = loadProgram(dram_program, golden);
 
     GpgpuTop top;
-    bool ok = top.launchKernel(dram_program, golden.size(),
+    bool ok = top.launchKernel(dram_program, program_len,
                                 warp_id_t(NUM_CUS * MAX_WARPS_PER_CU + 1));
     EXPECT_FALSE(ok);
     EXPECT_TRUE(top.launchFault());
