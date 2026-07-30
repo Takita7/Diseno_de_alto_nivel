@@ -1,10 +1,10 @@
-// riscv_isa.h - RV32I (+ RV32M) instruction decoder
+// riscv_isa.h - RV32I + RV32M + RV32F instruction decoder
 //
 // Header-only decoder. Parses a 32-bit instruction word into an
 // RV32Instr descriptor. Used by the ComputeUnit fetch-decode-execute loop.
 //
-// Supports: RV32I base ISA + M extension (MUL/DIV/REM).
-// Does NOT decode RVC (compressed) instructions — compile with -march=rv32im.
+// Supports: RV32I base ISA + M extension (MUL/DIV/REM) + F extension (single-precision FP).
+// Does NOT decode RVC (compressed) instructions — compile with -march=rv32im or -march=rv32imf.
 //
 
 #ifndef RISCV_GPGPU_RISCV_ISA_H
@@ -37,14 +37,28 @@ struct RV32Instr {
         JAL,
         // System
         ECALL, EBREAK, FENCE,
+        // ── F-extension (RV32F) ──────────────────────────────────────────────
+        // FP load/store
+        FLW, FSW,
+        // FP arithmetic
+        FADD_S, FSUB_S, FMUL_S, FDIV_S, FSQRT_S,
+        // FP fused multiply-add (R4-type: rd = rs1*rs2 ± rs3)
+        FMADD_S, FMSUB_S, FNMADD_S, FNMSUB_S,
+        // FP compare → integer result
+        FEQ_S, FLT_S, FLE_S,
+        // FP↔integer conversions
+        FCVT_W_S, FCVT_WU_S, FCVT_S_W, FCVT_S_WU,
+        // FP↔integer bit moves
+        FMV_X_W, FMV_W_X,
         // Unknown / illegal
         UNKNOWN
     };
 
     Op      op   = Op::UNKNOWN;
-    uint8_t rd   = 0;   // destination register
+    uint8_t rd   = 0;   // destination register (int or FP, by instruction type)
     uint8_t rs1  = 0;   // source register 1
     uint8_t rs2  = 0;   // source register 2
+    uint8_t rs3  = 0;   // source register 3 (R4-type FP: FMADD/FMSUB/FNMADD/FNMSUB)
     int32_t imm  = 0;   // sign-extended immediate
 };
 
@@ -203,6 +217,68 @@ inline RV32Instr decodeRV32(uint32_t instr) {
 
     case 0x0F:  // FENCE
         d.op = Op::FENCE;
+        break;
+
+    // ── F-extension: LOAD-FP ──────────────────────────────────────────────────
+    case 0x07:  // LOAD-FP  —  flw rd, imm(rs1)
+        d.imm = signExtend12((instr >> 20) & 0xFFF);
+        if (funct3 == 0x2) d.op = Op::FLW;
+        break;
+
+    // ── F-extension: STORE-FP ─────────────────────────────────────────────────
+    case 0x27:  // STORE-FP  —  fsw rs2, imm(rs1)
+        d.imm = signExtend12(((instr >> 25) << 5) | ((instr >> 7) & 0x1F));
+        if (funct3 == 0x2) d.op = Op::FSW;
+        break;
+
+    // ── F-extension: R4-type fused ops ───────────────────────────────────────
+    case 0x43:  // FMADD  — fd = fs1*fs2 + fs3
+        d.rs3 = (instr >> 27) & 0x1F;
+        if (((instr >> 25) & 0x3) == 0x0) d.op = Op::FMADD_S;
+        break;
+    case 0x47:  // FMSUB  — fd = fs1*fs2 - fs3
+        d.rs3 = (instr >> 27) & 0x1F;
+        if (((instr >> 25) & 0x3) == 0x0) d.op = Op::FMSUB_S;
+        break;
+    case 0x4B:  // FNMSUB — fd = -(fs1*fs2) + fs3
+        d.rs3 = (instr >> 27) & 0x1F;
+        if (((instr >> 25) & 0x3) == 0x0) d.op = Op::FNMSUB_S;
+        break;
+    case 0x4F:  // FNMADD — fd = -(fs1*fs2) - fs3
+        d.rs3 = (instr >> 27) & 0x1F;
+        if (((instr >> 25) & 0x3) == 0x0) d.op = Op::FNMADD_S;
+        break;
+
+    // ── F-extension: OP-FP ────────────────────────────────────────────────────
+    case 0x53:  // OP-FP (funct7 selects the operation)
+        switch (funct7) {
+        case 0x00: d.op = Op::FADD_S;  break;
+        case 0x04: d.op = Op::FSUB_S;  break;
+        case 0x08: d.op = Op::FMUL_S;  break;
+        case 0x0C: d.op = Op::FDIV_S;  break;
+        case 0x2C: d.op = Op::FSQRT_S; break;
+        case 0x50:  // FP compare → integer
+            switch (funct3) {
+            case 0: d.op = Op::FLE_S; break;
+            case 1: d.op = Op::FLT_S; break;
+            case 2: d.op = Op::FEQ_S; break;
+            default: d.op = Op::UNKNOWN;
+            }
+            break;
+        case 0x60:  // FCVT.W.S / FCVT.WU.S  (float → int)
+            d.op = (d.rs2 == 0) ? Op::FCVT_W_S : Op::FCVT_WU_S;
+            break;
+        case 0x68:  // FCVT.S.W / FCVT.S.WU  (int → float)
+            d.op = (d.rs2 == 0) ? Op::FCVT_S_W : Op::FCVT_S_WU;
+            break;
+        case 0x70:  // FMV.X.W — move float bits to integer reg
+            if (funct3 == 0) d.op = Op::FMV_X_W;
+            break;
+        case 0x78:  // FMV.W.X — move integer bits to float reg
+            if (funct3 == 0) d.op = Op::FMV_W_X;
+            break;
+        default: d.op = Op::UNKNOWN;
+        }
         break;
 
     default:
