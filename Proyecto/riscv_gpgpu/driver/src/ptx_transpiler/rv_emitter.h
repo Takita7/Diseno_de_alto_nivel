@@ -7,10 +7,7 @@
 //     ld.param.u32 %rx, [param_N] → mv {ireg(rx)}, a{N}
 //     ld.param.f32 %fx, [param_N] → fmv.w.x {freg(fx)}, a{N}
 //
-// Special registers (accessed via gp = THREAD_CTX_BASE):
-//   %tid.x   = 0(gp)    %tid.y   = 4(gp)    %tid.z   = 8(gp)
-//   %ctaid.x = 12(gp)   %ctaid.y = 16(gp)   %ctaid.z = 20(gp)
-//   %ntid.x  = 24(gp)   %ntid.y  = 28(gp)   %ntid.z  = 32(gp)
+// Special registers (accessed via gp = THREAD_CTX_BASE = 0xE000):\n//   %tid.x   = 0(gp)    %tid.y   = 4(gp)    %tid.z   = 8(gp)\n//   %ctaid.x = 12(gp)   %ctaid.y = 16(gp)   %ctaid.z = 20(gp)\n//   %ntid.x  = 24(gp)   %ntid.y  = 28(gp)   %ntid.z  = 32(gp)\n// Note: THREAD_CTX_BASE is above the shared memory range (0x0000C000)
 
 #pragma once
 

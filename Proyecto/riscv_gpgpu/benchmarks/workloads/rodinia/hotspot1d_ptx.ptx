@@ -1,0 +1,75 @@
+; hotspot1d_ptx.ptx — Rodinia Hotspot-inspired 1D thermal stencil in PTX
+;
+; Models heat diffusion: T_new[i] = T[i] + alpha * (T[i-1] - 2*T[i] + T[i+1])
+;
+; To avoid boundary-condition logic in the kernel, the host passes T_padded
+; of size N+2 where:
+;   T_padded[0]     = T[0]     (ghost cell: left boundary = first element)
+;   T_padded[1..N]  = T[0..N-1]
+;   T_padded[N+1]   = T[N-1]  (ghost cell: right boundary = last element)
+;
+; Thread i reads T_padded[i], T_padded[i+1], T_padded[i+2]
+;               = T[i-1],      T[i],           T[i+1]  (with clamp at boundaries)
+;
+; Calling convention:
+;   param_0 = T_padded  (const float*, size N+2)
+;   param_1 = T_out     (float*,       size N)
+;   param_2 = N         (int)
+;   param_3 = alpha     (float, thermal diffusivity coeff; passed as FP bits in a3)
+;
+; Exercises: Phase 5d (transpiler), Phase 5e (RV32F fmadd.s + fadd/fsub),
+;            Phase 5f (THREAD_CTX per-thread mapping).
+
+.version 7.0
+.target sm_20
+.address_size 32
+
+.visible .entry hotspot1d(
+    .param .u32 hs_p0,
+    .param .u32 hs_p1,
+    .param .u32 hs_p2,
+    .param .f32 hs_p3
+)
+{
+    .reg .pred  %p<2>;
+    .reg .u32   %r<10>;
+    .reg .f32   %f<5>;
+
+    ld.param.u32    %r0, [hs_p0];
+    ld.param.u32    %r1, [hs_p1];
+    ld.param.u32    %r2, [hs_p2];
+    ld.param.f32    %f0, [hs_p3];
+
+    mov.u32         %r3, %tid.x;
+    mov.u32         %r4, %ctaid.x;
+    mov.u32         %r5, %ntid.x;
+    mul.lo.u32      %r6, %r4, %r5;
+    add.u32         %r6, %r6, %r3;
+
+    setp.ge.u32     %p0, %r6, %r2;
+    @%p0 bra        $L__hs_end;
+
+    mul.lo.u32      %r7, %r6, 4;
+    add.u32         %r7, %r0, %r7;
+
+    ld.global.f32   %f1, [%r7];
+
+    add.u32         %r8, %r7, 4;
+    ld.global.f32   %f2, [%r8];
+
+    add.u32         %r9, %r7, 8;
+    ld.global.f32   %f3, [%r9];
+
+    add.f32         %f4, %f1, %f3;
+    sub.f32         %f4, %f4, %f2;
+    sub.f32         %f4, %f4, %f2;
+
+    fma.rn.f32      %f4, %f0, %f4, %f2;
+
+    mul.lo.u32      %r7, %r6, 4;
+    add.u32         %r7, %r1, %r7;
+    st.global.f32   [%r7], %f4;
+
+$L__hs_end:
+    ret;
+}
