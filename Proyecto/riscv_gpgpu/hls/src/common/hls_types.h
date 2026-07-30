@@ -77,7 +77,18 @@ struct Instruction {
     bool        is_memory = false;
     bool        is_branch = false;
 };
-typedef Instruction instr_word_t;
+
+// On-chip storage/wire form of a program word (docs/hls/interfaces.md
+// SS13.2) - real RV32I/custom-opcode bit encoding, decoded into the
+// `Instruction` struct above (unchanged, still what every execute-stage
+// function reads) once per fetch via decodeInstruction()
+// (compute_unit/rv32i_codec.h). `instr_word_t` - the on-chip program-store
+// element type (CuDispatchUnit::program_[], compute_pipeline's program[]
+// parameter) - now names this raw form instead of `Instruction` directly;
+// neither of those call sites inspects instruction fields, so this rename
+// alone requires no changes to them (SS13.1).
+typedef ap_uint<32> raw_instr_t;
+typedef raw_instr_t instr_word_t;
 
 // Register-bit reinterpretation helpers - identical semantics to
 // types.h's regAsFloat/floatAsReg (bit reinterpretation only, no HLS-specific
@@ -118,12 +129,59 @@ struct mem_resp_t {
     reg_t     data    = 0;
 };
 
+// slot_id indexes one of a CU's MAX_WARPS_PER_CU resident warp slots -
+// declared here (moved ahead of its original SS2.5.3 position below) since
+// warp_status_t now needs it too.
+typedef ap_uint<3> slot_id_t;
+
 // ── Warp status (docs/hls/interfaces.md SS2.4 - host-orchestrated barriers) ─
 enum class WarpStatusCode : uint8_t { COMPLETE = 0, STALLED_AT_BARRIER = 1 };
 
 struct warp_status_t {
     WarpStatusCode code       = WarpStatusCode::COMPLETE;
     barrier_id_t   barrier_id = 0;   // meaningful only if code == STALLED_AT_BARRIER
+    slot_id_t      slot_id    = 0;   // NEW (SS2.5.3) - which CuDispatchUnit slot this
+                                      // result belongs to
+    ap_uint<16>    resume_pc  = 0;   // NEW, found while implementing step 5 - the old
+                                      // host-orchestrated design never needed this field
+                                      // because the host tracked instruction-stream
+                                      // position itself; compute_pipeline now reads a
+                                      // shared program[] array by an internal index, so
+                                      // it must report where to resume. Meaningful only
+                                      // if code == STALLED_AT_BARRIER.
+};
+
+// ── On-chip scheduler types (docs/hls/interfaces.md SS2.5.3) ────────────────
+// One resident slot per warp a CU currently owns for the running kernel -
+// CuDispatchUnit's per-CU state (docs/hls/interfaces.md SS2.5.3/SS10.7).
+// Golden reference for the fields it replaces: GPGPUTop::simulationProcess()'s
+// local barrier_queue (a saved WarpContext per stalled warp, unbounded) -
+// this is the bounded, per-slot equivalent.
+// regs is deliberately NOT a member here (differs from an earlier docs/hls/
+// interfaces.md SS2.5.3 draft) - found while implementing CuDispatchUnit:
+// compute_pipeline's regs[][] port (SS2.5.3) needs one flat
+// reg_t[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][32] array to alias, and an
+// array of WarpSlot structs (array-of-structs, one 4KB regs blob per element
+// mixed with small bookkeeping fields) doesn't compose into that shape. Register
+// storage lives in CuDispatchUnit as its own separate, flat member instead
+// (struct-of-arrays) - see cu_dispatch_unit.h. WarpSlot keeps only the small
+// per-warp bookkeeping fields.
+struct WarpSlot {
+    warp_id_t     warp_id    = 0;
+    ap_uint<16>   resume_pc  = 0;   // program-store index to resume at after a stall
+    barrier_id_t  barrier_id = 0;   // meaningful only if state == STALLED
+    enum class State : uint8_t { EMPTY, READY, STALLED, DONE };
+    State         state      = State::EMPTY;
+};
+
+// CuDispatchUnit -> compute_pipeline (docs/hls/interfaces.md SS2.5.3).
+// Supersedes compute_pipeline's old per-invocation scalar arguments
+// (cu_id/warp_id/active_mask_init, SS2.2) with one stream-carried struct.
+struct warp_dispatch_t {
+    slot_id_t     slot_id           = 0;
+    warp_id_t     warp_id           = 0;
+    thread_mask_t active_mask_init  = 0;
+    ap_uint<16>   resume_pc         = 0;   // 0 for a fresh warp, else past the BARRIER
 };
 
 }  // namespace riscv_gpgpu_hls

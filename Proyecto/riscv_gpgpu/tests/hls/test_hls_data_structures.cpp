@@ -10,20 +10,23 @@
 
 #include "common/hls_config.h"
 #include "common/hls_types.h"
+#include "compute_unit/rv32i_codec.h"
 #include "simt_controller/divergence_stack.h"
 #include "memory/cache_bank.h"
 
 using namespace riscv_gpgpu_hls;
 
-TEST(HlsTypes, InstructionStreamRoundTrip) {
+// docs/hls/interfaces.md SS13: instr_word_t is now raw_instr_t (a real
+// RV32I-encoded ap_uint<32>), not a decoded Instruction struct directly -
+// this now round-trips through the codec instead of streaming a struct.
+// `pc` is no longer checked: it isn't carried in the raw word
+// (decodeInstruction() always returns pc=0 - see rv32i_codec.h).
+TEST(HlsTypes, InstrWordStreamRoundTrip) {
     hls::stream<instr_word_t> s;
-    Instruction i;
-    i.pc = 4; i.opcode = Opcode::ADDI; i.rd = 3; i.rs1 = 0; i.imm = 42;
-    i.is_vector = false; i.is_memory = false; i.is_branch = false;
-    s.write(i);
+    instr_word_t w = encodeInstruction(Opcode::ADDI, /*rd=*/3, /*rs1=*/0, /*rs2=*/0, /*imm=*/42);
+    s.write(w);
 
-    Instruction o = s.read();
-    EXPECT_EQ(o.pc, 4);
+    Instruction o = decodeInstruction(s.read());
     EXPECT_EQ(o.opcode, Opcode::ADDI);
     EXPECT_EQ(o.rd, 3);
     EXPECT_EQ(o.imm, 42);

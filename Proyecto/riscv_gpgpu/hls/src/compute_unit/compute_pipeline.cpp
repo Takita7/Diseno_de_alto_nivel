@@ -36,9 +36,37 @@
 // compute_unit.cpp - these opcodes fall through to executeALU()'s
 // `default: break` there too. This is inherited golden-model ISA scope, not
 // a porting gap.
+//
+// ── docs/hls/interfaces.md SS2.5.3 rewrite: what changed, what didn't ──────
+// Per user direction: reuse as much of the above (already implemented,
+// already tested) as possible, rather than rewriting from scratch.
+//
+//   - executeALU/executeVector/executeMemOp/executeBranch/executeJoin below
+//     are UNCHANGED, byte-for-byte, from the original T022 port. They
+//     operate on a RegFile reference - exactly one slot's register storage
+//     either way, so nothing about them needed to change.
+//   - The old entry point (one decode loop, BARRIER -> write status_out +
+//     `return`) is now executeOneWarp(), returning a warp_status_t instead
+//     of writing one to a stream and returning from the whole kernel - a
+//     free-running kernel can never `return` on a BARRIER, it has to go
+//     back and read the next dispatch.
+//   - Instructions come from a local program[] array indexed by pc
+//     (SS10.8) instead of a sequential instr_in stream - resuming a
+//     stalled warp is now "start the loop at resume_pc" instead of the
+//     host carefully feeding a partial stream starting after the BARRIER.
+//   - warp_status_t now carries resume_pc, found necessary while
+//     implementing this: the old design never needed it because the host
+//     tracked stream position itself; nothing here does that anymore, so
+//     compute_pipeline has to report where to resume (SS2.5.3, hls_types.h).
+//   - cu_id is back as a scalar parameter, not part of warp_dispatch_t
+//     (an earlier SS2.5.3 draft omitted it without saying where it should
+//     live) - it's fixed per compute_pipeline instance (one per CU), not
+//     per-dispatch varying, so it belongs alongside program_len as
+//     launch-time configuration, not a per-dispatch stream field.
 
 #include "compute_pipeline.h"
 #include "../simt_controller/divergence_stack.h"
+#include "rv32i_codec.h"
 
 namespace riscv_gpgpu_hls {
 
@@ -170,56 +198,30 @@ static void executeJoin(DivergenceStack& simt) {
     simt.handleJoin();
 }
 
-// ── compute_pipeline ──────────────────────────────────────────────────────────
-// Golden reference: ComputeUnit::executeWarp() (compute_unit.cpp:62-120).
-void compute_pipeline(
-    cu_id_t          cu_id,
-    warp_id_t        warp_id,
-    thread_mask_t    active_mask_init,
-    uint32_t         program_len,
-
-    hls::stream<instr_word_t>& instr_in,
-
-    reg_t regs[MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
-
-    hls::stream<mem_req_t>&  mem_req_out,
-    hls::stream<mem_resp_t>& mem_resp_in,
-
-    hls::stream<warp_status_t>& status_out
-) {
-#pragma HLS INTERFACE s_axilite port=cu_id             bundle=control
-#pragma HLS INTERFACE s_axilite port=warp_id           bundle=control
-#pragma HLS INTERFACE s_axilite port=active_mask_init  bundle=control
-#pragma HLS INTERFACE s_axilite port=program_len       bundle=control
-#pragma HLS INTERFACE s_axilite port=return            bundle=control
-#pragma HLS INTERFACE axis      port=instr_in
-#pragma HLS INTERFACE ap_memory port=regs
-    // T024: REQUIRED for correctness of the UNROLL pragmas already in
-    // executeALU()/executeVector() (this file) - each unrolls over all
-    // MAX_THREADS_PER_WARP=32 lanes, every one of which reads/writes
-    // regs[t][...] in the same cycle. Without partitioning the lane (dim=1)
-    // dimension, `regs` stays one array with (at most) 2 physical ports and
-    // 32-way simultaneous access is not synthesizable as written - this is
-    // not an optimization on top of a working design, the UNROLL pragmas
-    // don't mean what they're supposed to mean without it.
-#pragma HLS ARRAY_PARTITION variable=regs dim=1 complete
-#pragma HLS INTERFACE axis      port=mem_req_out
-#pragma HLS INTERFACE axis      port=mem_resp_in
-#pragma HLS INTERFACE axis      port=status_out
-
+// ── Per-warp execution (docs/hls/interfaces.md SS2.5.3) ─────────────────────
+// Golden reference: ComputeUnit::executeWarp() (compute_unit.cpp:62-120) -
+// same reference T022 used; this is that same logic, restructured to return
+// its result instead of writing to status_out and returning from the whole
+// kernel (see this file's header for why).
+static warp_status_t executeOneWarp(cu_id_t cu_id, const warp_dispatch_t& d,
+                                     instr_word_t program[MAX_PROGRAM_LEN],
+                                     uint32_t program_len,
+                                     RegFile regs,
+                                     hls::stream<mem_req_t>&  mem_req_out,
+                                     hls::stream<mem_resp_t>& mem_resp_in) {
     DivergenceStack simt;
     // Golden: `simt_ctrl_->initializeWarp(ctx.warp_id, config_.threads_per_warp);`
     // is called at the top of EVERY executeWarp() invocation, fresh start or
     // barrier resume alike (compute_unit.cpp:71 + its comment) - ported
     // unconditionally here too, not just on a "first call" path.
-    simt.initializeWarp(active_mask_init);
+    simt.initializeWarp(d.active_mask_init);
 
-COMPUTE_PIPELINE_DECODE_LOOP:
-    for (uint32_t i = 0; i < program_len; ++i) {
+EXECUTE_ONE_WARP_DECODE_LOOP:
+    for (uint32_t i = d.resume_pc; i < program_len; ++i) {
 #pragma HLS LOOP_TRIPCOUNT max=MAX_PROGRAM_LEN
         if (i >= static_cast<uint32_t>(MAX_PROGRAM_LEN)) break;  // static bound - see hls_config.h's open MAX_PROGRAM_LEN sizing note
 
-        Instruction  instr = instr_in.read();
+        const Instruction instr = decodeInstruction(program[i]);   // SS13.2 - program[] now holds raw_instr_t
         thread_mask_t mask = simt.getActiveMask();
         Opcode       op    = instr.opcode;
 
@@ -230,20 +232,21 @@ COMPUTE_PIPELINE_DECODE_LOOP:
         if (op == Opcode::BARRIER) {
             // Golden: records arrival (simt_ctrl_->threadHitBarrier), advances
             // pc past BARRIER, sets STALLED, returns (compute_unit.cpp:88-105).
-            // Arrival bookkeeping is host-side here (docs/hls/interfaces.md
-            // SS2.4) - compute_pipeline's job is just to report the stall and
-            // stop, which the host contract (SS2.2) picks up from here.
+            // Arrival bookkeeping is now on-chip (BarrierArbiter, docs/hls/
+            // interfaces.md SS2.5.5, superseding SS2.4's host-orchestrated
+            // contract) - compute_pipeline's job is still just to report the
+            // stall and stop where it is, same as before.
             warp_status_t st;
             st.code       = WarpStatusCode::STALLED_AT_BARRIER;
             st.barrier_id = barrier_id_t(instr.imm);
-            status_out.write(st);
-            return;
+            st.resume_pc  = ap_uint<16>(i + 1);   // golden: `++ctx.pc` before returning
+            return st;
         }
 
         // Golden dispatch order, unchanged (compute_unit.cpp:107-111):
         if      (op == Opcode::VBRANCH) executeBranch(simt, regs, instr, mask);
         else if (op == Opcode::VJOIN)   executeJoin(simt);
-        else if (instr.is_memory)       executeMemOp(cu_id, warp_id, regs, instr, mask, mem_req_out, mem_resp_in);
+        else if (instr.is_memory)       executeMemOp(cu_id, d.warp_id, regs, instr, mask, mem_req_out, mem_resp_in);
         else if (instr.is_vector)       executeVector(regs, instr, mask);
         else                            executeALU(regs, instr, mask);
     }
@@ -251,7 +254,57 @@ COMPUTE_PIPELINE_DECODE_LOOP:
     warp_status_t st;
     st.code       = WarpStatusCode::COMPLETE;
     st.barrier_id = 0;
-    status_out.write(st);
+    return st;
+}
+
+// ── compute_pipeline (docs/hls/interfaces.md SS2.5.3) ───────────────────────
+void compute_pipeline(
+    cu_id_t          cu_id,
+
+    hls::stream<warp_dispatch_t>& dispatch_in,
+
+    instr_word_t program[MAX_PROGRAM_LEN],
+    uint32_t     program_len,
+
+    reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
+
+    hls::stream<mem_req_t>&  mem_req_out,
+    hls::stream<mem_resp_t>& mem_resp_in,
+
+    hls::stream<warp_status_t>& status_out
+) {
+#pragma HLS INTERFACE s_axilite port=cu_id       bundle=control
+#pragma HLS INTERFACE s_axilite port=program_len bundle=control
+#pragma HLS INTERFACE axis      port=dispatch_in
+#pragma HLS INTERFACE ap_memory port=program
+#pragma HLS INTERFACE ap_memory port=regs
+    // Lane dimension is now dim=2, not dim=1 - a slot dimension (dim=1) was
+    // added in front of it (SS2.5.3). Same reason as T024's original
+    // partition (executeALU/executeVector unroll over all 32 lanes, every
+    // one reading/writing regs[..][t][..] the same cycle); dim=1 (slot) is
+    // deliberately left un-partitioned so slot_id addresses into ordinary
+    // BRAM instead of replicating storage across all MAX_WARPS_PER_CU slots
+    // - unverified against real synthesis yet, same T024-era caveat as the
+    // rest of this file's pragmas (docs/hls/interfaces.md SS8).
+#pragma HLS ARRAY_PARTITION variable=regs dim=2 complete
+#pragma HLS INTERFACE axis      port=mem_req_out
+#pragma HLS INTERFACE axis      port=mem_resp_in
+#pragma HLS INTERFACE axis      port=status_out
+
+    // Free-running (docs/hls/interfaces.md SS2.5.2) - same persistent-
+    // hardware model memory_pipeline already used, now extended here too.
+    // No `return` anywhere in this loop, unlike T022: see this file's
+    // header for why a BARRIER can no longer end the kernel invocation.
+    while (true) {
+#pragma HLS PIPELINE off
+        warp_dispatch_t d = dispatch_in.read();   // blocking
+
+        warp_status_t st = executeOneWarp(cu_id, d, program, program_len,
+                                           regs[d.slot_id],
+                                           mem_req_out, mem_resp_in);
+        st.slot_id = d.slot_id;
+        status_out.write(st);
+    }
 }
 
 }  // namespace riscv_gpgpu_hls

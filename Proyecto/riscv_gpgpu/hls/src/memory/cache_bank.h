@@ -59,6 +59,21 @@ public:
         word_t data = 0;
     };
 
+    // T024 pragmas on class-member arrays must live in a member function
+    // body, not next to the member declaration - `#pragma HLS` outside
+    // function scope is a real Vitis HLS csynth error (HLS 207-5507),
+    // caught by tests/fpga/test_flow.tcl's T020 smoke test (plain g++
+    // csim doesn't parse pragma placement rules at all, so the earlier
+    // csim-only tests/hls/* suite never caught this).
+    SetAssocCache() {
+#pragma HLS ARRAY_PARTITION variable=tag_  dim=1 complete
+#pragma HLS BIND_STORAGE    variable=tag_  type=RAM_2P impl=BRAM
+#pragma HLS ARRAY_PARTITION variable=valid_ dim=1 complete
+#pragma HLS BIND_STORAGE    variable=valid_ type=RAM_2P impl=BRAM
+#pragma HLS ARRAY_PARTITION variable=data_ dim=1 complete
+#pragma HLS BIND_STORAGE    variable=data_ type=RAM_2P impl=BRAM
+    }
+
     void reset() {
     RESET_WAYS:
         for (int w = 0; w < WAYS; ++w) {
@@ -172,16 +187,8 @@ private:
     // independent array (own BIND_STORAGE instance), matching the "N direct-
     // mapped banks" model exactly.
     tag_t  tag_  [WAYS][SETS_PER_WAY];
-#pragma HLS ARRAY_PARTITION variable=tag_ dim=1 complete
-#pragma HLS BIND_STORAGE variable=tag_ type=RAM_2P impl=BRAM
-
     bool   valid_[WAYS][SETS_PER_WAY];
-#pragma HLS ARRAY_PARTITION variable=valid_ dim=1 complete
-#pragma HLS BIND_STORAGE variable=valid_ type=RAM_2P impl=BRAM
-
     word_t data_ [WAYS][SETS_PER_WAY][WORDS_PER_LINE_T];
-#pragma HLS ARRAY_PARTITION variable=data_ dim=1 complete
-#pragma HLS BIND_STORAGE variable=data_ type=RAM_2P impl=BRAM
 
     // Accessed one set at a time (never unrolled across sets) - no
     // partitioning needed.

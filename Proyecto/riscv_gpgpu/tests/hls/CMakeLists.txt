@@ -117,3 +117,81 @@ if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE AND EXISTS ${HLS_COMPUTE_P
 else()
     message(STATUS "hls/src/{compute_unit,memory}/{compute,memory}_pipeline.cpp not found and/or Vitis HLS headers missing - skipping test_pipeline_integration")
 endif()
+
+# On-chip scheduler (docs/hls/interfaces.md SS2.5/SS10.12): CuDispatchUnit/
+# BarrierArbiter/MemArbiter are header-only (no threading in their own
+# tests - unlike GpgpuTop below, none of these three drive a real
+# compute_pipeline/memory_pipeline instance), same simple pattern
+# test_hls_data_structures uses.
+set(HLS_SCHEDULER_DIR "${CMAKE_SOURCE_DIR}/hls/src/scheduler")
+
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE AND EXISTS "${HLS_SCHEDULER_DIR}/cu_dispatch_unit.h")
+    add_executable(test_cu_dispatch_unit test_cu_dispatch_unit.cpp)
+    target_include_directories(test_cu_dispatch_unit PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_cu_dispatch_unit PRIVATE
+        GTest::GTest
+        GTest::Main
+    )
+    add_test(NAME cu_dispatch_unit_tests COMMAND test_cu_dispatch_unit)
+else()
+    message(STATUS "hls/src/scheduler/cu_dispatch_unit.h not found and/or Vitis HLS headers missing - skipping test_cu_dispatch_unit")
+endif()
+
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE AND EXISTS "${HLS_SCHEDULER_DIR}/barrier_arbiter.h")
+    add_executable(test_barrier_arbiter test_barrier_arbiter.cpp)
+    target_include_directories(test_barrier_arbiter PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_barrier_arbiter PRIVATE
+        GTest::GTest
+        GTest::Main
+    )
+    add_test(NAME barrier_arbiter_tests COMMAND test_barrier_arbiter)
+else()
+    message(STATUS "hls/src/scheduler/barrier_arbiter.h not found and/or Vitis HLS headers missing - skipping test_barrier_arbiter")
+endif()
+
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE AND EXISTS "${HLS_SCHEDULER_DIR}/mem_arbiter.h")
+    add_executable(test_mem_arbiter test_mem_arbiter.cpp)
+    target_include_directories(test_mem_arbiter PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_mem_arbiter PRIVATE
+        GTest::GTest
+        GTest::Main
+    )
+    add_test(NAME mem_arbiter_tests COMMAND test_mem_arbiter)
+else()
+    message(STATUS "hls/src/scheduler/mem_arbiter.h not found and/or Vitis HLS headers missing - skipping test_mem_arbiter")
+endif()
+
+# GpgpuTop (docs/hls/interfaces.md SS10.12) - the capstone: drives real
+# compute_pipeline/memory_pipeline/mem_arbiter instances via threads, same
+# pattern as test_pipeline_integration, plus mem_arbiter.h (header-only).
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE
+   AND EXISTS "${HLS_SCHEDULER_DIR}/gpgpu_top.h"
+   AND EXISTS ${HLS_COMPUTE_PIPELINE} AND EXISTS ${HLS_MEMORY_PIPELINE})
+    find_package(Threads REQUIRED)
+    add_executable(test_gpgpu_top test_gpgpu_top.cpp
+        ${HLS_COMPUTE_PIPELINE}
+        ${HLS_MEMORY_PIPELINE}
+    )
+    target_include_directories(test_gpgpu_top PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${CMAKE_SOURCE_DIR}/models/systemc/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_gpgpu_top PRIVATE
+        GTest::GTest
+        GTest::Main
+        Threads::Threads
+    )
+    add_test(NAME gpgpu_top_tests COMMAND test_gpgpu_top)
+else()
+    message(STATUS "hls/src/scheduler/gpgpu_top.h and/or compute_pipeline.cpp/memory_pipeline.cpp not found, and/or Vitis HLS headers missing - skipping test_gpgpu_top")
+endif()

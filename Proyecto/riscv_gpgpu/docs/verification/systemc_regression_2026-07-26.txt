@@ -1,0 +1,561 @@
+================================================================================
+SystemC golden-model regression run - for manual verification
+Date: 2026-07-26
+Purpose: sanity-check that the SystemC golden model still behaves as expected,
+         and specifically that the hand-traced expected values used throughout
+         tests/hls/*.cpp (T022 compute_pipeline / T023 memory_pipeline) match
+         real golden-model execution, not just a reading of its source.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. WHY THIS WAS NEEDED / HOW IT WAS RUN
+--------------------------------------------------------------------------------
+
+Earlier this session, `cmake .. -DBUILD_SYSTEMC_MODELS=ON -DBUILD_TESTS=ON`
+failed at `find_package(SystemC REQUIRED)`, which was read as "SystemC is not
+installed" and left unverified for the rest of the HLS porting work (T021-T023).
+That was wrong: SystemC 2.3.4 IS installed on this machine, at
+/usr/local/systemc. Two SEPARATE, PRE-EXISTING problems in the project's own
+build - unrelated to anything done this session - are what actually broke it:
+
+  1. find_package(SystemC REQUIRED) (CMakeLists.txt:35) asks for a package
+     named "SystemC". The installed CMake package registers itself as
+     "SystemCLanguage" (Accellera's standard name for their own CMake
+     export), not "SystemC" - a naming mismatch, so find_package fails
+     regardless of SystemC being present.
+  2. Independently, models/systemc/CMakeLists.txt's add_subdirectory(compute_unit)
+     (and scheduler/simt_controller/memory/top) reference paths that don't
+     exist - the actual directories are models/systemc/src/compute_unit/ etc.
+     (confirmed: `ls models/systemc/compute_unit` -> No existe el archivo;
+     `ls models/systemc/src/compute_unit` -> exists). This alone would break
+     `cmake configure` even with problem #1 fixed. Likely a leftover from an
+     incomplete repo reorganization (git log shows a "Reorder repo" commit).
+
+Given both, the project's own CMake build cannot currently build the SystemC
+model at all, independent of this session's HLS work. Fixing the CMake setup
+was out of scope for "run the regression tests", so instead: compiled the
+relevant .cpp files directly with g++ against /usr/local/systemc (same
+technique used all session for the HLS-side tests), bypassing the project's
+CMake entirely.
+
+Toolchain: g++ 13.3.0, -std=c++17, SystemC 2.3.4 (/usr/local/systemc),
+GTest built from vendored source at
+/usr/local/MATLAB/R2026a/sys/ros2/glnxa64/ros2/src/gtest_vendor (same source
+used for all tests/hls/* binaries this session - no system GTest package is
+installed either).
+
+--------------------------------------------------------------------------------
+1. PRE-EXISTING TEST-INFRASTRUCTURE BUGS FOUND AND FIXED
+--------------------------------------------------------------------------------
+
+All of the following predate this session and are unrelated to the T021-T023
+HLS porting work (confirmed via `git status` before touching anything: models/
+systemc/ and tests/systemc/ were completely untouched by this session until
+this regression-testing pass). Fixed because otherwise the existing official
+tests do not compile/run at all. Each is a small, mechanical fix; no test logic
+or assertions were changed beyond what was needed to run at all.
+
+  a) tests/systemc/test_scheduler.cpp:7 and tests/systemc/test_pipeline.cpp:8
+     had a stale relative include ("../../models/systemc/scheduler/..." /
+     ".../top/top.h") missing a "src/" path segment that the actual current
+     repo layout has (models/systemc/src/scheduler/, models/systemc/src/top/).
+     Fixed by inserting the missing "src/" segment. (2 files, 1 line each.)
+
+  b) tests/systemc/test_pipeline.cpp called `top.launchKernel(4, 1)` (5 call
+     sites) - the CURRENT GPGPUTop::launchKernel signature requires a 3rd
+     argument (`std::vector<Instruction> program`, no default), added at some
+     point after this test file was last updated. Fixed by passing
+     `kernels::intSaxpy()` (an existing kernel from kernel_programs.h, not a
+     new invented one) as the program argument at all 5 call sites, plus
+     adding the `#include ".../common/kernel_programs.h"`.
+
+  c) tests/systemc/test_pipeline.cpp never called `sc_core::sc_start()` before
+     `launchKernel()`. GPGPUTop::launchKernel() does an IMMEDIATE
+     sc_event::notify(), which SystemC disallows during elaboration (throws
+     E521). models/systemc/test/regression_test.cpp (the working, comprehensive
+     test - see section 3) shows the correct pattern: a zero-time
+     `sc_core::sc_start(sc_core::sc_time(0, sc_core::SC_NS));` right after
+     constructing the top module, before any launchKernel() call. Added the
+     identical zero-time sc_start() to all 5 TEST_F bodies in test_pipeline.cpp.
+
+None of (a)/(b)/(c) touch models/systemc/src/ (the actual golden model
+implementation) - only the test files themselves.
+
+--------------------------------------------------------------------------------
+2. RESULTS SUMMARY
+--------------------------------------------------------------------------------
+
+  test_scheduler        (GTest, tests/systemc/test_scheduler.cpp)  : 5/5  PASS
+  test_pipeline         (GTest, tests/systemc/test_pipeline.cpp)   : 1/5  PASS*
+  regression_test       (sc_main, models/systemc/test/regression_test.cpp,
+                          "Phase 0 through Phase 9")                : 107/107 PASS
+                                                                       (exit code 0)
+
+  * test_pipeline's 4 failures are NOT functional bugs in the golden model.
+    After fixing (a)/(b)/(c) above, the first test (KernelLaunchSucceeds)
+    passes cleanly. The remaining 4 all fail identically with:
+        Error: (E529) insert module failed: simulation running
+    This is a STRUCTURAL incompatibility between this test file's design and
+    how SystemC works: SystemC's simulation kernel is a process-wide
+    singleton - once ANY test has called sc_start(), no LATER test in the
+    same process can construct a fresh sc_module hierarchy (each TEST_F here
+    constructs its own `GPGPUTop top(...)`). GTest runs all TEST_F cases in
+    one process by default, so only the first TEST_F in the whole binary can
+    ever succeed at constructing+running a GPGPUTop; every subsequent one
+    fails at construction, not at anything the compute pipeline does. Fixing
+    this properly would mean restructuring the test file (e.g. one shared
+    GPGPUTop instance across all cases, or one TEST_F with multiple
+    sub-checks) - out of scope for "run the existing tests", so left as-is
+    and documented here rather than patched further.
+
+--------------------------------------------------------------------------------
+3. regression_test.cpp - FULL OUTPUT (the real signal - see section 4 for why)
+--------------------------------------------------------------------------------
+
+$ g++ -std=c++17 -pthread -I /usr/local/systemc/include -I models/systemc/src \
+    models/systemc/test/regression_test.cpp \
+    models/systemc/src/top/top.cpp models/systemc/src/system_top/system_top.cpp \
+    models/systemc/src/scheduler/warp_scheduler.cpp \
+    models/systemc/src/memory/memory_hierarchy.cpp \
+    models/systemc/src/compute_unit/compute_unit.cpp \
+    models/systemc/src/simt_controller/simt_controller.cpp \
+    -L /usr/local/systemc/lib -lsystemc -Wl,-rpath,/usr/local/systemc/lib \
+    -o regression_test
+$ LD_LIBRARY_PATH=/usr/local/systemc/lib ./regression_test
+$ echo "exit code: $?"
+exit code: 0
+(0 build warnings/errors; 107 [PASS] lines; 0 [FAIL] lines)
+
+--- full stdout below ---
+
+        SystemC 2.3.4-Accellera --- Jul  4 2026 15:32:56
+        Copyright (c) 1996-2022 by all Contributors,
+        ALL RIGHTS RESERVED
+
+==============================================
+  RISC-V GPGPU  -  SystemC Functional Model
+==============================================
+  SystemC version : 2.3.4-Accellera
+  Clock period    : 10 ns
+==============================================
+
+[INFO ] [0 s] Initializing GPGPU Top Module
+[INFO ] [0 s] WarpScheduler initialized: 1 CU(s), policy=ROUND_ROBIN
+[INFO ] [0 s] MemoryHierarchy initialized: L1=32KB  L2=512KB  shared=16KB
+[INFO ] [0 s] SIMTController initialized
+[INFO ] [0 s] ComputeUnit 0 initialized
+[INFO ] [0 s] ComputeUnit 0: external memory hierarchy connected
+[INFO ] [0 s] GPGPU Top Module initialized with 1 compute unit(s)
+[INFO ] [0 s] MemoryHierarchy initialized: L1=32KB  L2=512KB  shared=16KB
+[INFO ] [0 s] WarpScheduler initialized: 1 CU(s), policy=ROUND_ROBIN
+[INFO ] [0 s] WarpScheduler initialized: 2 CU(s), policy=ROUND_ROBIN
+[INFO ] [0 s] SIMTController initialized
+[INFO ] [0 s] SIMTController initialized
+[INFO ] [0 s] ComputeUnit 99 initialized
+[INFO ] [0 s] SystemTop: initializing 2 GPU(s)
+[INFO ] [0 s] Initializing GPGPU Top Module
+[INFO ] [0 s] WarpScheduler initialized: 1 CU(s), policy=ROUND_ROBIN
+[INFO ] [0 s] MemoryHierarchy initialized: L1=32KB  L2=512KB  shared=16KB
+[INFO ] [0 s] SIMTController initialized
+[INFO ] [0 s] ComputeUnit 0 initialized
+[INFO ] [0 s] ComputeUnit 0: external memory hierarchy connected
+[INFO ] [0 s] GPGPU Top Module initialized with 1 compute unit(s)
+[INFO ] [0 s] Initializing GPGPU Top Module
+[INFO ] [0 s] WarpScheduler initialized: 1 CU(s), policy=ROUND_ROBIN
+[INFO ] [0 s] MemoryHierarchy initialized: L1=32KB  L2=512KB  shared=16KB
+[INFO ] [0 s] SIMTController initialized
+[INFO ] [0 s] ComputeUnit 0 initialized
+[INFO ] [0 s] ComputeUnit 0: external memory hierarchy connected
+[INFO ] [0 s] GPGPU Top Module initialized with 1 compute unit(s)
+[INFO ] [0 s] SystemTop: all GPUs initialized
+
+===================================
+  Phase 0: Build & Initialization
+===================================
+-- Phase 0 Results -----------------------------------------
+[PASS] GPGPUTop: isKernelComplete() before launch
+[PASS] SystemTop: isComplete() before launch
+
+=============================
+  Phase 1: Memory Hierarchy
+=============================
+-- 1a: Global memory ---------------------------------------
+[PASS] Write->read: 0xDEADBEEF
+-- 1b: L1 hit ----------------------------------------------
+[PASS] L1 hit counter incremented
+[PASS] L1 hit latency == 1
+-- 1c: Cache invalidation ----------------------------------
+[INFO ] [0 s] MemoryHierarchy: caches invalidated
+[PASS] L1 miss after invalidation
+[PASS] Data correct after re-fetch
+-- 1d: Shared memory ---------------------------------------
+[PASS] Shared memory write->read
+-- 1e: No aliasing -----------------------------------------
+[PASS] 0x20000 correct
+[PASS] 0x30000 correct
+
+===========================
+  Phase 2: Warp Scheduler
+===========================
+-- 2a: Basic dispatch --------------------------------------
+[INFO ] [0 s] WarpScheduler: submitKernel grid=2x2  total=4 warps
+[PASS] hasReadyWarps after submit
+[PASS] All IDs valid
+[PASS] All IDs distinct
+[PASS] isComplete after all warps done
+-- 2b: Stall -----------------------------------------------
+[INFO ] [0 s] WarpScheduler: submitKernel grid=1x2  total=2 warps
+[PASS] isComplete=false with stalled warp
+-- 2c: Load balance ----------------------------------------
+[INFO ] [0 s] WarpScheduler: submitKernel grid=2x2  total=4 warps
+[PASS] CU0 = 2 warps
+[PASS] CU1 = 2 warps
+
+============================
+  Phase 3: SIMT Controller
+============================
+-- 3a: Init ------------------------------------------------
+[PASS] Initial mask 0xFF
+-- 3b: Divergent branch ------------------------------------
+[PASS] Taken mask 0x0F
+[PASS] 1 divergence event
+-- 3c: Reconvergence ---------------------------------------
+[PASS] Mask restored 0xFF
+-- 3d: No-divergence ---------------------------------------
+[PASS] Still 1 event
+-- 3e: Nested divergence -----------------------------------
+[PASS] Inner mask 0x03
+[PASS] Fully reconverged 0xFF
+
+=========================
+  Phase 4: Compute Unit
+=========================
+-- 4a: Integer ALU -----------------------------------------
+[PASS] Warp COMPLETE
+[PASS] Thread 0: r2=10
+[PASS] Thread 1: r2=12
+[PASS] Thread 2: r2=14
+[PASS] Thread 3: r2=16
+-- 4b: Vector SAXPY ----------------------------------------
+[PASS] Thread 0: 2*1+10=12
+[PASS] Thread 1: 2*2+10=14
+[PASS] Thread 2: 2*3+10=16
+[PASS] Thread 3: 2*4+10=18
+-- 4c: Memory SW + LW --------------------------------------
+[PASS] Thread 0: r2=0
+[PASS] Thread 1: r2=100
+[PASS] Thread 2: r2=200
+[PASS] Thread 3: r2=300
+
+============================
+  Phase 5: Top Integration
+============================
+-- 5a: 2x1 kernel (2 warps) --------------------------------
+[PASS] isKernelComplete() = true before launch
+[INFO ] [0 s] launchKernel: grid=2x1  program=6 instructions  warp_offset=0
+[INFO ] [0 s] WarpScheduler: submitKernel grid=2x1  total=2 warps
+[PASS] isKernelComplete() = false after launch
+[INFO ] [0 s] simulationProcess: kernel execution started
+[INFO ] [0 s] simulationProcess: all warps complete
+[PASS] isKernelComplete() = true after sc_start
+[PASS] getTotalInstructions() = 12  (2x6)
+-- 5b: Second kernel (1 warp) ------------------------------
+[INFO ] [100 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=0
+[INFO ] [100 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [100 ns] simulationProcess: kernel execution started
+[INFO ] [100 ns] simulationProcess: all warps complete
+[PASS] isKernelComplete() after second kernel
+[PASS] getTotalInstructions() = 18 cumulative
+
+=======================
+  Phase 6: Benchmarks
+=======================
+-- 6a: SAXPY with real memory ------------------------------
+[INFO ] [200 ns] launchKernel: grid=1x1  program=9 instructions  warp_offset=0
+[INFO ] [200 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [200 ns] simulationProcess: kernel execution started
+[INFO ] [200 ns] simulationProcess: all warps complete
+[PASS] Kernel complete
+[PASS] L1 misses += 32
+[PASS] L1 hits   += 32
+[PASS] No divergence
+[PASS] getTotalInstructions() = 27
+-- 6b: Divergent kernel ------------------------------------
+[PASS] Thread 0: r1=100
+[PASS] Thread 1: r1=0 (masked)
+[PASS] Divergence event
+-- 6c: VFMADD ----------------------------------------------
+[PASS] Thread 0: 1*5+10=15
+[PASS] Thread 1: 2*6+10=22
+[PASS] Thread 2: 3*7+10=31
+[PASS] Thread 3: 4*8+10=42
+
+==================================
+  Phase 7: Multi-GPU (SystemTop)
+==================================
+-- 7a: Even split - 4 warps across 2 GPUs ----------------
+[PASS] sys.isComplete() = true before launch
+[INFO ] [300 ns] SystemTop: launchKernel total_warps=4  across 2 GPU(s)
+[INFO ] [300 ns] SystemTop: GPU 0 -> 2 warp(s), offset=0
+[INFO ] [300 ns] launchKernel: grid=2x1  program=6 instructions  warp_offset=0
+[INFO ] [300 ns] WarpScheduler: submitKernel grid=2x1  total=2 warps
+[INFO ] [300 ns] SystemTop: GPU 1 -> 2 warp(s), offset=2
+[INFO ] [300 ns] launchKernel: grid=2x1  program=6 instructions  warp_offset=2
+[INFO ] [300 ns] WarpScheduler: submitKernel grid=2x1  total=2 warps
+[PASS] sys.isComplete() = false after launch
+[INFO ] [300 ns] simulationProcess: kernel execution started
+[INFO ] [300 ns] simulationProcess: kernel execution started
+[INFO ] [300 ns] simulationProcess: all warps complete
+[INFO ] [300 ns] simulationProcess: all warps complete
+[PASS] sys.isComplete() = true after sc_start
+[PASS] getTotalInstructions() = 24  (4 warps x 6)
+[PASS] GPU 0: 2 warps x 6 = 12 instructions
+[PASS] GPU 1: 2 warps x 6 = 12 instructions
+[PASS] getNumGPUs() = 2
+-- 7b: Uneven split - 3 warps across 2 GPUs --------------
+[INFO ] [400 ns] SystemTop: launchKernel total_warps=3  across 2 GPU(s)
+[INFO ] [400 ns] SystemTop: GPU 0 -> 2 warp(s), offset=0
+[INFO ] [400 ns] launchKernel: grid=2x1  program=6 instructions  warp_offset=0
+[INFO ] [400 ns] WarpScheduler: submitKernel grid=2x1  total=2 warps
+[INFO ] [400 ns] SystemTop: GPU 1 -> 1 warp(s), offset=2
+[INFO ] [400 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=2
+[INFO ] [400 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [400 ns] simulationProcess: kernel execution started
+[INFO ] [400 ns] simulationProcess: kernel execution started
+[INFO ] [400 ns] simulationProcess: all warps complete
+[INFO ] [400 ns] simulationProcess: all warps complete
+[PASS] sys.isComplete() = true
+[PASS] GPU 0: 2 warps x 6 = 12 new instructions
+[PASS] GPU 1: 1 warp x 6 = 6 new instructions
+[PASS] Total: 3 warps x 6 = 18 new instructions
+-- 7c: Divergent kernel - 1 warp per GPU (2 total) -------
+[INFO ] [500 ns] SystemTop: launchKernel total_warps=2  across 2 GPU(s)
+[INFO ] [500 ns] SystemTop: GPU 0 -> 1 warp(s), offset=0
+[INFO ] [500 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=0
+[INFO ] [500 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [500 ns] SystemTop: GPU 1 -> 1 warp(s), offset=1
+[INFO ] [500 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=1
+[INFO ] [500 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [500 ns] simulationProcess: kernel execution started
+[INFO ] [500 ns] simulationProcess: kernel execution started
+[INFO ] [500 ns] simulationProcess: all warps complete
+[INFO ] [500 ns] simulationProcess: all warps complete
+[PASS] sys.isComplete() = true
+[PASS] Total: 2 warps x 6 = 12 new instructions
+[PASS] 2 divergence events total (1 per GPU)
+[PASS] GPU 0: 1 divergence event
+[PASS] GPU 1: 1 divergence event
+
+===========================
+  Phase 8: Floating-Point
+===========================
+-- 8a: Scalar FP - FMUL and FADD -------------------------
+[PASS] Warp COMPLETE
+[PASS] Thread 0: FMUL 2.0*3.0 = 6.0
+[PASS] Thread 0: FADD 2.0+3.0 = 5.0
+[PASS] Thread 1: FMUL 2.0*3.0 = 6.0
+[PASS] Thread 1: FADD 2.0+3.0 = 5.0
+[PASS] Thread 2: FMUL 2.0*3.0 = 6.0
+[PASS] Thread 2: FADD 2.0+3.0 = 5.0
+[PASS] Thread 3: FMUL 2.0*3.0 = 6.0
+[PASS] Thread 3: FADD 2.0+3.0 = 5.0
+-- 8b: Vector FP SAXPY - VFMUL + VFADD -------------------
+[PASS] Thread 0: 2.0*1+10.0 = 12.0
+[PASS] Thread 1: 2.0*2+10.0 = 14.0
+[PASS] Thread 2: 2.0*3+10.0 = 16.0
+[PASS] Thread 3: 2.0*4+10.0 = 18.0
+-- 8c: Vector FP VFFMADD - fused multiply-add ------------
+[PASS] Thread 0: 1.500000*2.0+1.0 = 4.0
+[PASS] Thread 1: 2.500000*2.0+1.0 = 6.0
+[PASS] Thread 2: 3.500000*2.0+1.0 = 8.0
+[PASS] Thread 3: 4.500000*2.0+1.0 = 10.0
+
+==============================
+  Phase 9: kernel_programs.h
+==============================
+-- 9a: [TOP] intSaxpy(2, 10) via library -------------------
+[INFO ] [600 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=0
+[INFO ] [600 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [600 ns] simulationProcess: kernel execution started
+[INFO ] [600 ns] simulationProcess: all warps complete
+[PASS] Kernel complete
+[PASS] intSaxpy: 1 warp x 6 instructions
+-- 9b: [TOP] fpUniformSaxpy(2.0, 3.0, 1.0) via library -----
+[INFO ] [700 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=0
+[INFO ] [700 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [700 ns] simulationProcess: kernel execution started
+[INFO ] [700 ns] simulationProcess: all warps complete
+[PASS] Kernel complete
+[PASS] fpUniformSaxpy: 1 warp x 6 instructions
+-- 9c: [TOP] memoryRoundTrip() via library -----------------
+[INFO ] [800 ns] launchKernel: grid=1x1  program=4 instructions  warp_offset=0
+[INFO ] [800 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [800 ns] simulationProcess: kernel execution started
+[INFO ] [800 ns] simulationProcess: all warps complete
+[PASS] Kernel complete
+[PASS] memoryRoundTrip: 32 L1 misses (one per thread, first LW)
+[PASS] memoryRoundTrip: 32 L1 hits  (one per thread, second LW)
+-- 9d: [TOP] divergentOddEven() via sys.launchKernel -------
+[INFO ] [900 ns] SystemTop: launchKernel total_warps=2  across 2 GPU(s)
+[INFO ] [900 ns] SystemTop: GPU 0 -> 1 warp(s), offset=0
+[INFO ] [900 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=0
+[INFO ] [900 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [900 ns] SystemTop: GPU 1 -> 1 warp(s), offset=1
+[INFO ] [900 ns] launchKernel: grid=1x1  program=6 instructions  warp_offset=1
+[INFO ] [900 ns] WarpScheduler: submitKernel grid=1x1  total=1 warps
+[INFO ] [900 ns] simulationProcess: kernel execution started
+[INFO ] [900 ns] simulationProcess: kernel execution started
+[INFO ] [900 ns] simulationProcess: all warps complete
+[INFO ] [900 ns] simulationProcess: all warps complete
+[PASS] Kernel complete on both GPUs
+[PASS] divergentOddEven: 2 divergence events (1 per GPU/warp)
+-- 9e: [DIRECT] fpSaxpy() via library ----------------------
+[PASS] Warp COMPLETE
+[PASS] fpSaxpy thread 0: result = 12.0f
+[PASS] fpSaxpy thread 1: result = 14.0f
+[PASS] fpSaxpy thread 2: result = 16.0f
+[PASS] fpSaxpy thread 3: result = 18.0f
+-- 9f: [DIRECT] fpFmadd() via library ----------------------
+[PASS] fpFmadd thread 0: result = 4.0f
+[PASS] fpFmadd thread 1: result = 6.0f
+[PASS] fpFmadd thread 2: result = 8.0f
+[PASS] fpFmadd thread 3: result = 10.0f
+-- Final Statistics ----------------------------------------
+  single GPU (top)
+    instructions : 43
+    L1 hits      : 64
+    L1 misses    : 64
+    divergence   : 0
+  multi-GPU (sys)
+    instructions : 66
+    L1 hits      : 0
+    L1 misses    : 0
+    divergence   : 4
+    GPU 0 instr  : 36
+    GPU 1 instr  : 30
+------------------------------------------------------------
+[PASS] All Phase 0 - Phase 9 checks passed.
+
+
+==============================================
+  Simulation Complete
+  Total cycles       : 66
+  Total instructions : 66
+==============================================
+
+[INFO ] [1 us] SystemTop: destroyed
+[INFO ] [1 us] GPGPU Top Module destroyed
+[INFO ] [1 us] ComputeUnit 0 destroyed
+[INFO ] [1 us] GPGPU Top Module destroyed
+[INFO ] [1 us] ComputeUnit 0 destroyed
+[INFO ] [1 us] ComputeUnit 99 destroyed
+[INFO ] [1 us] GPGPU Top Module destroyed
+[INFO ] [1 us] ComputeUnit 0 destroyed
+
+--- end of regression_test output ---
+
+--------------------------------------------------------------------------------
+4. CROSS-REFERENCE: does this confirm the values tests/hls/*.cpp assumed?
+--------------------------------------------------------------------------------
+
+Every HLS test this session hand-traced its expected values by reading
+compute_unit.cpp/simt_controller.cpp/memory_hierarchy.cpp source, not by
+running them. This section maps each HLS test's assumption to the closest
+ACTUAL golden-model execution evidence above.
+
+  tests/hls/test_compute_pipeline.cpp::IntSaxpy
+    Assumed: r6[t] = (t+1)*2+10.
+    Golden evidence: Phase 4b ("Vector SAXPY") runs the IDENTICAL VMUL+VADD
+    pair with the same alpha=2, y=10 and PRINTS the per-thread result:
+    "Thread 0: 2*1+10=12" ... "Thread 3: 2*4+10=18" - matches (t+1)*2+10
+    exactly for t=0..3. Phase 9a (the actual intSaxpy() library call) only
+    checks completion + instruction count, not the numeric result, but it
+    runs the exact same opcodes Phase 4b already confirmed numerically.
+    STATUS: CONFIRMED (via Phase 4b's equivalent, not 9a directly).
+
+  tests/hls/test_compute_pipeline.cpp::FpUniformSaxpy
+    Assumed: r6 = 7.0 (alpha=2.0, x=3.0, y=1.0) for every lane.
+    Golden evidence: Phase 8b runs the same VFMUL+VFADD pair (different
+    constants, 2.0/1/10.0) and prints exact float results; Phase 9e/9f
+    (fpSaxpy/fpFmadd, DIRECT calls using the same VFMUL/VFADD/VFFMADD
+    opcodes) print exact matching float results (12.0f/14.0f/16.0f/18.0f and
+    4.0f/6.0f/8.0f/10.0f). Phase 9b (fpUniformSaxpy() itself) only checks
+    completion + instruction count, not the numeric 7.0 result.
+    STATUS: CONFIRMED indirectly (opcodes numerically verified elsewhere,
+    not the literal 7.0 result of this exact kernel call).
+
+  tests/hls/test_compute_pipeline.cpp::DivergentOddEven,
+  tests/hls/test_memory_pipeline.cpp (mask/join semantics used by
+  hls/src/common/divergence_stack.h)
+    Assumed: 1 divergence event per warp; mask correctly splits/reconverges.
+    Golden evidence: Phase 3b/3c ("Divergent branch"/"Reconvergence") prints
+    exact mask values for an 8-lane 4-vs-4 split: "Taken mask 0x0F", "1
+    divergence event", "Mask restored 0xFF" after join - matches
+    divergence_stack.h's ported handleBranch/handleJoin exactly. Phase 9d
+    (divergentOddEven() itself) confirms "2 divergence events (1 per
+    GPU/warp)" - matches this session's HLS DivergentOddEven test's implicit
+    assumption of exactly 1 event per warp.
+    STATUS: CONFIRMED, including a case this session's HLS tests did NOT
+    explicitly cover: Phase 3e ("Nested divergence") pushes twice ("Inner
+    mask 0x03") and joins twice ("Fully reconverged 0xFF") - a 2-level
+    nested divergence. hls/src/common/divergence_stack.h's stack-based
+    implementation should handle this correctly (it's a real LIFO stack,
+    structurally the same as SIMTController's), but
+    tests/hls/test_hls_data_structures.cpp only tests single-level
+    diverge+join and the depth-overflow case, not this specific 2-level
+    nested scenario. FOLLOW-UP SUGGESTED, not done here: add a nested-
+    divergence test to test_hls_data_structures.cpp mirroring Phase 3e.
+
+  tests/hls/test_memory_pipeline.cpp / test_pipeline_integration.cpp
+  (memoryRoundTrip)
+    Assumed: r3 (first LW) == r4 (second LW) == global_tid for all 32 lanes.
+    Golden evidence: Phase 9c prints "32 L1 misses (one per thread, first
+    LW)" and "32 L1 hits (one per thread, second LW)" for exactly this
+    kernel - confirms the golden model's word-granularity cache produces
+    a clean miss-then-hit pattern per thread, consistent with r3==r4==tid.
+    STATUS: CONFIRMED for the golden model's cache behavior. NOTE (already
+    documented in docs/hls/interfaces.md SS7 before this regression run,
+    now reinforced by seeing it directly): this HLS port's L1/L2 are
+    LINE-granular (WORDS_PER_LINE=32 words/line) for m_axi burst efficiency,
+    vs. the golden model's per-WORD std::map cache (no line structure at
+    all - confirmed dead `cache_line_size` config, grep-verified earlier
+    this session). So the *hit/miss counts* will legitimately differ between
+    the golden model and the HLS port for a kernel with more locality than
+    memoryRoundTrip's one-word-per-thread pattern - functional (data)
+    correctness is the parity bar, not hit-rate, exactly as already written
+    into the interfaces doc.
+
+  tests/hls/test_memory_pipeline.cpp (shared memory bypass,
+  write-through/no-write-allocate)
+    Golden evidence: Phase 1a/1b/1c/1d/1e directly exercise
+    MemoryHierarchy::loadWord/storeWord/loadSharedMemory/storeSharedMemory
+    and invalidateCache() with exact value checks (0xDEADBEEF round-trip,
+    L1 hit latency==1, miss-after-invalidate, shared memory independent of
+    global memory, no address aliasing) - all PASS, confirming the exact
+    policy hls/src/memory_pipeline.h's MemorySubsystem was ported from.
+    STATUS: CONFIRMED.
+
+--------------------------------------------------------------------------------
+5. CONCLUSION
+--------------------------------------------------------------------------------
+
+No functional discrepancy was found between the golden SystemC model's actual
+execution and the values/semantics this session's HLS port (compute_pipeline.cpp
+T022, memory_pipeline.cpp T023) assumed from reading the source. Every hand-
+traced assumption checked above is either directly confirmed by an explicit
+golden-model register/mask/counter check, or confirmed via an equivalent
+instruction sequence elsewhere in the same regression run. One test-coverage
+gap was surfaced (2-level nested divergence, section 4) - the golden model
+handles it and the HLS port's stack-based design should too, but this wasn't
+independently unit-tested on the HLS side; suggested as a follow-up, not fixed
+in this pass.
+
+All bugs found and fixed during this run were pre-existing staleness in the
+project's OWN test infrastructure (stale include paths, a stale launchKernel()
+call signature, a missing elaboration-phase sc_start()) and a broken CMake
+build (find_package name mismatch + a directory-path mismatch from an
+apparently-incomplete repo reorganization) - none are related to, or caused by,
+this session's T021-T023 HLS work. tests/systemc/test_scheduler.cpp and
+tests/systemc/test_pipeline.cpp were edited to fix (a)/(b)/(c) above so they
+would run at all; models/systemc/src/ (the actual golden model) was not
+touched.

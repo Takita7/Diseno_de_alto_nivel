@@ -44,7 +44,18 @@ namespace riscv_gpgpu_hls {
 
 class MemorySubsystem {
 public:
-    MemorySubsystem() { reset(); }
+    // T024 pragmas on class-member arrays must live in a member function
+    // body, not next to the member declaration - `#pragma HLS` outside
+    // function scope is a real Vitis HLS csynth error (HLS 207-5507),
+    // caught by tests/fpga/test_flow.tcl's T020 smoke test (this compiled
+    // fine under plain g++ for csim, which doesn't parse pragma placement
+    // rules at all, so the earlier csim-only tests/hls/* suite never caught
+    // it - see docs/hls/interfaces.md SS8 for the "csim doesn't validate
+    // pragma legality" caveat this confirms).
+    MemorySubsystem() {
+#pragma HLS BIND_STORAGE variable=shared_mem_ type=RAM_2P impl=BRAM
+        reset();
+    }
 
     // Golden reference: MemoryHierarchy's constructor (fresh caches, zeroed
     // shared memory) + invalidateCache() (caches cleared, shared memory left
@@ -184,7 +195,6 @@ private:
     // issues one mem_req_t per lane sequentially - see compute_pipeline.cpp's
     // executeMemOp() comment), so a single BRAM's ports are enough.
     reg_t   shared_mem_[NUM_CUS][SHARED_MEM_WORDS_PER_CU];
-#pragma HLS BIND_STORAGE variable=shared_mem_ type=RAM_2P impl=BRAM
 
     L1Cache l1_caches_[NUM_CUS];
     L2Cache l2_cache_;

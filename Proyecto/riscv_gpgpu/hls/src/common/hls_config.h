@@ -39,7 +39,12 @@ constexpr int NUM_REGS_PER_THREAD   = 32;   // matches WarpContext::regs[t].size
 constexpr int MAX_PROGRAM_LEN       = 256;
 
 constexpr int MAX_DIVERGENCE_DEPTH  = 8;    // matches SIMTController::DivergenceStack budget
-constexpr int MAX_CONCURRENT_BARRIERS = 4;  // matches host-orchestrated barrier tracking (SS2.4)
+
+// MAX_CONCURRENT_BARRIERS removed (docs/hls/interfaces.md SS2.5.4): sized
+// the old host-orchestrated design's per-barrier_id arrival table (SS2.4,
+// superseded). BarrierArbiter keeps one running arrival counter per
+// kernel instead - grep-verified zero consumers of the old constant
+// anywhere in hls/ or tests/hls/ before removing it.
 
 // ── Address width (per docs/hls/interfaces.md SS4) ───────────────────────────
 // Board-dependent (hls/config/{kv260,u55c}.h); falls back to KV260's 32 bits
@@ -76,12 +81,24 @@ constexpr int L2_LINES_TOTAL    = L2_SIZE_BYTES / CACHE_LINE_BYTES;      // 2048
 constexpr int L2_SETS_PER_WAY   = L2_LINES_TOTAL / L2_WAYS;              // 512
 
 // Shared memory (scratchpad, not a cache - always resident, no tags)
-// OPEN DECISION: NUM_CUS not yet chosen (docs/hls/interfaces.md SS5 step 1).
-// Placeholder of 1 keeps this header usable stand-alone; the real value is a
-// top-level (system-integration) decision, not a compute/memory_pipeline one.
+// DECIDED (docs/hls/interfaces.md SS10.11), not a placeholder: measured from
+// real T020 csynth reports, compute_pipeline alone is 52% of KV260's LUT
+// budget; two instances + memory_pipeline projects to 111% - infeasible.
+// NUM_CUS=1 is KV260's real target until compute_pipeline's LUT footprint is
+// optimized down. U55C is still genuinely open (no device support installed
+// in this environment to measure against - SS10.11).
 constexpr int NUM_CUS                    = 1;
 constexpr int SHARED_MEM_SIZE_BYTES      = 48 * 1024;   // arch_config.yaml default
 constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;
+
+// ── On-chip scheduler (docs/hls/interfaces.md SS2.5) ──────────────────────────
+// Per-CU resident-warp-slot capacity. Successor to an earlier "MAX_WARPS_PER_
+// BLOCK" proposal (SS10.5, deprecated) - same value, same golden-model
+// max_warps default origin, different role: a hard per-launch capacity
+// ceiling (a kernel with total_warps > NUM_CUS*MAX_WARPS_PER_CU is an invalid
+// launch, SS10.6's hazard mitigation), not a barrier-group size. Barrier
+// scope itself is global, matching the golden model exactly (SS10.6).
+constexpr int MAX_WARPS_PER_CU           = 4;
 
 }  // namespace riscv_gpgpu_hls
 
