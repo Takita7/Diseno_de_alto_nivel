@@ -10,8 +10,8 @@
 
 #include "memory_pipeline.h"
 
-// T024: per-board m_axi tuning (hls/config/{kv260,u55c}.h), selected the same
-// way hls_config.h picks up RISCV_GPGPU_BOARD_KV260/U55C. These are macros,
+// T024: per-board m_axi tuning (hls/config/kv260.h), selected the same
+// way hls_config.h picks up RISCV_GPGPU_BOARD_KV260. These are macros,
 // not constexpr - required so they substitute textually into the #pragma
 // HLS INTERFACE m_axi line below (pragma argument parsing wants literal
 // integers, not named C++ constants). Falls back to the values this file
@@ -34,7 +34,7 @@ namespace riscv_gpgpu_hls {
 
 // Catches the burst-length macros drifting from the actual line size they're
 // supposed to match (hls_config.h's WORDS_PER_LINE) - e.g. if WORDS_PER_LINE
-// is ever resized without updating hls/config/{kv260,u55c}.h. A plain C++
+// is ever resized without updating hls/config/kv260.h. A plain C++
 // constant comparison, not a pragma, so this is checked by ANY build
 // (csim included), not just real synthesis.
 static_assert(RISCV_GPGPU_MAXI_MAX_READ_BURST_LEN == WORDS_PER_LINE,

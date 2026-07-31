@@ -115,7 +115,12 @@ struct CpFixture {
     void start(reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
                uint32_t program_len, cu_id_t cu_id = 0) {
         th = std::thread([this, regs, program_len, cu_id]() {
-            compute_pipeline(cu_id, dispatch_in, program, program_len, regs,
+            // nullptr: docs/hls/interfaces.md SS16's initial_regs_ptr is only
+            // dereferenced when a dispatch has fresh_launch=true, and every
+            // warp_dispatch_t this fixture builds (dispatchAndWait() below)
+            // defaults it false - this fixture pokes regs directly instead,
+            // same as before SS16 existed.
+            compute_pipeline(cu_id, dispatch_in, program, program_len, regs, nullptr,
                               mem_req_out, mem_resp_in, status_out);
         });
     }

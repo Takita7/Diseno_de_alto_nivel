@@ -15,15 +15,15 @@
 
 #include <cstdint>
 
-// Per-board overrides (T024): selected by the build defining exactly one of
-// RISCV_GPGPU_BOARD_KV260 / RISCV_GPGPU_BOARD_U55C (a Vitis project C-flag,
-// T025/T026 scope) before this header is included. Neither defined (plain
-// csim/testing, as in every tests/hls/*.cpp this project has) falls back to
-// the KV260-sized defaults below, unchanged from before T024.
+// Per-board overrides (T024): selected by the build defining
+// RISCV_GPGPU_BOARD_KV260 (a Vitis project C-flag, T025/T026 scope) before
+// this header is included. Undefined (plain csim/testing, as in every
+// tests/hls/*.cpp this project has) falls back to the KV260-sized defaults
+// below, unchanged from before T024. KV260 is the sole target board
+// (docs/hls/interfaces.md SS14) - an Alveo U55C branch existed briefly and
+// was removed.
 #if defined(RISCV_GPGPU_BOARD_KV260)
 #include "../../config/kv260.h"
-#elif defined(RISCV_GPGPU_BOARD_U55C)
-#include "../../config/u55c.h"
 #endif
 
 namespace riscv_gpgpu_hls {
@@ -47,10 +47,8 @@ constexpr int MAX_DIVERGENCE_DEPTH  = 8;    // matches SIMTController::Divergenc
 // anywhere in hls/ or tests/hls/ before removing it.
 
 // ── Address width (per docs/hls/interfaces.md SS4) ───────────────────────────
-// Board-dependent (hls/config/{kv260,u55c}.h); falls back to KV260's 32 bits
-// (4GB DDR4) if no board macro was defined. U55C's HBM binding (single vs.
-// multiple pseudo-channels) is still a T025/T026 link-time decision that may
-// need hls/config/u55c.h's value widened - re-check before U55C bring-up.
+// Board-dependent (hls/config/kv260.h); falls back to KV260's 32 bits
+// (4GB DDR4) if no board macro was defined.
 #ifndef RISCV_GPGPU_ADDR_BITS
 #define RISCV_GPGPU_ADDR_BITS 32
 #endif
@@ -85,8 +83,8 @@ constexpr int L2_SETS_PER_WAY   = L2_LINES_TOTAL / L2_WAYS;              // 512
 // real T020 csynth reports, compute_pipeline alone is 52% of KV260's LUT
 // budget; two instances + memory_pipeline projects to 111% - infeasible.
 // NUM_CUS=1 is KV260's real target until compute_pipeline's LUT footprint is
-// optimized down. U55C is still genuinely open (no device support installed
-// in this environment to measure against - SS10.11).
+// optimized down. KV260 is the sole target board (SS14) - this is not a
+// per-board decision anymore.
 constexpr int NUM_CUS                    = 1;
 constexpr int SHARED_MEM_SIZE_BYTES      = 48 * 1024;   // arch_config.yaml default
 constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;

@@ -8,17 +8,20 @@
 # resource and timing estimates").
 #
 # Deliberately a smoke test, not a resource/timing regression check: it does
-# NOT assert on LUT/DSP/BRAM counts or Fmax, because NUM_CUS and the L1/L2
-# WAYS/sizing are still open decisions (docs/hls/interfaces.md SS6) - a
-# baseline to assert against doesn't exist yet. It only checks that csynth
-# completes and produces a report. See T025 for the driver that will run
-# against a settled configuration and track real numbers over time.
+# NOT assert on LUT/DSP/BRAM counts or Fmax, because the L1/L2 WAYS/sizing
+# are still open decisions (docs/hls/interfaces.md SS6) - a baseline to
+# assert against doesn't exist yet. It only checks that csynth completes and
+# produces a report. See T025 for the driver that will run against a
+# settled configuration and track real numbers over time.
 #
 # Boards with no installed device support are SKIPPED, not failed (mirrors
 # tests/hls/CMakeLists.txt's guarded-skip pattern for missing prerequisites)
 # - detected empirically per board via a throwaway set_part probe, since
 # `get_parts` alone was observed to hang/stall under batch/piped stdin in
-# this environment.
+# this environment. KV260 is the only board left in `$boards` - Alveo U55C
+# was discarded (docs/hls/interfaces.md SS14); the per-board loop/skip
+# structure is kept as-is rather than flattened, since it's what made
+# validating that decision straightforward in the first place.
 #
 # Usage: vitis_hls -f tests/fpga/test_flow.tcl   (resolves its own location,
 #        so it can be run from any working directory)
@@ -37,7 +40,6 @@ cd $build_dir
 
 set boards {
     {kv260 RISCV_GPGPU_BOARD_KV260 xck26-sfvc784-2LV-c}
-    {u55c  RISCV_GPGPU_BOARD_U55C  xcu55c-fsvh2892-2L-e}
 }
 
 set kernels {

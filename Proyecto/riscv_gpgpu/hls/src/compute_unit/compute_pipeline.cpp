@@ -268,6 +268,8 @@ void compute_pipeline(
 
     reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
 
+    reg_t* initial_regs_ptr,
+
     hls::stream<mem_req_t>&  mem_req_out,
     hls::stream<mem_resp_t>& mem_resp_in,
 
@@ -278,6 +280,7 @@ void compute_pipeline(
 #pragma HLS INTERFACE axis      port=dispatch_in
 #pragma HLS INTERFACE ap_memory port=program
 #pragma HLS INTERFACE ap_memory port=regs
+#pragma HLS INTERFACE m_axi     port=initial_regs_ptr offset=slave bundle=gmem
     // Lane dimension is now dim=2, not dim=1 - a slot dimension (dim=1) was
     // added in front of it (SS2.5.3). Same reason as T024's original
     // partition (executeALU/executeVector unroll over all 32 lanes, every
@@ -298,6 +301,24 @@ void compute_pipeline(
     while (true) {
 #pragma HLS PIPELINE off
         warp_dispatch_t d = dispatch_in.read();   // blocking
+
+        // docs/hls/interfaces.md SS16: seed this slot's regs from the
+        // host's DRAM buffer exactly once, on its first dispatch since
+        // launch - never on a barrier resume (regs already hold live
+        // state then). initial_regs_ptr is global-warp-id-indexed (SS16),
+        // not slot-indexed - different threads/warps get different
+        // tid/address argument values, unlike program[] (broadcast,
+        // SS10.8).
+        if (d.fresh_launch) {
+            uint64_t base = uint64_t(d.warp_id) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
+        SEED_INITIAL_REGS_THREADS:
+            for (int t = 0; t < MAX_THREADS_PER_WARP; ++t) {
+            SEED_INITIAL_REGS_REGS:
+                for (int r = 0; r < NUM_REGS_PER_THREAD; ++r) {
+                    regs[d.slot_id][t][r] = initial_regs_ptr[base + t * NUM_REGS_PER_THREAD + r];
+                }
+            }
+        }
 
         warp_status_t st = executeOneWarp(cu_id, d, program, program_len,
                                            regs[d.slot_id],

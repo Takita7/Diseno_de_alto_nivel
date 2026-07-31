@@ -1,11 +1,15 @@
-// test_cu_dispatch_unit.cpp - regression tests for CuDispatchUnit
+// test_cu_dispatch_unit.cpp - regression tests for warp-slot dispatch
+// bookkeeping (cu_dispatch_unit.h's free functions)
 //
 // Golden reference: WarpScheduler::generateWarps()/selectWarp() (the real,
 // exercised subset - see docs/hls/interfaces.md SS10.3 Finding A) and
 // GPGPUTop::simulationProcess()'s per-CU barrier bookkeeping. Design per
-// docs/hls/interfaces.md SS2.5.3/SS10.7 - formalizes the smoke test written
-// during that section's implementation pass (SS10.12) into real GTest
-// coverage, same scenarios, same assertions.
+// docs/hls/interfaces.md SS2.5.3/SS10.7/SS16.6 - same scenarios, same
+// assertions as before the SS16.6 redesign, now driving free functions
+// against a local WarpSlot[MAX_WARPS_PER_CU] array instead of a
+// CuDispatchUnit instance's own slots_ member (CuDispatchUnit itself no
+// longer holds slot state at all - see cu_dispatch_unit.h's header
+// comment for why).
 
 #include <gtest/gtest.h>
 
@@ -32,85 +36,85 @@ warp_status_t stalledStatus(barrier_id_t bid, ap_uint<16> resume_pc) {
 }  // namespace
 
 TEST(CuDispatchUnit, LaunchAssignsWarpsRoundRobinAndLeavesUnusedSlotsEmpty) {
-    CuDispatchUnit cu;
+    WarpSlot slots[MAX_WARPS_PER_CU];
     // 3 warps on a single CU (NUM_CUS=1 build default) fit within
     // MAX_WARPS_PER_CU=4 - slot 3 must stay EMPTY.
-    cu.launch(/*cu_id=*/0, /*total_warps=*/3);
+    launchSlots(slots, /*cu_id=*/cu_id_t(0), /*total_warps=*/warp_id_t(3));
 
-    EXPECT_EQ(cu.stateOf(0), WarpSlot::State::READY);
-    EXPECT_EQ(cu.stateOf(1), WarpSlot::State::READY);
-    EXPECT_EQ(cu.stateOf(2), WarpSlot::State::READY);
-    EXPECT_EQ(cu.stateOf(3), WarpSlot::State::EMPTY);
-    EXPECT_EQ(cu.warpIdOf(0), 0);
-    EXPECT_EQ(cu.warpIdOf(1), 1);
-    EXPECT_EQ(cu.warpIdOf(2), 2);
-    EXPECT_FALSE(cu.allDone());
+    EXPECT_EQ(slots[0].state, WarpSlot::State::READY);
+    EXPECT_EQ(slots[1].state, WarpSlot::State::READY);
+    EXPECT_EQ(slots[2].state, WarpSlot::State::READY);
+    EXPECT_EQ(slots[3].state, WarpSlot::State::EMPTY);
+    EXPECT_EQ(slots[0].warp_id, 0);
+    EXPECT_EQ(slots[1].warp_id, 1);
+    EXPECT_EQ(slots[2].warp_id, 2);
+    EXPECT_FALSE(allSlotsDone(slots));
 }
 
 TEST(CuDispatchUnit, DispatchOrderIsAscendingFifo) {
-    CuDispatchUnit cu;
-    cu.launch(0, 3);
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(3));
 
-    // Mirrors WarpScheduler::selectWarp()'s FIFO order: generateWarps()
-    // pushes warps in increasing warp_id order, and ascending slot order
+    // Mirrors WarpScheduler::selectWarp()'s FIFO order: launchSlots()
+    // assigns warps in increasing warp_id order, and ascending slot order
     // reproduces that pop order exactly.
-    EXPECT_EQ(cu.nextReadySlot(), 0);
-    cu.recordResult(0, completeStatus());
-    EXPECT_EQ(cu.nextReadySlot(), 1);
-    cu.recordResult(1, completeStatus());
-    EXPECT_EQ(cu.nextReadySlot(), 2);
+    EXPECT_EQ(nextReadySlot(slots), 0);
+    recordResult(slots, 0, completeStatus());
+    EXPECT_EQ(nextReadySlot(slots), 1);
+    recordResult(slots, 1, completeStatus());
+    EXPECT_EQ(nextReadySlot(slots), 2);
 }
 
 TEST(CuDispatchUnit, RecordResultCompleteMarksSlotDone) {
-    CuDispatchUnit cu;
-    cu.launch(0, 1);
-    cu.recordResult(0, completeStatus());
-    EXPECT_EQ(cu.stateOf(0), WarpSlot::State::DONE);
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(1));
+    recordResult(slots, 0, completeStatus());
+    EXPECT_EQ(slots[0].state, WarpSlot::State::DONE);
 }
 
 TEST(CuDispatchUnit, RecordResultStalledCarriesBarrierIdAndResumePc) {
-    CuDispatchUnit cu;
-    cu.launch(0, 1);
-    cu.recordResult(0, stalledStatus(/*bid=*/7, /*resume_pc=*/4));
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(1));
+    recordResult(slots, 0, stalledStatus(/*bid=*/7, /*resume_pc=*/4));
 
-    EXPECT_EQ(cu.stateOf(0), WarpSlot::State::STALLED);
-    EXPECT_EQ(cu.barrierIdOf(0), 7);
+    EXPECT_EQ(slots[0].state, WarpSlot::State::STALLED);
+    EXPECT_EQ(slots[0].barrier_id, 7);
 }
 
 TEST(CuDispatchUnit, NoReadySlotWhenNoneAvailable) {
-    CuDispatchUnit cu;
-    cu.launch(0, 2);
-    cu.recordResult(0, completeStatus());
-    cu.recordResult(1, stalledStatus(9, 1));
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    recordResult(slots, 0, completeStatus());
+    recordResult(slots, 1, stalledStatus(9, 1));
 
-    EXPECT_EQ(cu.nextReadySlot(), CuDispatchUnit::INVALID_SLOT);
+    EXPECT_EQ(nextReadySlot(slots), INVALID_SLOT);
 }
 
 TEST(CuDispatchUnit, ReleaseBarrierRestoresOnlyStalledSlots) {
-    CuDispatchUnit cu;
-    cu.launch(0, 3);
-    cu.recordResult(0, completeStatus());                    // slot0 -> DONE
-    cu.recordResult(1, stalledStatus(7, 4));                  // slot1 -> STALLED
-    cu.recordResult(2, stalledStatus(7, 4));                  // slot2 -> STALLED
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(3));
+    recordResult(slots, 0, completeStatus());                    // slot0 -> DONE
+    recordResult(slots, 1, stalledStatus(7, 4));                  // slot1 -> STALLED
+    recordResult(slots, 2, stalledStatus(7, 4));                  // slot2 -> STALLED
 
-    cu.releaseBarrier();
+    releaseBarrierSlots(slots);
 
-    EXPECT_EQ(cu.stateOf(0), WarpSlot::State::DONE)  << "DONE must not be touched by release";
-    EXPECT_EQ(cu.stateOf(1), WarpSlot::State::READY) << "STALLED -> READY on release";
-    EXPECT_EQ(cu.stateOf(2), WarpSlot::State::READY) << "STALLED -> READY on release";
-    EXPECT_EQ(cu.stateOf(3), WarpSlot::State::EMPTY) << "EMPTY must not be touched by release";
+    EXPECT_EQ(slots[0].state, WarpSlot::State::DONE)  << "DONE must not be touched by release";
+    EXPECT_EQ(slots[1].state, WarpSlot::State::READY) << "STALLED -> READY on release";
+    EXPECT_EQ(slots[2].state, WarpSlot::State::READY) << "STALLED -> READY on release";
+    EXPECT_EQ(slots[3].state, WarpSlot::State::EMPTY) << "EMPTY must not be touched by release";
 }
 
 TEST(CuDispatchUnit, BuildDispatchUsesFullActiveMaskAndCarriesResumePc) {
-    CuDispatchUnit cu;
-    cu.launch(0, 2);
-    cu.recordResult(0, completeStatus());                        // slot0 out of the way
-    cu.recordResult(1, stalledStatus(7, /*resume_pc=*/4));
-    cu.releaseBarrier();
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    recordResult(slots, 0, completeStatus());                        // slot0 out of the way
+    recordResult(slots, 1, stalledStatus(7, /*resume_pc=*/4));
+    releaseBarrierSlots(slots);
 
-    slot_id_t s = cu.nextReadySlot();
+    slot_id_t s = nextReadySlot(slots);
     ASSERT_EQ(s, 1);
-    warp_dispatch_t d = cu.buildDispatch(s);
+    warp_dispatch_t d = buildDispatch(slots, s);
 
     EXPECT_EQ(d.warp_id, 1);
     EXPECT_EQ(d.active_mask_init, thread_mask_t(-1))
@@ -121,11 +125,11 @@ TEST(CuDispatchUnit, BuildDispatchUsesFullActiveMaskAndCarriesResumePc) {
 }
 
 TEST(CuDispatchUnit, AllDoneOnlyAfterEveryActiveSlotCompletes) {
-    CuDispatchUnit cu;
-    cu.launch(0, 2);
-    cu.recordResult(0, completeStatus());
-    EXPECT_FALSE(cu.allDone()) << "slot1 still READY";
+    WarpSlot slots[MAX_WARPS_PER_CU];
+    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    recordResult(slots, 0, completeStatus());
+    EXPECT_FALSE(allSlotsDone(slots)) << "slot1 still READY";
 
-    cu.recordResult(1, completeStatus());
-    EXPECT_TRUE(cu.allDone());
+    recordResult(slots, 1, completeStatus());
+    EXPECT_TRUE(allSlotsDone(slots));
 }

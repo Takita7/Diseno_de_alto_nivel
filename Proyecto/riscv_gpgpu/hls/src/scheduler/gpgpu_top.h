@@ -1,34 +1,27 @@
-// gpgpu_top.h - HLS-synthesizable top-level orchestration: ties
-// CuDispatchUnit/BarrierArbiter to real compute_pipeline instances
+// gpgpu_top.h - HLS-synthesizable top-level orchestration: the on-chip
+// scheduler (schedulerCore) plus the real merged top-level "compute" IP
+// (gpgpu_scheduler)
 //
 // Golden reference: GPGPUTop::simulationProcess()'s per-round structure
 // (models/systemc/src/top/top.cpp) - "for cu_id in 0..NUM_CUS: dispatch one
-// warp" each round, then check the barrier - ported here as schedulerStep(),
-// now driven by real on-chip state (CuDispatchUnit/BarrierArbiter, SS10.7)
-// instead of software.
+// warp" each round, then check the barrier - ported here as schedulerCore(),
+// driven by real on-chip state (cu_dispatch_unit.h's free functions +
+// barrier_arbiter.h's free functions) instead of software.
 //
-// Real gap found while implementing this: CuDispatchUnit has no "dispatched,
-// awaiting result" slot state (only EMPTY/READY/STALLED/DONE) - calling
-// nextReadySlot() twice without an intervening recordResult() would return
-// the SAME slot both times. Golden simulationProcess() never hits this
-// because it dispatches exactly one warp per CU per round, synchronously,
-// before moving to the next round - the equivalent guard here is
-// cu_busy_[NUM_CUS], tracked at this orchestration layer (not inside
-// CuDispatchUnit itself, which stays decoupled per SS10.7): don't ask a CU
-// for its next slot while its previous dispatch hasn't reported back yet.
-//
-// Scope of what's verified here vs. deferred to T025: GpgpuTop/
-// schedulerStep() below are real, tested control logic - proven via actual
-// execution against real compute_pipeline instances (see tests/hls/
-// test_gpgpu_top.cpp). What ISN'T resolved here: in real hardware,
-// compute_pipeline is a SEPARATELY synthesized top-level kernel per CU, so
-// CuDispatchUnit's regs_/program_ (this file's C++ member state) and that
-// kernel's regs[][]/program[] ports need to alias the same physical BRAM
-// across two different synthesized blocks - a system-integration/v++
-// connectivity decision, same category as m_axi board binding (SS6.4),
-// deferred to T025. The csim tests here run compute_pipeline in the same
-// process/scope specifically so that aliasing is trivially true for
-// verification purposes; it doesn't prove the cross-kernel RTL wiring.
+// docs/hls/interfaces.md SS16.6: this file used to hold a GpgpuTop class
+// (wrapping CuDispatchUnit/BarrierArbiter instances as members, reached via
+// a persistent `top` object) plus schedulerStep()/schedulerLoop() operating
+// on it. That shape failed real Vitis HLS DATAFLOW legality checking
+// against gpgpu_scheduler in every one of 10 real csynth attempts
+// (SS16.1-16.5). Redesigned around schedulerCore() below: ONE free-running
+// process (matching compute_pipeline/mem_arbiter's already-proven shape
+// exactly) that owns its own warp-slot and barrier state as genuinely
+// local variables - nothing else in the program can reach them, by
+// construction. CuDispatchUnit (now regs_/program_ only, cu_dispatch_unit.h)
+// is still shared between schedulerCore (which calls loadProgram()) and
+// compute_pipeline (which reads/writes regs_/program_ through its own
+// ports) - that specific sharing pattern was never flagged in any attempt
+// and is unchanged here.
 
 #ifndef RISCV_GPGPU_HLS_GPGPU_TOP_H
 #define RISCV_GPGPU_HLS_GPGPU_TOP_H
@@ -38,130 +31,130 @@
 #include "../common/hls_types.h"
 #include "cu_dispatch_unit.h"
 #include "barrier_arbiter.h"
+#include "mem_arbiter.h"
+#include "../compute_unit/compute_pipeline.h"
 
 namespace riscv_gpgpu_hls {
 
-class GpgpuTop {
-public:
-    // Kernel launch (docs/hls/interfaces.md SS2.5.6/SS10.6): validates the
-    // hazard-mitigation capacity check, and if it passes, assigns warps to
-    // every CU and loads each one's program copy. Returns false (matching
-    // status.fault, SS2.5.6) without touching any CU state if the kernel
-    // doesn't fit - mirrors BarrierArbiter::launch()'s own fault flag.
-    bool launchKernel(instr_word_t* program_ptr, uint32_t program_len,
-                       warp_id_t total_warps) {
-        arbiter_.launch(total_warps);
-        if (arbiter_.launchFault()) return false;
+// The on-chip scheduler, NUM_CUS=1 (decided, SS10.11) - one free-running
+// process, called once from gpgpu_scheduler's DATAFLOW region exactly like
+// compute_pipeline/mem_arbiter are. Real gap found while first building
+// this (pre-redesign, still true here): a slot can only ever be
+// "dispatched, awaiting result" implicitly - nextReadySlot() would return
+// the same slot twice if asked again before its result comes back, so this
+// tracks one `busy_cu` flag itself (SS10.7's decoupling: that bookkeeping
+// belongs at this orchestration layer, not inside the slot-bookkeeping
+// free functions).
+//
+// `cu` is a reference to storage owned by the caller (gpgpu_scheduler) -
+// shared with compute_pipeline for regs_/program_ only (SS16.6's header
+// comment has the reasoning for why that specific sharing is fine).
+// `slots`/`barrier` below are NOT parameters - they are declared inside
+// this function's own body, matching compute_pipeline's own RegFile/
+// DivergenceStack shape exactly.
+//
+// `start` is `bool&`, not `bool` (SS16.6, found while testing this on its
+// own std::thread): a plain by-value bool can never change for the life
+// of one call, so once `done` fires the loop immediately re-enters IDLE,
+// sees the same fixed `start==true`, and relaunches forever - a
+// permanently hot-spinning thread, confirmed to deterministically crash
+// the whole test binary (SIGSEGV, 10/10 runs) once static destructors run
+// at process exit while it's still actively touching its captured static
+// objects. A reference lets a caller clear `start` once `busy` is
+// observed - matching the real host-clears-start-once-device-is-busy
+// protocol (docs/hls/interfaces.md SS2.5.6) more faithfully than a fixed
+// value ever could. gpgpu_scheduler's own `start` stays a plain `bool`
+// parameter (its real, s_axilite-mapped hardware port shape, unaffected -
+// schedulerCore is never itself `set_top`, only called from within
+// gpgpu_scheduler, so this is purely an internal-helper signature choice).
+inline void schedulerCore(
+    CuDispatchUnit& cu,
+    instr_word_t*   program_ptr,
+    uint32_t        program_len,
+    warp_id_t       total_warps,
+    bool&           start,
+    bool&           busy,
+    bool&           done,
+    bool&           fault,
+    hls::stream<warp_dispatch_t>& dispatch_out,
+    hls::stream<warp_status_t>&   status_in
+) {
+    WarpSlot      slots[MAX_WARPS_PER_CU];
+    BarrierState  barrier;
+    bool          busy_cu = false;
 
-    LAUNCH_EACH_CU:
-        for (int i = 0; i < NUM_CUS; ++i) {
-#pragma HLS UNROLL
-            cus_[i].launch(cu_id_t(i), total_warps);
-            cus_[i].loadProgram(program_ptr, program_len);
-            cu_busy_[i] = false;
-        }
-        return true;
-    }
+    busy = false; done = false; fault = false;
 
-    bool launchFault()    const { return arbiter_.launchFault(); }
-    bool kernelComplete() const { return arbiter_.kernelComplete(); }
+    while (true) {
+#pragma HLS PIPELINE off
+        if (!busy) {
+            // IDLE. Same open synthesis-semantics caveat T024's other
+            // scalar-port pragmas already carry (SS8): a free-running
+            // kernel reading a scalar s_axilite port on every iteration is
+            // provisional until checked against real vitis_hls, not
+            // assumed correct here.
+            if (!start) continue;
 
-    CuDispatchUnit& cu(int i)      { return cus_[i]; }
-    BarrierArbiter&  arbiter()      { return arbiter_; }
-    bool&            busy(int i)    { return cu_busy_[i]; }
+            barrierLaunch(barrier, total_warps);
+            if (barrierLaunchFault(barrier)) { fault = true; continue; }
 
-private:
-    CuDispatchUnit cus_[NUM_CUS];
-    BarrierArbiter arbiter_;
-    bool           cu_busy_[NUM_CUS] = {};
-};
+            launchSlots(slots, cu_id_t(0), total_warps);
+            cu.loadProgram(program_ptr, program_len);
+            busy_cu = false;
 
-// One scheduling round: mirrors simulationProcess()'s fan-out loop (one
-// dispatch attempt + one result check per CU), then the barrier check.
-// Call this repeatedly (the free-running gpgpu_scheduler() kernel below
-// does so in a while(true)) until top.kernelComplete().
-inline void schedulerStep(GpgpuTop& top,
-                           hls::stream<warp_dispatch_t> dispatch_out[NUM_CUS],
-                           hls::stream<warp_status_t>   status_in[NUM_CUS]) {
-SCHEDULER_STEP_PER_CU:
-    for (int i = 0; i < NUM_CUS; ++i) {
-        if (!top.busy(i)) {
-            slot_id_t slot = top.cu(i).nextReadySlot();
-            if (slot != CuDispatchUnit::INVALID_SLOT) {
-                dispatch_out[i].write(top.cu(i).buildDispatch(slot));
-                top.busy(i) = true;
+            busy = true;
+        } else {
+            // RUNNING: one scheduling round per pass.
+            if (!busy_cu) {
+                slot_id_t slot = nextReadySlot(slots);
+                if (slot != INVALID_SLOT) {
+                    dispatch_out.write(buildDispatch(slots, slot));
+                    busy_cu = true;
+                }
+            }
+            if (!status_in.empty()) {
+                warp_status_t st = status_in.read();
+                recordResult(slots, st.slot_id, st);
+                barrierOnEvent(barrier, st.code);
+                busy_cu = false;
+            }
+
+            if (barrierReleaseReady(barrier)) {
+                releaseBarrierSlots(slots);
+                barrierAcknowledgeRelease(barrier);
+            }
+
+            if (barrierKernelComplete(barrier)) {
+                busy = false;
+                done = true;
             }
         }
-        if (!status_in[i].empty()) {
-            warp_status_t st = status_in[i].read();
-            top.cu(i).recordResult(st.slot_id, st);
-            top.arbiter().onEvent(st.code);
-            top.busy(i) = false;
-        }
-    }
-
-    if (top.arbiter().releaseReady()) {
-    SCHEDULER_STEP_RELEASE:
-        for (int i = 0; i < NUM_CUS; ++i) {
-#pragma HLS UNROLL
-            top.cu(i).releaseBarrier();
-        }
-        top.arbiter().acknowledgeRelease();
     }
 }
 
-// Free-running top-level kernel (docs/hls/interfaces.md SS2.5.6's launch
-// register set) - the on-chip replacement for the host's launch/poll role.
-// program_ptr's cross-kernel regs[][]/program[] aliasing with each
-// separately-synthesized compute_pipeline instance is T025 system-
-// integration scope (see this file's header) - not resolved by this
-// function alone.
-inline void gpgpu_scheduler(
+// The one real top-level "compute" IP (SS15/SS16.6): schedulerCore +
+// compute_pipeline + mem_arbiter, merged into a single DATAFLOW region -
+// all three are now the same shape (one free-running process, own local
+// state, streams for everything crossing a process boundary).
+//
+// Declared here, DEFINED in gpgpu_top.cpp (not `inline` in this header,
+// unlike schedulerCore above) - an `inline` header-only function is only
+// emitted if something ODR-uses it, and nothing does (this IS the top -
+// nothing calls it). `set_top` needs a real, always-emitted symbol, same
+// reason compute_pipeline/memory_pipeline have always been declared in a
+// .h and defined in a .cpp rather than header-only.
+void gpgpu_scheduler(
     instr_word_t* program_ptr,
+    reg_t*        initial_regs_ptr,
     uint32_t      program_len,
     warp_id_t     total_warps,
     bool          start,
     bool&         busy,
     bool&         done,
     bool&         fault,
-    hls::stream<warp_dispatch_t> dispatch_out[NUM_CUS],
-    hls::stream<warp_status_t>   status_in[NUM_CUS]
-) {
-#pragma HLS INTERFACE m_axi    port=program_ptr offset=slave bundle=gmem
-#pragma HLS INTERFACE s_axilite port=program_len  bundle=control
-#pragma HLS INTERFACE s_axilite port=total_warps  bundle=control
-#pragma HLS INTERFACE s_axilite port=start        bundle=control
-#pragma HLS INTERFACE s_axilite port=busy         bundle=control
-#pragma HLS INTERFACE s_axilite port=done         bundle=control
-#pragma HLS INTERFACE s_axilite port=fault        bundle=control
-#pragma HLS INTERFACE axis      port=dispatch_out
-#pragma HLS INTERFACE axis      port=status_in
-
-    static GpgpuTop top;
-    busy = false; done = false; fault = false;
-
-    while (true) {
-        // Idle until the host pulses start (docs/hls/interfaces.md SS2.5.6
-        // launch sequence, step 4) - same open synthesis-semantics caveat
-        // T024's other scalar-port pragmas already carry (SS8): a
-        // free-running kernel reading a scalar s_axilite port on every
-        // iteration is provisional until checked against real vitis_hls,
-        // not assumed correct here.
-        if (!start) continue;
-
-        bool ok = top.launchKernel(program_ptr, program_len, total_warps);
-        if (!ok) { fault = true; continue; }
-        busy = true;
-
-        while (!top.kernelComplete()) {
-#pragma HLS PIPELINE off
-            schedulerStep(top, dispatch_out, status_in);
-        }
-
-        busy = false;
-        done = true;
-    }
-}
+    hls::stream<mem_req_t>&  mem_req_out,
+    hls::stream<mem_resp_t>& mem_resp_in
+);
 
 }  // namespace riscv_gpgpu_hls
 

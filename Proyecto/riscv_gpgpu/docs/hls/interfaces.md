@@ -37,9 +37,9 @@ one fused kernel. This keeps each block's resource footprint separately
 measurable — important because `memory_pipeline` now carries both an on-chip
 cache (BRAM) footprint *and* an `m_axi` interface, two separately-tunable knobs.
 
-**Board scope unchanged**: KV260 and Alveo U55C only (AU15P out of scope, per
-team decision — unrelated to the memory-architecture correction this draft
-makes).
+**Board scope: KV260 only.** Alveo U55C support was discarded permanently
+(§14) — AU15P was already out of scope per an earlier, unrelated team
+decision.
 
 **What this draft corrects from v2:**
 - **`m_axi` is back.** `memory_pipeline` has a real external-memory port backing
@@ -49,12 +49,8 @@ makes).
   scratchpad), L1 (per-CU), L2 (shared). None of them are sized to hold the
   *entire* addressable memory anymore — they're sized as caches, with normal
   cache miss/fill/writeback behavior against `m_axi`.
-- **Per-board external memory differs in kind, not just size**: KV260 reaches
-  DDR4 through the PS's HP/HPC AXI ports (shared with the ARM cores, see
-  `hls/constraints/kv260.tcl`); **U55C has no DDR at all** — it's HBM2-only, 16GB
-  over up to 32 pseudo-channels (see `hls/constraints/u55c.tcl`). `memory_pipeline`'s
-  `m_axi` port binds to whichever the board provides; this is a link-time
-  decision (`v++ --connectivity.sp` for U55C), not an HLS C-synthesis-time one.
+- **External memory is 4GB DDR4**, reached through the PS's HP AXI port (see
+  `hls/constraints/kv260.tcl`, and §10.11/§14 for why HP over HPC).
 
 ---
 
@@ -471,10 +467,7 @@ void memory_pipeline(
     hls::stream<mem_req_t>&  req_in,     // axis, from compute_pipeline
     hls::stream<mem_resp_t>& resp_out,   // axis, to compute_pipeline
 
-    ap_uint<32>* global_mem              // m_axi, board-specific target:
-                                          //   KV260: HP/HPC port -> PS DDR4
-                                          //   U55C:  bound to one HBM pseudo-channel
-                                          //          at v++ link time (T025/T026)
+    ap_uint<32>* global_mem              // m_axi, KV260 HP port -> PS DDR4
 );
 // #pragma HLS INTERFACE m_axi port=global_mem offset=slave bundle=gmem \
 //     max_read_burst_length=<cache_line_words> max_write_burst_length=<cache_line_words>
@@ -498,24 +491,24 @@ addressable memory, only cache capacity and hit rate.
 ## 4. Data type mapping
 
 Unchanged from v1/v2 — `ap_uint<32>` registers, `ap_uint<6>` opcodes, packed
-`Instruction`, etc. — with `ADDR_BITS` reverting to cover each board's real
+`Instruction`, etc. — with `ADDR_BITS` reverting to cover the board's real
 external address space (not an on-chip capacity as v2 had it):
 
 | SystemC | HLS | Notes |
 |---|---|---|
-| `Address` (`uint64_t`) | `ap_uint<ADDR_BITS>` | KV260: 32 bits (4GB DDR4, `kv260.tcl`). U55C: sized to whatever HBM pseudo-channel(s) `global_mem` is bound to at link time — 28 bits for one 256MB PC, wider if multiple PCs are interleaved. Finalize once T025/T026 pick the binding. |
+| `Address` (`uint64_t`) | `ap_uint<ADDR_BITS>` | 32 bits (4GB DDR4, `kv260.tcl`). |
 
 ---
 
-## 5. Per-board on-chip memory budget (caches only now)
+## 5. On-chip memory budget (caches only now) — KV260
 
-| | **KV260 (XCK26)** | **Alveo U55C (XCU55C)** |
-|---|---|---|
-| Block RAM (36Kb blocks) | 144 blocks (≈ 5.06 Mb raw) | ≈ 70.9 Mb total |
-| UltraRAM (288Kb blocks) | 64 blocks (≈ 18 Mb raw) | ≈ 270.0 Mb total |
-| Combined on-chip (vendor-quoted) | ≈ 26.6 Mb (~3.3 MB) | ≈ 43 MB |
-| External memory via `m_axi` | 4GB DDR4 (shared w/ PS, via HP/HPC) | 16GB HBM2 (no DDR), up to 32×256MB pseudo-channels |
-| Practical implication | Still size caches (shared mem + L1 + L2 banks) here first — plenty of headroom now that global memory isn't competing for the same budget | HBM's raw bandwidth (460GB/s aggregate) is the more interesting knob than capacity here; consider whether wider/more `m_axi` ports (multiple HBM PCs) beat a single port once bandwidth is measured |
+| | **KV260 (XCK26)** |
+|---|---|
+| Block RAM (36Kb blocks) | 144 blocks (≈ 5.06 Mb raw) |
+| UltraRAM (288Kb blocks) | 64 blocks (≈ 18 Mb raw) |
+| Combined on-chip (vendor-quoted) | ≈ 26.6 Mb (~3.3 MB) |
+| External memory via `m_axi` | 4GB DDR4 (shared w/ PS, via HP) |
+| Practical implication | Still size caches (shared mem + L1 + L2 banks) here first — plenty of headroom now that global memory isn't competing for the same budget |
 
 **Sizing procedure:**
 1. Pick a starting `NUM_CUS` and `MAX_THREADS_PER_WARP=32` (fixed).
@@ -528,8 +521,8 @@ external address space (not an on-chip capacity as v2 had it):
    real bank/set/way structure, not assumed to carry over unchanged.
 4. Run C-synthesis, check actual BRAM utilization against §5's ceilings, iterate.
 5. Separately, tune `m_axi` burst length / outstanding transactions against
-   each board's external memory (DDR4 latency/bandwidth on KV260, HBM2 on
-   U55C) — this is a new tuning axis v2 didn't have at all.
+   KV260's DDR4 latency/bandwidth — this is a new tuning axis v2 didn't
+   have at all.
 
 ---
 
@@ -539,9 +532,9 @@ external address space (not an on-chip capacity as v2 had it):
 2. **`MAX_PROGRAM_LEN`** — still open.
 3. **`WAYS` for L1 and L2** — proposed defaults above (L1=2, L2=4); not yet
    validated against real resource/timing numbers.
-4. **`m_axi` binding specifics: KV260 decided — HP** (reversed from an
-   earlier HPC lean; §10.11 has the reasoning). U55C's pseudo-channel
-   count/interleaving is still open, tracked for T025/T026.
+4. **`m_axi` binding specifics: decided — HP** (reversed from an earlier HPC
+   lean; §10.11 has the reasoning). The U55C pseudo-channel question this
+   item used to track is moot — U55C was discarded (§14).
 5. **Barrier scope: final decision — global, matching the golden model
    exactly.** Reversed from an earlier block-scoped proposal (§10.3-§10.5,
    now deprecated — see §10.6). The hardware FSM suspends all warps until
@@ -586,27 +579,32 @@ parity/sanity metric — there was nothing to count in the on-chip-only design.
 ## 8. Synthesis configuration and pragmas (T024)
 
 **Environment caveat, stated once here rather than at every number below**:
-`vitis_hls` is not available in the environment this was authored in — only
-its headers (`ap_int.h`, `hls_stream.h`), which is what made the csim-style
-`g++` testing throughout T019/T022/T023 possible at all. Everything in this
-section is a principled, documented design choice, but **none of it is
-validated against a real C-synthesis or co-simulation resource/timing
-report**. Treat every burst/outstanding/partition number as provisional until
-someone runs actual `vitis_hls` synthesis — that is real follow-on work, not
-a formality.
+`vitis_hls` was not available in the environment this was originally
+authored in — only its headers (`ap_int.h`, `hls_stream.h`), which is what
+made the csim-style `g++` testing throughout T019/T022/T023 possible at all.
+Everything in this section started as a principled, documented design
+choice with **none of it validated against a real C-synthesis or
+co-simulation resource/timing report**. **Update (T025)**: a real Vitis
+2023.1 install is now configured (`scripts/setup-env.sh` auto-detects
+`/tools/Xilinx`) and `tests/fpga/test_flow.tcl` passes real `csynth_design`
+for both kernels on KV260 (§10.11 has the measured numbers) — burst/
+outstanding/partition tuning below is still unvalidated (no co-simulation or
+place-and-route run yet), but the "no `vitis_hls` at all" caveat itself no
+longer applies.
 
-### 8.1 Per-board config: `hls/config/{kv260,u55c}.h`
+### 8.1 Per-board config: `hls/config/kv260.h`
 
 Macros, not `constexpr` — pragma argument lists are parsed by straight
 preprocessor text substitution, not full C++ constant-expression evaluation,
 so a named `constexpr` symbol is not reliably accepted there across tool
-versions. Selected by defining exactly one of `RISCV_GPGPU_BOARD_KV260` /
-`RISCV_GPGPU_BOARD_U55C` as a compiler flag (a Vitis project's
-`add_files -cflags`, T025/T026 scope) before `hls_config.h` is included.
-Carries `ADDR_BITS` (per §4/§6) and `m_axi` burst length /
-num_read_outstanding / num_write_outstanding. No board macro defined (every
-`tests/hls/*.cpp` in this repo) falls back to the KV260-sized defaults that
-existed before T024 — csim behavior is unchanged by this section's work.
+versions. Selected by defining `RISCV_GPGPU_BOARD_KV260` as a compiler flag
+(a Vitis project's `add_files -cflags`, T025/T026 scope) before
+`hls_config.h` is included. Carries `ADDR_BITS` (per §4/§6) and `m_axi`
+burst length / num_read_outstanding / num_write_outstanding. No board macro
+defined (every `tests/hls/*.cpp` in this repo) falls back to the KV260-sized
+defaults that existed before T024 — csim behavior is unchanged by this
+section's work. (`RISCV_GPGPU_BOARD_U55C` and `hls/config/u55c.h` existed
+briefly and were removed — §14.)
 
 ### 8.2 `BIND_STORAGE`: BRAM only, no URAM tier
 
@@ -1297,12 +1295,9 @@ raised earlier this session: `compute_pipeline`'s cost — unrolled
 *that* is the real optimization target once RTL exists, not the cache
 hierarchy or the new FSM.
 
-**U55C: still genuinely open**, not a number dressed up as one. Device
-support isn't installed in this environment (§10 intro), so there's no
-measured baseline to project from the way KV260's is above. Its fabric is
-dramatically larger (§5: ~14× KV260's BRAM alone), so more CUs are
-plausible there, but stating a figure now would be a guess. Left open
-until real U55C synthesis exists.
+**U55C: was left genuinely open here** (no device support installed, no
+measured baseline to project `NUM_CUS` from) — **superseded by §14: U55C was
+discarded before that gap got filled.**
 
 **L2 → URAM: still recommended, reprioritized down, not dropped.** With
 `NUM_CUS=1` decided, BRAM has real headroom (61% today; §2.5's new
@@ -2167,5 +2162,562 @@ expansion automatically for hand-built test/golden-translation programs,
 but a real compiler's own code generator is responsible for doing it
 itself for anything it emits directly — `encodeInstructionExpanded()`
 should not be relied on as a permanent crutch once a real toolchain exists.
+
+---
+
+## 14. Alveo U55C support — discarded permanently (T025)
+
+**Decision**: U55C is dropped from board scope entirely. **KV260 is now the
+sole target board** for the HLS→RTL→FPGA path. Explicit team decision at
+the start of T025, not a technical dead-end — every open U55C item up to
+this point (§5, §6 item 4, §8.1, §10.11) was "still open, needs real
+hardware/data," not "found to be infeasible."
+
+**State at the time of the decision**: with a real Vitis 2023.1 install now
+configured (`/tools/Xilinx`, `scripts/setup-env.sh` auto-detects it),
+`tests/fpga/test_flow.tcl` was re-run for real. KV260 (`xck26-sfvc784-2LV-c`)
+csynths cleanly for both `compute_pipeline` and `memory_pipeline` — same
+result as the pre-existing reports §10.11 already cites. U55C
+(`xcu55c-fsvh2892-2L-e`) fails with `ERROR: [HLS 200-1023] Part
+'xcu55c-fsvh2892-2L-e' is not installed`, and `platforminfo -l` lists no
+platforms at all — this Vitis installation has no Alveo device/platform
+package added, so even HLS-level C-synthesis (let alone the `v++
+--platform` link step T025/T026 would need) isn't reachable here without a
+separate, substantial install the team chose not to pursue.
+
+**What's removed**:
+- `hls/constraints/u55c.tcl`, `hls/config/u55c.h` — deleted.
+- `RISCV_GPGPU_BOARD_U55C` macro and its `#elif` branch in
+  `hls/src/common/hls_config.h` — removed; `hls_config.h` now only branches
+  on `RISCV_GPGPU_BOARD_KV260` (defined) vs. undefined (KV260-sized
+  defaults, unchanged fallback behavior for `tests/hls/*.cpp`).
+  `memory_pipeline.cpp`'s comments referencing the per-board macro pair
+  updated to name KV260 only.
+- `tests/fpga/test_flow.tcl`'s `boards` list — U55C entry removed; the
+  script's board-loop structure is kept as-is (still useful if a board is
+  ever added back) rather than flattened to a single hardcoded board, since
+  that loop/skip structure is what made this decision easy to validate in
+  the first place.
+- `hls/constraints/README.md` — U55C row/sections removed, scope note
+  updated to KV260-only.
+- Every U55C mention in this file's *current*, forward-looking sections
+  (§1, §3.3, §4, §5, §6, §8.1) — removed or resolved. U55C mentions inside
+  already-historical/superseded narrative (§2.4, §10.11's measured-data
+  paragraph) are left as-is or marked superseded in place, not scrubbed —
+  consistent with how §11/§12's earlier reversals were handled.
+
+**Consequence for T025/T026 scope**: every remaining open item that was
+phrased as "KV260 decided, U55C open" (HP vs. HPC port, `ADDR_BITS`, cache
+`WAYS` sizing target) collapses to just its KV260 half — nothing further to
+resolve there before T025's real RTL-export/build scripts get written.
+
+---
+
+## 15. T025: resolving the `regs[][]`/`program[]` BRAM-aliasing gap (merge, not shared-external-BRAM)
+
+§10.12 item 3 and `gpgpu_top.h`/`cu_dispatch_unit.h`'s own header comments
+already named this precisely: `CuDispatchUnit::regsArray()`/`programArray()`
+return references into its own private `regs_`/`program_` arrays, and the
+comments say these are meant to "alias" `compute_pipeline`'s `regs[][]`/
+`program[]` ports "directly." That's trivially true in csim (`test_gpgpu_top.
+cpp` passes these references straight into `compute_pipeline()` calls on
+separate `std::thread`s — same process, same address space, aliasing is
+just C++ pass-by-reference). It stops being trivial the moment
+`compute_pipeline` is synthesized as its own independent top-level IP (as
+T020/T024 already do, for real, valid resource-estimation reasons): its
+`regs`/`program` ports carry `#pragma HLS INTERFACE ap_memory`
+(`compute_pipeline.cpp` — real, checked, not assumed), which exposes them
+as raw external BRAM address/data/enable ports at that IP's boundary.
+Nothing about `GpgpuTop`/`CuDispatchUnit` exposes an equivalent external
+port for `regs_`/`program_` — they're just private members, currently
+living wherever the enclosing top-level function happens to be. Wiring two
+*independently synthesized* IPs to one physical BRAM (a real external
+Block Memory Generator both sides drive) is possible in principle but is
+genuine new RTL design: new ports on both sides, a real Vivado shared-BRAM
+wiring, and — unlike the `dispatch_out`/`status_in` handshake, which
+already sequences every other cross-IP interaction correctly — no existing
+mechanism guarantees one side isn't reading mid-write from the other.
+
+**Decision: merge, don't share.** `compute_pipeline` and `mem_arbiter` are
+*already* written as free-running, pure-stream, `while(true)` kernels — the
+same persistent-hardware shape `memory_pipeline` uses (`mem_arbiter.h`'s own
+header says so explicitly). Nothing about either requires them to be their
+*own* top-level IP — that was always just T020/T024's resource-estimation
+convenience, not a system-integration requirement. So: **`gpgpu_scheduler`
+becomes the one real top-level "compute" IP**, calling `compute_pipeline`
+(`NUM_CUS` instances, `UNROLL`ed) and `mem_arbiter` internally as `DATAFLOW`
+processes, exactly reproducing the call pattern `test_gpgpu_top.cpp` already
+proves correct — just relocated from a test harness's `std::thread`s into
+the synthesizable kernel itself. `regs_`/`program_` become what they always
+should have been at the RTL level: ordinary private on-chip BRAM, entirely
+internal to one IP, no cross-IP aliasing question left to answer.
+`memory_pipeline` is unaffected and stays the second, genuinely separate
+IP — its `global_mem`/`m_axi` port never had this problem (it's a real
+external-memory pointer, not a shared-state alias).
+
+**What changes, concretely (`hls/src/scheduler/gpgpu_top.h`)**:
+- `dispatch_out[NUM_CUS]`, `status_in[NUM_CUS]`, and new per-CU
+  `mem_req`/`mem_resp` streams become **local** `hls::stream` variables
+  inside `gpgpu_scheduler`, not top-level ports — the
+  `#pragma HLS INTERFACE axis port=dispatch_out`/`status_in` lines are
+  removed since nothing external ever touched them; they were only
+  top-level ports because `gpgpu_scheduler` and `compute_pipeline` were
+  wrongly treated as separately-wired IPs.
+- `gpgpu_scheduler`'s real external ports shrink to: `program_ptr` (`m_axi`,
+  unchanged), `program_len`/`total_warps`/`start`/`busy`/`done`/`fault`
+  (`s_axilite`, unchanged), plus **new** `mem_req_out`/`mem_resp_in`
+  (`axis`) — the one pair `mem_arbiter` needs to reach the *external*,
+  separately-synthesized `memory_pipeline` IP.
+- Inside, under `#pragma HLS DATAFLOW`: the existing scheduling loop (as
+  its own free-running process), `compute_pipeline(...)` called once per
+  CU with `top.cu(i).programArray()`/`regsArray()` passed directly (same
+  values `test_gpgpu_top.cpp` already passes), and `mem_arbiter(...)`
+  fanning the per-CU streams into the one external `mem_req_out`/
+  `mem_resp_in` pair.
+- `compute_pipeline.{h,cpp}` and `mem_arbiter.h`: **unchanged.** Both stay
+  independently `set_top`-able too (T020/T024's resource-estimation runs
+  keep working exactly as before) — `#pragma HLS INTERFACE` on a function
+  is only honored when that function is the actual synthesis top; called
+  as a plain sub-function from `gpgpu_scheduler`'s `DATAFLOW` region, the
+  same source becomes ordinary internal logic instead. (This dual use —
+  same source, two different roles depending which function `set_top`
+  names — is standard Vitis HLS practice, not a new pattern for this
+  project; empirically confirmed by the real `csynth_design` run below,
+  not just asserted.)
+
+**Why this doesn't need new synchronization design**: every cross-array
+access is already sequenced by the `dispatch_out`/`status_in` handshake
+that exists today — the scheduler writes a dispatch, *then*
+`compute_pipeline` reads/writes `regs`/`program` for that slot, *then*
+`compute_pipeline` writes status, *then* the scheduler reads status/acts on
+the result. Merging into one IP doesn't change that ordering; it just
+turns the arrays the ordering already protects from "two IPs hoping to
+share a BRAM" into "one IP's own private state" — strictly simpler, not a
+new hazard surface.
+
+**Host-visible results still work correctly under this design**: nothing
+about `regs_`/`program_` being fully private (no external port at all) is
+a regression — per §2.5.6, the host was never meant to read register state
+directly. It writes launch registers, polls `done`, then reads *results*
+from DDR via `memory_pipeline`'s `m_axi` port (the same port/HP-port
+reasoning §10.11 already settled) — exactly how `parallelReduction`'s
+kernel program itself works (`SW` to global memory, not a register-file
+readback). The new end-to-end test below verifies results the same way a
+real host would: through `backing[]` (memory), not through `top.cu(0).
+regsArray()` (which no longer exists outside `gpgpu_scheduler` once this
+merge lands — a private implementation detail again, as it should be).
+
+---
+
+## 16. Initial per-thread register state (kernel arguments, thread index) — found missing, then relocated for real DATAFLOW legality
+
+**Found while building §15's real end-to-end test**: every kernel in
+`kernel_programs.h` needs per-thread register state seeded *before*
+launch (`r1=tid`, `r2=address`, ...) — grep-checked `executeALU`/
+`executeOneWarp`: nothing derives thread index from hardware alone, no
+lane-id register exists anywhere. Every `tests/hls/` test up to this point
+seeded this by reaching directly into `top.cu(0).regsArray()` from the
+test itself — a testing convenience that worked only because `top` was
+test-visible. Once §15's merge made `top` genuinely private inside
+`gpgpu_scheduler` (correctly — the host was never meant to read/write
+registers directly, only DDR after polling `done`, §2.5.6), **there was
+no real mechanism left for the host to inject kernel arguments into the
+on-chip register file at all.** This was always missing; the tests just
+papered over it.
+
+**First attempt (rejected by real csynth): scheduler loads it at launch.**
+Added `CuDispatchUnit::loadInitialRegs()`, called from
+`GpgpuTop::launchKernel()` (`schedulerLoop`'s call chain), mirroring
+`loadProgram()`'s existing broadcast-copy pattern — except initial-regs
+data is per-warp, per-thread *unique* (not broadcast), so it's indexed by
+global `warp_id`, not per-CU slot, with each CU picking out only its own
+assigned warps' slice via the same `w = cu_id + slot*NUM_CUS` arithmetic
+`launch()` already uses. This compiled and passed csim fine — but real
+`vitis_hls csynth_design` against `gpgpu_scheduler` rejected it:
+`regs_` had two DATAFLOW-region writers (`schedulerLoop`, via this load,
+*and* `compute_pipeline`, during execution) — `[HLS 200-979/200-779]`,
+"can only be written in one process function" / "single reader and single
+writer." Real, concrete, not a hypothetical — confirmed by an actual
+`csynth_design` run, not design review.
+
+**Fix: move the load into `compute_pipeline`, the only place that already
+legitimately writes `regs_`.** `WarpSlot` gains a `fresh` bool, set `true`
+by `launch()` for a freshly-assigned slot; `CuDispatchUnit::buildDispatch()`
+(no longer `const`) packages it into `warp_dispatch_t::fresh_launch` and
+clears the slot's flag — so it fires exactly once per warp, on its first
+dispatch, never on a barrier resume (`releaseBarrier()` never touches
+`fresh`, and `resume_pc==0` alone was deliberately *not* used as the
+fresh/resume signal — a warp could in principle stall with `resume_pc==0`,
+making that an unreliable proxy). `compute_pipeline` gains a new
+`initial_regs_ptr` (`m_axi`) parameter; on `d.fresh_launch`, it seeds
+`regs[d.slot_id]` from `initial_regs_ptr[d.warp_id * ...]` before calling
+`executeOneWarp()`. `CuDispatchUnit::loadInitialRegs()` and
+`GpgpuTop::launchKernel()`'s `initial_regs_ptr` parameter were removed
+again (dead — `regs_` is now write-once-owner `compute_pipeline`, never
+touched by the scheduler side at all). `gpgpu_scheduler` keeps
+`initial_regs_ptr` as a real top-level `m_axi` port, passed straight
+through to each `compute_pipeline` call unmodified.
+
+**Verified**: all 46 `tests/hls/*` csim tests re-verified passing after
+(3 call sites needed the new parameter: `compute_pipeline`'s two remaining
+independent-fixture tests pass `nullptr` — their hand-built
+`warp_dispatch_t`s never set `fresh_launch`, so it's never dereferenced;
+`test_gpgpu_top.cpp`'s two threaded component tests switched from a
+post-launch `regsArray()` poke to a real `initial_regs` DRAM buffer,
+exercising the actual new mechanism instead of bypassing it).
+
+### 16.1 Real `csynth_design` results against `gpgpu_scheduler` — 4 attempts, 3 fixed, 1 open
+
+Ad hoc verification script: `build/fpga_smoke/csynth_gpgpu_scheduler.tcl`
+(not yet wired into `tests/fpga/test_flow.tcl` — that comes once this
+converges). Each attempt below is a **real** `vitis_hls csynth_design`
+run against KV260, `set_top gpgpu_scheduler`, not a projection.
+
+1. **`ERROR: [HLS 214-157] Top function not found`** — `gpgpu_scheduler`
+   was `inline`, defined only in the header; nothing ODR-used it, so it
+   was never emitted. **Fixed**: declared in `gpgpu_top.h`, defined in a
+   real `gpgpu_top.cpp` (matching `compute_pipeline`'s existing
+   convention) — §15 already documents this.
+2. **`ERROR: [HLS 200-979/200-779]` — `regs_` two-writer conflict**
+   (`schedulerLoop`'s `loadInitialRegs()` at launch vs. `compute_pipeline`
+   during execution). **Fixed**: §16 above — moved the seed into
+   `compute_pipeline` itself, the sole writer.
+3. **`ERROR: [HLS 200-1013/200-984]` — shared `m_axi` bundle** —
+   `program_ptr` (read by `schedulerLoop`) and `initial_regs_ptr` (read by
+   `compute_pipeline`) shared one `gmem` bundle; two DATAFLOW processes
+   can't share one read port, same single-reader rule as an array, just
+   for a bus. **Fixed**: split into separate `gmem0`/`gmem1` bundles
+   (`gpgpu_top.cpp`).
+4. **`ERROR: [HLS 200-979/200-779]` — `WarpSlot` fields, still open.**
+   `top.cus_.slots_.{warp_id,resume_pc,state,fresh}` are written by both
+   `Loop_1_proc` (Vitis HLS's own name for `CuDispatchUnit::launch()`'s
+   slot-assignment loop, auto-promoted into its own DATAFLOW process) and
+   `schedulerLoop` (the rest of the scheduling logic - `nextReadySlot`/
+   `recordResult`/`releaseBarrier`, all logically the same process I
+   intended `schedulerLoop` to be as a whole). **Two remedies tried, both
+   ineffective**: `#pragma HLS INLINE off` on `launch()`'s caller
+   (`GpgpuTop::launchKernel()`) — the loop still got promoted regardless;
+   removing `#pragma HLS UNROLL` from `launch()`'s loop entirely (testing
+   the hypothesis that UNROLL itself was the promotion trigger, since
+   `loadProgram()`'s non-UNROLL'd loop stays merged into its caller while
+   `launch()`'s UNROLL'd one doesn't) — **identical error, byte-for-byte,
+   confirming UNROLL is not the cause.** This rules out a whole hypothesis
+   class cheaply rather than leaving it an open guess: the real cause is
+   structural — `schedulerLoop`'s own shape (`launchKernel()` call,
+   *then* a separate `while(!kernelComplete())` loop, sequentially) is
+   exactly the "two sequential loop-shaped stages" pattern Vitis HLS's
+   DATAFLOW canonicalizer treats as independently promotable pipeline
+   stages, regardless of what's inside them. **Not yet tried** (deliberately —
+   real risk of guessing wrong syntax rather than another grounded fix):
+   `#pragma HLS SHARED`/`STABLE` to explicitly declare the array
+   intentionally multi-process-accessed with externally-managed
+   synchronization (the dispatch_out/status_in handshake already
+   guarantees correct ordering — the checker just can't see that
+   statically) — a real Vitis HLS mechanism for exactly this situation,
+   but a separate tool warning (`[HLS 214-250]`, "Ignore array
+   partition/reshape applied to 'top.cus_' in struct... apply disaggregate
+   or aggregate pragma") indicates `top.cus_`'s doubly-nested class-typed
+   array shape (`GpgpuTop.cus_[i].slots_[slot].field`) likely needs
+   `AGGREGATE`/`DISAGGREGATE` pragma treatment before per-field pragmas
+   even target correctly at that depth — three interacting, not-yet-
+   confirmed pragma mechanisms stacked together, genuinely uncertain
+   without further real testing, not a quick follow-up.
+
+**State to resume from**: `compute_pipeline`/`memory_pipeline` (the
+pre-scheduler pair) already csynth cleanly on KV260, real, proven (T020).
+The `gpgpu_scheduler` merge (§15) is real progress, not a false start —
+3 of 4 found issues are genuinely fixed and confirmed by a clean re-run
+each time; only the `WarpSlot` sharing pattern remains. Next step:
+either the `SHARED`/`STABLE`/`AGGREGATE` pragma combination (needs real
+testing, not guessing), or restructure `launch()`'s slot-state handoff to
+go through a stream/handshake instead of a direct shared-array write
+(the same mechanism that already makes `regs_`/`dispatch_out`/`status_in`
+DATAFLOW-legal elsewhere in this design) — the more structurally
+consistent fix, at the cost of another real design pass.
+
+### 16.2-16.5 Five more real attempts at the `WarpSlot` conflict — all defeated, current honest status
+
+Continuing from §16.1 item 4. Each of these is a real `csynth_design` run
+against `gpgpu_scheduler` (`build/fpga_smoke/csynth_gpgpu_scheduler.tcl`),
+not a projection. Design collaboration for this stretch: options analysis
+and FSM design worked through with the user before each attempt (message-
+queue vs. flatten-to-FSM options weighed on real hardware-effect grounds -
+resource cost, latency, verification risk, not just "which is less code");
+the user chose flatten, and each subsequent step was proposed and agreed
+before implementing.
+
+1. **Minimal flatten**: replaced `schedulerLoop`'s nested
+   `while(!kernelComplete())` with an `if(!busy)/else` single-loop state
+   machine (`busy` doubling as the `IDLE`/`RUNNING` state - no new
+   variable needed), *without* touching `launchKernel()`/`launch()`
+   themselves - testing whether the "two sequential loop-shaped stages"
+   shape alone was the trigger. **Same error, byte-for-byte.**
+2. **Remove `#pragma HLS UNROLL`** from `launch()`'s loop (testing whether
+   `UNROLL` itself, not loop-shape, was the promotion trigger, since
+   `loadProgram()`'s non-`UNROLL`'d loop never conflicted).
+   **Identical error** - ruled out cleanly, reverted.
+3. **Extract `assignSlot()`** (loop-free single-slot primitive) and call
+   it 4× hand-unrolled directly from `schedulerLoop`, bypassing
+   `launch()`/`launchKernel()` entirely - no loop construct anywhere in
+   the reachable path. **Same 4 fields still conflicted**, now against
+   `Loop_1_proc` from *`launch()`'s own loop* - despite `schedulerLoop`
+   no longer calling it at all. This was the first hint the promotion
+   mechanism wasn't really about loops or call-shape.
+4. **Documentation research** (real AMD UG1399 "Canonical Forms" +
+   "Dataflow" pages, not guessing): confirmed (a) disaggregate/aggregate
+   pragmas are for interface bit-packing, not two-writer conflicts, no
+   pragma override exists for genuine multiple writers - the only
+   sanctioned fixes are "consolidate into one producer task" or "move the
+   variable outside the dataflow region"; (b) **every distinct function
+   call inside a DATAFLOW region becomes its own task by default** - not
+   specifically about loops, no exemption for small/simple helpers, and
+   hand-unrolling into repeated calls creates *more* task candidates, not
+   fewer (directly explains attempt 3's failure).
+5. **Removed the call boundary entirely**: added `slotAt(int)`, a trivial
+   one-line reference accessor matching `regsArray()`/`programArray()`'s
+   proven-safe shape (neither has ever been flagged in any attempt), and
+   wrote the 4-slot assignment as fully inline straight-line code in
+   `schedulerLoop` - zero function calls, only that one accessor.
+   **Same error again** - and this time the "conflicting write" location
+   Vitis HLS reported (`cu_dispatch_unit.h:84:9`) turned out, on
+   inspection, to just be a comment line, not real code; `cu_dispatch_unit.h:41`
+   has been "the offending loop's location" in every single attempt and
+   is, and always was, just `class CuDispatchUnit {`'s own declaration
+   line. **These line numbers are generic placeholders in Vitis HLS's
+   error report, not literal pointers to the actual offending code** -
+   worth recording plainly, since earlier entries in this log (16.1,
+   attempt 3) treated them as more precise than they are.
+6. **Guarded `launch()`/`assignSlot()`/`launchKernel()` out of the
+   synthesis build entirely** (`#ifndef RISCV_GPGPU_HLS_SYNTH_MERGED_TOP`,
+   new macro defined only in `csynth_gpgpu_scheduler.tcl`'s `-cflags` -
+   they're dead code from `gpgpu_scheduler`'s own call graph regardless,
+   kept only for `tests/hls/test_cu_dispatch_unit.cpp`'s direct unit
+   coverage) - testing the hypothesis that the DATAFLOW checker inspects
+   every method on a touched class instance, not just the reachable call
+   graph. Verified both build configurations (`-DRISCV_GPGPU_HLS_SYNTH_MERGED_TOP`
+   and without) compile clean, all csim tests still pass. **Same error,
+   confirmed not a build cache artifact** (re-ran against a completely
+   fresh `gpgpu_scheduler_synth` project directory, deleted first - not
+   just `open_project -reset`).
+
+**Current honest status**: five structurally distinct real attempts,
+defeated by what appear to be at least two different underlying
+mechanisms (function-call task promotion, confirmed via real
+documentation; and something that also affects purely inline, no-call
+straight-line code with a repeated shape - possibly loop re-rolling
+recognizing the 4 structurally similar slot-assignment blocks, not yet
+confirmed the way the function-call rule was). The line-number evidence
+used to diagnose earlier attempts (16.1's "`Loop_1_proc` is `launch()`'s
+loop") turned out to be an unreliable read of a generic placeholder, not
+a precise pointer - a real methodological correction, not just a new
+data point. `compute_pipeline`/`memory_pipeline` (the pre-scheduler pair)
+remain real, proven, csynth-clean on KV260 throughout all of this (T020).
+Every code change described above has been reverted or guarded except
+where explicitly noted as kept.
+
+**Real remaining options, not yet attempted**:
+- `#pragma HLS SHARED`/`STABLE` on the array itself - the one documented,
+  not-yet-tested mechanism for telling Vitis HLS "multiple processes touch
+  this deliberately, synchronization is handled externally" (the
+  `dispatch_out`/`status_in` handshake already guarantees correct
+  ordering - the checker can't see that statically). Real syntax/placement
+  risk at this nesting depth (`top.cus_[i].slots_[slot].field`, itself
+  already flagged as needing `aggregate`/`disaggregate` treatment,
+  `[HLS 214-250]`) - untested, not guessed.
+- Accept genuine two-process concurrency for this specific interaction and
+  design real synchronization for it (e.g., route slot-assignment through
+  an actual `hls::stream` handoff, closer to the user's original
+  message-queue instinct, but scoped narrowly to just this one write path
+  rather than the whole scheduler) - bigger design, more certain to
+  eventually work since streams are DATAFLOW's native, fully-supported
+  mechanism, but real design and re-verification cost.
+- Escalate: this may be worth a real Xilinx support/forum question with
+  a minimal reproducer, given the "Canonical Forms" documentation search
+  didn't fully explain the inline-straight-line-code case (only the
+  function-call case, which real testing confirmed; the inline case is
+  still an unconfirmed hypothesis).
+
+### 16.6 Redesign strategy: local-state-plus-free-functions, matching `compute_pipeline`'s already-proven shape
+
+**The pattern all 5 attempts missed**: every attempt kept `slots_` a member
+of `CuDispatchUnit`, reachable through `top` - a variable whose scope spans
+`gpgpu_scheduler`'s *entire* body and is touched from multiple textually
+separate places (the `IDLE` branch, the `RUNNING` branch). Every
+restructuring (flatten the loop, drop `UNROLL`, remove the function-call
+boundary, remove it entirely via a trivial accessor) kept that shape intact
+and kept failing regardless.
+
+`compute_pipeline` itself already disproves "it's about function calls":
+it calls `executeALU`, `executeVector`, `executeMemOp`, `executeBranch`,
+`executeJoin` - real functions, some with real `UNROLL`'d loops - against
+`RegFile regs`, and **none of them has ever been flagged, in any of the 10
+real csynth attempts across this whole investigation (T020 through §16.5)**.
+The actual distinguishing factor isn't call-vs-inline, loop-vs-not, or
+`UNROLL`-vs-not (all individually tested and disproven, §16.2-16.5). It's
+*what the state is*: `regs` is a plain array **parameter**, local to
+`compute_pipeline`'s own activation, never reachable from anywhere else in
+the program. `top.cus_[i].slots_` is a member of a persistent object
+visible across the whole enclosing function. This is the first hypothesis
+grounded in something directly observed working in this exact codebase,
+not a new guess about undocumented Vitis HLS internals.
+
+**Redesign, concretely**:
+
+1. **`CuDispatchUnit` shrinks** to `regs_`/`program_`/`loadProgram()`/
+   `regsArray()`/`programArray()` only - unchanged, since this exact shape
+   has never been flagged in any attempt. Loses `slots_` and every
+   slot-management method (`launch`, `assignSlot`, `nextReadySlot`,
+   `recordResult`, `releaseBarrier`, `allDone`, `stateOf`, `warpIdOf`,
+   `barrierIdOf`, `slotAt`) - all of it moves out.
+2. **New free-function module** for slot management: the same logic,
+   unchanged in behavior, rewritten to take `WarpSlot (&slots)[MAX_WARPS_PER_CU]`
+   by reference instead of being methods on a class instance - directly
+   mirroring `compute_pipeline.cpp`'s existing `executeALU(RegFile regs, ...)`
+   pattern (same file structure: free functions operating on a
+   caller-owned, by-reference array).
+3. **`BarrierArbiter` gets the same treatment, proactively** - it is
+   structurally identical to the `slots_` problem (a class instance,
+   `top.arbiter()`, touched from both the launch branch and the per-round
+   branch). Fixing `slots_` alone and stopping would very likely just
+   surface the identical class of error against `BarrierArbiter`'s
+   internal state on the next real csynth attempt - designing for both
+   now rather than discovering it the hard way a sixth time. Exact
+   internal fields to be confirmed by reading `barrier_arbiter.h` before
+   implementing (not yet re-read in this pass).
+4. **New `schedulerCore` process** (replaces `schedulerLoop`+`schedulerStep`):
+   one free-running `while(true)`, called once from `gpgpu_scheduler`'s top
+   level exactly like `compute_pipeline`/`mem_arbiter` are today. Owns
+   `WarpSlot slots[MAX_WARPS_PER_CU]` and the barrier-tracking state as
+   genuine local variables - nothing else in the program can reach them,
+   by construction, matching `compute_pipeline`'s own `regs`/`RegFile`
+   shape exactly. Talks to `compute_pipeline` only through the existing
+   `dispatch_out`/`status_in` streams (completely unchanged).
+
+**Unaffected**: `compute_pipeline.{h,cpp}`, `mem_arbiter.h`,
+`memory_pipeline`, the `regs_`/`program_`/`loadProgram()` mechanism, the
+`initial_regs_ptr` seeding fix (SS16), all stream wiring, every KV260/Vivado
+decision (SS10.11, SS14).
+
+**Test impact**: `tests/hls/test_cu_dispatch_unit.cpp` and
+`test_barrier_arbiter.cpp` need real rewrites - same assertions, calling
+free functions against a local `WarpSlot[4]` array instead of methods on a
+class. `test_gpgpu_top.cpp`'s lower-level tests need matching signature
+updates. Mechanical - not a redesign of what's being verified, only how
+it's called.
+
+**Verification plan**: unchanged discipline from every attempt so far -
+syntax check, full csim regression with the rewritten tests, then a real
+`csynth_design` run against the restructured `gpgpu_scheduler`.
+
+**Confidence**: meaningfully higher than attempts 1-5 - grounded in an
+already-observed-working pattern in this exact codebase (`compute_pipeline`'s
+own helper-function/local-state structure), not a new guess about
+undocumented tool behavior. Not a guarantee - if `BarrierArbiter`'s state
+shape doesn't fit cleanly into free-function-plus-local-array, that's a
+real risk to surface during implementation, not assumed away here.
+
+Design collaboration note: this strategy was proposed after the user
+observed that the already-working stream-based blocks (`compute_pipeline`,
+`mem_arbiter`) suggested the redesign was worth pursuing to keep T025
+moving forward, and asked for the strategy to be written up before
+implementation began - consistent with the decision-checkpoint,
+stay-involved working style established earlier this session.
+
+### 16.7 SS16.6 redesign implemented and re-verified — the `WarpSlot` DATAFLOW conflict is resolved; a different, tool-internal blocker found next
+
+**Implementation**: `cu_dispatch_unit.h` rewritten to free functions
+(`assignSlot`/`launchSlots`/`nextReadySlot`/`buildDispatch`/`recordResult`/
+`releaseBarrierSlots`/`allSlotsDone`) operating on a caller-owned
+`WarpSlot (&)[MAX_WARPS_PER_CU]`; `CuDispatchUnit` now holds only
+`regs_`/`program_`/`loadProgram()` (unchanged, never flagged).
+`barrier_arbiter.h` rewritten the same way (`BarrierState` struct + free
+functions) - proactively, since it's structurally identical to the
+`slots_` problem, even though its state is plain scalars (never actually
+observed to fail - every real error across every attempt named a specific
+array element). `gpgpu_top.h`/`.cpp`: `GpgpuTop`/`schedulerStep`/
+`schedulerLoop` replaced by `schedulerCore()` - one free-running process,
+matching `compute_pipeline`/`mem_arbiter`'s shape exactly, owning
+`WarpSlot slots[MAX_WARPS_PER_CU]` and `BarrierState barrier` as genuine
+local variables declared inside its own body. `tests/hls/
+test_cu_dispatch_unit.cpp`/`test_barrier_arbiter.cpp` rewritten against
+the free functions + a local array; `test_gpgpu_top.cpp` rewritten to run
+`schedulerCore` on its own thread (a real improvement - these tests now
+exercise the exact function used in the real merged IP, via real
+concurrency, instead of a test-harness stand-in that manually stepped it
+round by round).
+
+**Two real bugs found and fixed while re-verifying (both real, both
+fixed, neither a false lead)**:
+1. **A deterministic SIGSEGV in the full `test_gpgpu_top` binary**
+   (confirmed 10/10 runs, not a rare race) - `schedulerCore`'s `start`
+   parameter was `bool` (by value); once `done` fires the loop
+   immediately re-enters `IDLE`, sees the same fixed `start==true`, and
+   relaunches forever - a permanently hot-spinning detached thread still
+   actively touching its captured static objects at the exact moment the
+   process's static destructors run at exit. Fixed by making
+   `schedulerCore`'s `start` a reference (`bool&`) - lets a caller clear
+   it once `busy` is observed, matching the real host-clears-start-once-
+   busy protocol (SS2.5.6) more faithfully than a fixed value ever could.
+   `gpgpu_scheduler`'s own `start` stays a plain `bool` (its real,
+   s_axilite-mapped hardware port shape - `schedulerCore` is never itself
+   `set_top`, so this is purely an internal-helper signature choice, not
+   a change to real hardware behavior).
+2. **`OverCapacityLaunchIsRejectedNotSilentlyHung`** hot-spins with no
+   blocking condition at all once faulted (no compute_pipeline to
+   eventually park it on a stream read) - the highest-risk case of the
+   above. Fixed by testing `barrierLaunch()`/`barrierLaunchFault()`
+   directly and synchronously instead - the exact mechanism
+   `schedulerCore` relies on internally, already independently verified
+   by `test_barrier_arbiter.cpp`, without the crash risk.
+
+All 46 `tests/hls/*` csim tests pass, confirmed clean across 10 repeated
+full-binary runs (not just once).
+
+**Real `csynth_design` against the redesigned `gpgpu_scheduler`**: the
+`WarpSlot` two-writer conflict that defeated 10 straight attempts (SS16.1-
+16.5) **is completely gone** - not one `[HLS 200-979]`/`[HLS 200-779]`
+error in any of the 3 follow-up attempts below. The redesign strategy
+(SS16.6) worked. Three more real, much smaller issues surfaced and were
+fixed in sequence:
+
+1. `[HLS 214-113]` x3: "Either use an argument of the function or declare
+   the variable inside the dataflow loop body" - `cu.programArray()`/
+   `cu.regsArray()` passed directly as `compute_pipeline(...)` call
+   arguments (method-call expressions, not plain variables). Fixed by
+   declaring real local reference variables (`program`/`regs`) first.
+2. Same rule, one more instance: `cu_id_t(0)` (a constructor-call
+   expression) passed directly as an argument. Fixed with a local
+   `cu_id_t cu_id = 0;`.
+3. **A deterministic SIGSEGV inside Vitis HLS's own bundled
+   `clang-3.9-csynth` (LLVM 7.0.0) binary** - confirmed via `dmesg`: the
+   exact same crash address (`ip 00000000027209c0`) across all 3 runs
+   that reached this point, inside `llvm::DenseMapBase::LookupBucketFor`,
+   called from `SeqAccessesRegionNode::getZoneNode` /
+   `LoopAnalyzer::collectAccesses` - LLVM's internal "Analyze sequential
+   accesses" pass (`SeqAccessesInfoPass`), specifically while processing
+   `riscv_gpgpu_hls::compute_pipeline` (confirmed by the mangled symbol
+   name in the crash backtrace) as part of the `-reflow` optimization
+   step. **This is not a DATAFLOW legality violation and not something
+   the 214-113 fix pattern applies to** - it's a crash inside the
+   compiler's own internals, not a diagnostic about our source. Notably,
+   `compute_pipeline` has synthesized standalone cleanly multiple times
+   in this project (T020) - this crash is specific to analyzing it in
+   the context of the larger, `-reflow`-optimized, DATAFLOW-merged
+   `gpgpu_scheduler` build (10,357 instructions after Unroll/Inline,
+   confirmed in the log - a real size/complexity jump from the standalone
+   build).
+
+**State**: the actual architectural problem this whole SS16 investigation
+was chasing is solved and confirmed solved by real re-synthesis. What
+blocks a clean `csynth_design` now is a different kind of problem - an
+apparent Vitis HLS 2023.1 toolchain bug/limitation, not a design or code
+issue fixable by further C++ restructuring in the way every fix so far
+has been. Real next-step options: a targeted pragma/directive change to
+avoid whatever triggers `SeqAccessesInfoPass` on this function (untested,
+would need real investigation into what enables it); reducing
+`compute_pipeline`'s unrolled complexity (a real design tradeoff, not
+free); checking for a newer Vitis HLS point release with this specific
+LLVM crash fixed (outside this environment's control); or filing a real
+bug report to AMD/Xilinx with a minimal reproducer.
 
 ---

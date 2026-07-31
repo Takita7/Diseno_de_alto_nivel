@@ -41,6 +41,17 @@ void compute_pipeline(
                                                    // ap_memory - aliases the owning
                                                    // CuDispatchUnit::regsArray()
 
+    reg_t* initial_regs_ptr,                      // m_axi - docs/hls/interfaces.md
+                                                   // SS16: seeds regs[d.slot_id] from
+                                                   // this DRAM buffer on a slot's
+                                                   // first (fresh_launch) dispatch
+                                                   // only. Sole writer of regs[][] -
+                                                   // moved here from the scheduler
+                                                   // (which used to load it at
+                                                   // launch) because real csynth
+                                                   // (SS15) rejects two DATAFLOW
+                                                   // processes writing one array.
+
     hls::stream<mem_req_t>&  mem_req_out,         // axis, via MemArbiter now
     hls::stream<mem_resp_t>& mem_resp_in,         // axis, via MemArbiter now
 

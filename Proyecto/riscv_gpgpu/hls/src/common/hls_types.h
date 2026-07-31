@@ -172,6 +172,15 @@ struct WarpSlot {
     barrier_id_t  barrier_id = 0;   // meaningful only if state == STALLED
     enum class State : uint8_t { EMPTY, READY, STALLED, DONE };
     State         state      = State::EMPTY;
+    // Set true by launch() for a freshly-assigned slot, cleared by the
+    // first buildDispatch() that packages it (docs/hls/interfaces.md
+    // SS16) - lets compute_pipeline tell "first dispatch of a fresh warp,
+    // seed regs_ from initial_regs_ptr" apart from "barrier resume, regs_
+    // already holds live state, don't touch it". NOT the same thing
+    // resume_pc==0 would suggest: a warp can legitimately stall with
+    // resume_pc==0 in principle, so that field alone can't be trusted as
+    // a fresh/resume signal.
+    bool          fresh      = false;
 };
 
 // CuDispatchUnit -> compute_pipeline (docs/hls/interfaces.md SS2.5.3).
@@ -182,6 +191,14 @@ struct warp_dispatch_t {
     warp_id_t     warp_id           = 0;
     thread_mask_t active_mask_init  = 0;
     ap_uint<16>   resume_pc         = 0;   // 0 for a fresh warp, else past the BARRIER
+    // docs/hls/interfaces.md SS16: true exactly once per warp, on its
+    // first dispatch after launch - tells compute_pipeline to seed
+    // regs[slot_id] from initial_regs_ptr (indexed by warp_id) before
+    // executing. Needed so regs_ has exactly one writer (compute_pipeline
+    // itself) for real Vitis HLS DATAFLOW legality (SS15) - the scheduler
+    // used to load initial regs at launch time, which real csynth
+    // rejected as a second writer.
+    bool          fresh_launch      = false;
 };
 
 }  // namespace riscv_gpgpu_hls
