@@ -2720,4 +2720,128 @@ free); checking for a newer Vitis HLS point release with this specific
 LLVM crash fixed (outside this environment's control); or filing a real
 bug report to AMD/Xilinx with a minimal reproducer.
 
+### 16.8 Crash reproduces in `compute_pipeline` standalone too (corrects §16.7); toolchain-identity and RAM-growth findings; one test result genuinely inconclusive, not "found stalled"
+
+**Real correction to §16.7**: re-verification found the clang reflow
+segfault reproduces in `compute_pipeline` **standalone** (`set_top
+compute_pipeline`, no `gpgpu_scheduler`, no DATAFLOW region at all) -
+identical crash signature, same `a.g.ld.0.bc.clang.reflow.err.log`
+pattern. §16.7's attribution ("specific to analyzing `compute_pipeline`
+in the context of the larger... build") was wrong - it was reasoned from
+T020's older, pre-SS16 standalone result, never re-checked against the
+current source (with the SS16 initial-regs seeding loop added). This is
+not DATAFLOW-region-size-specific; something about `compute_pipeline`
+itself, in its current form, triggers it regardless of context.
+
+**Toolchain identity, checked directly, not assumed**: exactly one
+`clang-3.9-csynth` binary exists anywhere under `/tools/Xilinx` (inside
+`Vitis_HLS/2023.1`). `Vitis` (the unified installer) has no independent
+copy - its own binaries (`vitis`, `vitis-run`, `vitisng`) reference
+`XILINX_HLS` directly, confirming they depend on the same Vitis_HLS
+install for C-synthesis rather than bundling a separate compiler.
+**Switching from a `vitis_hls`-driven flow to a `v++`-driven flow would
+not avoid this crash** - both paths call the identical binary running
+the identical LLVM pass.
+
+**Isolation attempts on the standalone crash**:
+1. Dropped `#pragma HLS PIPELINE II=1` from the seed loop (testing
+   whether that specific pragma triggered the crash). **Identical
+   crash** - ruled out.
+2. Removed the entire seed-loop block (`#if 0`) - the most aggressive
+   isolation short of reverting the whole SS16 mechanism. This run
+   behaved completely differently from every prior attempt: instead of
+   crashing within 15-20 seconds, it ran for several real minutes of
+   genuine, active CPU consumption (confirmed via live process
+   sampling - CPU time and RSS both advancing between samples seconds
+   apart, not stalled), growing past 4GB RSS, without reaching either
+   completion or a crash.
+
+**A real methodological error made and corrected during this
+investigation, recorded here plainly rather than silently fixed**: the
+host machine was suspended overnight partway through that run. On
+resume, `ps`'s elaped-time counter (`ETIME`, wall-clock since process
+start) had advanced by ~7.5 hours, while CPU time had advanced by only
+~24 seconds and RSS by ~300MB - because the suspended process executes
+nothing at all during suspend, but wall-clock elapsed time keeps
+counting regardless. This was initially reported (in conversation, not
+committed here) as a genuine finding - "removing the seed loop changed
+the failure mode from a fast crash to an extremely slow, resource-
+creeping near-stall." **That characterization was wrong** - it was an
+artifact of the suspend, not real tool behavior, and is retracted here
+rather than left standing. The process was killed manually (`kill -9`)
+after the suspend made the run's remaining data worthless for timing
+analysis, without ever reaching completion or a crash.
+
+**Actual, valid state of this test**: genuinely inconclusive. What's
+real: with the seed loop removed, `compute_pipeline` ran actively for
+several real minutes (far longer than every prior attempt, each of
+which crashed within ~15-20s) before the suspend interrupted
+observation. What's unknown: whether it would have eventually crashed,
+completed, or kept growing indefinitely if the machine had stayed awake
+throughout. **Needs a clean re-run, uninterrupted, before drawing any
+conclusion from it** - not yet attempted again as of this entry.
+
+**Recommendation for the next session**: re-run the standalone,
+seed-loop-removed `compute_pipeline` csynth attempt (`build/fpga_smoke/
+csynth_compute_pipeline_only.tcl` with the seed block `#if 0`'d out
+again) on a machine that will stay awake and unsuspended for the
+duration, with periodic live-process checks (CPU time + RSS deltas
+across short intervals, not just single snapshots) to get a real,
+uncontaminated answer - either "it eventually crashes too, ruling out
+the seed loop as sole cause" or "it eventually completes, meaning the
+seed loop's specific shape was the real trigger and a smaller,
+differently-structured seeding mechanism is worth designing." Separately,
+trying Vitis HLS 2023.2 (same-generation point release, lower
+compatibility risk than a bigger version jump) remains a live, real
+option if a reinstall happens before that re-run.
+
+---
+
+### 16.9 Clean re-run completed - inconclusive by timeout, not by result; investigation on this axis closed; pivoting to a Vitis HLS reinstall
+
+The recommended clean re-run (§16.8) was performed after a full host
+restart, confirmed unsuspended throughout via repeated live-process
+sampling (CPU time and RSS both advancing steadily between samples
+seconds apart - e.g. 5:46 -> 5:47 CPU time, 3.717GB -> 3.724GB RSS
+across a 6-second window). No suspend artifact this time; the
+observation is real.
+
+The run was manually killed after roughly 50 minutes of continuous,
+genuine execution, RSS past 4GB and still climbing, having reached
+neither completion nor a crash.
+
+**Why kill it rather than keep waiting**: this project has two real,
+repeated timing references for `compute_pipeline` standalone csynth on
+this exact tool and machine - every successful synthesis (T020 onward)
+completes in **~20-30 seconds**; every crashing attempt with the seed
+loop present fails in **~13-16 seconds**. The clean re-run ran
+**~100-150x longer than either reference** with no sign of converging.
+That ratio is itself the finding - there is no project precedent
+suggesting this was "about to finish," and continuing to wait was
+assessed as unlikely to produce a clean answer without an unbounded
+time cost.
+
+**Actual, final state of this specific test**: still genuinely
+inconclusive on the narrow question "does the seed-loop-removed version
+eventually crash or complete" - it never reached either outcome before
+being killed. But it is conclusive on the broader question of whether
+this line of investigation (iterative source-shape isolation attempts
+within Vitis HLS 2023.1) remains productive: **no**. The cheap, fast
+experiments (pragma removal, full seed-loop removal) are exhausted, and
+the one remaining variant in that family takes too long per attempt to
+iterate on.
+
+**Decision**: this isolation-via-code-removal path is closed for now.
+`compute_pipeline.cpp` has been reverted to its real, working state
+(seed loop restored, `#if 0` isolation wrapper removed) - the source is
+no longer in a debug/temp condition. The next real lever is a toolchain
+change: installing the latest Vitis HLS version (superseding the
+previously-considered 2023.2 point-release option), per the version
+recommended by the course instructor. This is a different variable
+than anything tested in §16.1-16.9, all of which held the 2023.1
+toolchain fixed. Once installed, the standalone `compute_pipeline`
+csynth (`build/fpga_smoke/csynth_compute_pipeline_only.tcl`, real
+source, no isolation wrapper) should be re-run first as the baseline
+check before returning to `gpgpu_scheduler`.
+
 ---
