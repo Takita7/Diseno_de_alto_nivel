@@ -38,8 +38,17 @@ namespace riscv_gpgpu_hls {
 // need a real ceiling implementation, not needed here).
 constexpr int clog2(int n) { return (n <= 1) ? 0 : 1 + clog2(n / 2); }
 
+// Which primitive backs data_ (the line-data array - by far the largest of
+// the three per-way arrays). tag_/valid_ always stay BRAM regardless: URAM
+// is a poor fit for 1-bit/TAG_BITS-wide storage (its native shape is deep
+// and comparatively narrow-per-bit-efficient only at wider widths), and
+// they're small enough that BRAM cost for them was never the problem (see
+// docs/hls/interfaces.md SS16.13's BRAM-overflow measurements - L2's data_
+// alone was 128 of 361 total BRAM entries at PIPELINE II=1).
+enum class DataStorage { BRAM, URAM };
+
 template<int WAYS, int SETS_PER_WAY, int WORDS_PER_LINE_T = WORDS_PER_LINE,
-         int ADDR_BITS_T = ADDR_BITS>
+         int ADDR_BITS_T = ADDR_BITS, DataStorage DATA_IMPL = DataStorage::BRAM>
 class SetAssocCache {
 public:
     static const int LINE_OFFSET_BITS = clog2(WORDS_PER_LINE_T * 4); // byte offset within line
@@ -71,7 +80,22 @@ public:
 #pragma HLS ARRAY_PARTITION variable=valid_ dim=1 complete
 #pragma HLS BIND_STORAGE    variable=valid_ type=RAM_2P impl=BRAM
 #pragma HLS ARRAY_PARTITION variable=data_ dim=1 complete
-#pragma HLS BIND_STORAGE    variable=data_ type=RAM_2P impl=BRAM
+        // DATA_IMPL is a compile-time template parameter, so exactly one
+        // branch below actually exists per instantiation (L1Cache stays
+        // BRAM, L2Cache moves to URAM - see the typedefs below) - this
+        // isn't a runtime choice, `if constexpr` discards the other
+        // branch's pragma entirely for each instantiation.
+        if constexpr (DATA_IMPL == DataStorage::URAM) {
+            // latency=2 (docs/hls/interfaces.md SS16.14, UG949 "Performance
+            // Considerations When Implementing RAM"): an extra output
+            // register stage for the URAM read - without it, lookup()'s
+            // combinational tag-compare-then-read doesn't account for the
+            // real cascade delay of L2's 4-deep URAM chain per way,
+            // producing the -3.37ns violation this fixes.
+#pragma HLS BIND_STORAGE variable=data_ type=RAM_2P impl=URAM latency=2
+        } else {
+#pragma HLS BIND_STORAGE variable=data_ type=RAM_2P impl=BRAM
+        }
     }
 
     void reset() {
@@ -195,9 +219,14 @@ private:
     way_t  next_victim_[SETS_PER_WAY];   // round-robin, per set (SS3.2)
 };
 
-// Convenience aliases matching hls_config.h's L1/L2 sizing.
-typedef SetAssocCache<L1_WAYS, L1_SETS_PER_WAY> L1Cache;
-typedef SetAssocCache<L2_WAYS, L2_SETS_PER_WAY> L2Cache;
+// Convenience aliases matching hls_config.h's L1/L2 sizing. L2 moves its
+// (dominant) data_ array to URAM (docs/hls/interfaces.md SS16.13) - L1 stays
+// BRAM: it's small enough that BRAM was never the problem, and per-CU L1 is
+// latency-critical in a way the shared, larger L2 is less sensitive to.
+typedef SetAssocCache<L1_WAYS, L1_SETS_PER_WAY, WORDS_PER_LINE, ADDR_BITS,
+                       DataStorage::BRAM> L1Cache;
+typedef SetAssocCache<L2_WAYS, L2_SETS_PER_WAY, WORDS_PER_LINE, ADDR_BITS,
+                       DataStorage::URAM> L2Cache;
 
 }  // namespace riscv_gpgpu_hls
 

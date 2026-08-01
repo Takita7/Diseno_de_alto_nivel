@@ -16,6 +16,19 @@ set_part {xck26-sfvc784-2LV-c}
 
 # 200 MHz initial target — see hls/constraints/README.md for rationale
 # (uniform cross-board target during early design-space exploration).
+#
+# Tried relaxing this to 6.0ns (docs/hls/interfaces.md SS16.15, Phase 2)
+# to close compute_pipeline's -0.32ns executeALU violation - real,
+# measured result: only partial improvement for compute_pipeline
+# (-0.32ns -> -0.21ns, not fully closed) AND a real regression for
+# memory_pipeline (Fmax 142.43MHz -> 129.02MHz - the scheduler used the
+# extra slack to pack deeper combinational logic per stage, a known
+# self-defeating HLS effect, not a free win). Reverted: this file is
+# shared across every kernel, so a fix that only partially helps one
+# kernel while measurably hurting another isn't a net win at the
+# project-wide-constraint level. Both violations remain open, deferred
+# for real source-level investigation (SS16.15) rather than papered over
+# by a clock change that doesn't actually solve either one.
 create_clock -period 5.0 -name clk
 
 # Default Vitis HLS clock uncertainty (12.5%) is left at tool default;

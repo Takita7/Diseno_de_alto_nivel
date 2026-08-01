@@ -67,7 +67,17 @@ void memory_pipeline(
 
 MEMORY_PIPELINE_LOOP:
     while (true) {
-#pragma HLS PIPELINE II=1
+        // II=1 (real single-cycle throughput) forces per-word BRAM/URAM
+        // fragmentation across the full hit/miss/fill control flow -
+        // 105 BRAM (73%) + 128 URAM (200%, hard overflow, won't place &
+        // route) on KV260. II=4 lands on the same resource floor as no
+        // pipelining constraint at all (48 BRAM/33%, 16 URAM/25%) - the
+        // achieved II is actually identical either way (~76 cycles,
+        // memory-dependency-bound, not resource-bound) - but costs one
+        // fewer BRAM than leaving PIPELINE unconstrained entirely (see
+        // docs/hls/interfaces.md SS16.13's II sweep: II=1/2 both land on
+        // the fragmented 105/128 point, II=4/8/off all land on 48-49/16).
+#pragma HLS PIPELINE II=4
         mem_req_t req = req_in.read();
         resp_out.write(mem.handleRequest(req, global_mem));
     }

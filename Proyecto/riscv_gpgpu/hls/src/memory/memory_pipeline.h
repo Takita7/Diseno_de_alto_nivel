@@ -130,6 +130,21 @@ private:
     static addr_t alignAddress(addr_t addr) { return addr & ~addr_t(0x3); }
     static bool isSharedMemoryAddress(addr_t addr) { return addr < addr_t(SHARED_MEM_SIZE_BYTES); }
 
+    // docs/hls/interfaces.md SS16.18 (Option 2): the two fillLine() calls in
+    // loadWord()'s miss path have no data dependency on each other (both
+    // just read `line`, write to different cache instances) but were being
+    // scheduled back-to-back in the same combinational window - a confirmed
+    // contributor to the -3.37ns violation. Extracted into its own small,
+    // branch-free function so #pragma HLS DATAFLOW has a legal target
+    // (loadWord() itself has early-return branches DATAFLOW doesn't
+    // tolerate well) - gives the tool real freedom to schedule/stage these
+    // independently instead of forcing loadWord()'s default scheduling.
+    void fillBothCaches(L1Cache& l1, addr_t line_base, const L2Cache::word_t line[WORDS_PER_LINE]) {
+#pragma HLS DATAFLOW
+        l2_cache_.fillLine(line_base, line);
+        l1.fillLine(line_base, line);
+    }
+
     // Golden reference: MemoryHierarchy::loadWord()'s L1 -> L2 -> global
     // chain (memory_hierarchy.cpp:77-110), generalized from single-word fills
     // to whole-line fills (see file header's line-granularity note).
@@ -165,8 +180,7 @@ private:
 #pragma HLS PIPELINE II=1
             line[i] = global_mem[base_word_idx + i];
         }
-        l2_cache_.fillLine(line_base, line);
-        l1.fillLine(line_base, line);
+        fillBothCaches(l1, line_base, line);
 
         int widx = static_cast<int>(L1Cache::lineWordIndex(aligned));
         return line[widx];

@@ -2845,3 +2845,814 @@ source, no isolation wrapper) should be re-run first as the baseline
 check before returning to `gpgpu_scheduler`.
 
 ---
+
+### 16.10 Vitis HLS 2026.1 - the crash reproduces (different pass, different tool version); seed-loop-removed isolation now completes cleanly, confirming the seed loop as the real trigger
+
+The toolchain was reinstalled at 2026.1 (`/tools/Xilinx/2026.1`, unified
+installer - the professor-recommended version, not the previously-
+considered 2023.2 point release). Two real environment findings while
+bringing it up, neither related to the crash itself:
+
+1. **The standalone `vitis_hls` binary no longer exists** in the 2026.1
+   unified installer - C-synthesis is invoked through the unified CLI
+   instead: `vitis-run --mode hls --tcl <script.tcl>` (`hls` is
+   `--mode`'s default). `scripts/setup-env.sh` updated to detect either
+   binary (`vitis_hls` for older/standalone installs, `vitis-run` for
+   2026.1+) and to find `settings64.sh` under a version-numbered
+   install root (`/tools/Xilinx/2026.1/Vitis/settings64.sh`), not just
+   the old flat `/tools/Xilinx/Vitis/settings64.sh` layout.
+2. **`set_top compute_pipeline` (unqualified) silently fails** on
+   2026.1 - `WARNING: [HLS 200-1986] Could not apply TOP directive` at
+   `set_top` time, then a hard `ERROR: [HLS 214-157] Top function not
+   found: there is no function named 'compute_pipeline'` at
+   `csynth_design` time. `compute_pipeline` lives in
+   `namespace riscv_gpgpu_hls`; 2023.1 resolved the unqualified name
+   fine, 2026.1 requires the fully-qualified
+   `set_top riscv_gpgpu_hls::compute_pipeline`. Real behavior
+   difference between versions, not an error in the source - every
+   `set_top` call in this repo's `.tcl` scripts will need the qualified
+   name once T025's build scripts target 2026.1.
+3. Vivado licensing: `create_platform` (called internally from
+   `set_part`) now requires a working Vivado license even for
+   HLS-only csynth - it didn't under 2023.1's standalone flow. Resolved
+   once a valid `Xilinx.lic` (covering `Vitis_HLS`, node-locked to this
+   host) was installed and `XILINXD_LICENSE_FILE` pointed at it.
+
+**With both of those resolved, the real crash test**: standalone
+`compute_pipeline` csynth (real source, seed loop present) on 2026.1
+still segfaults - but in a different pass than 2023.1:
+
+```
+INFO: [HLS 200-2061] Successfully converted nested loops
+      'SEED_INITIAL_REGS_THREADS' and 'SEED_INITIAL_REGS_REGS' ...
+      into perfectly nested loops.
+Running pass 'Nested Loop Flatten Pass' on function
+      '@riscv_gpgpu_hls_compute_pipeline'
+Abnormal program termination (11)
+```
+Backtrace: `FlattenLoopNestChecker::cfgAroundInnerLoop()` ->
+`FlattenLoopNestChecker::checkLoopNest()` ->
+`pass::FlattenLoopNest::loopProcess()` (all in
+`libxv_hls_hwsyn.so`) - a completely different code path than 2023.1's
+`SeqAccessesInfoPass` (`clang-3.9-csynth`, LLVM 7.0.0-based). 2026.1
+uses `clang-16` as its C-synthesis frontend per its own log output -
+confirmed a genuinely different compiler, not just a repackaged one.
+
+**Isolation re-run, seed loop removed** (same `#if 0` wrapper as
+§16.8/16.9, now cheap to test since 2026.1 fails/succeeds in under a
+minute instead of running unbounded): **completed cleanly.**
+`CSYNTH_QUALTEST: DONE`, VHDL and Verilog RTL both generated, "All loop
+constraints were satisfied," estimated Fmax 251.93 MHz, ~49s total
+elapsed - no crash, no timeout, no ambiguity.
+
+**Conclusion - confirmed, not just suspected**: the `SEED_INITIAL_REGS_
+THREADS`/`SEED_INITIAL_REGS_REGS` nested loop (seeding `regs[slot][t][r]`
+from `initial_regs_ptr` on `fresh_launch`, §16) is the real trigger,
+independent of tool version or compiler backend. Two unrelated
+LLVM-based compilers (LLVM 7.0.0/clang-3.9-csynth on 2023.1, clang-16
+on 2026.1) both choke on the same loop nest, in two unrelated internal
+passes (sequential-access dependency analysis vs. loop-nest
+flattening). That convergence across independently-built toolchains is
+strong evidence this is a real characteristic of the loop's shape
+(likely the `[d.slot_id][t][r]` 3D indexing into a fully-partitioned
+`regs` array combined with the `initial_regs_ptr[base + t*N + r]`
+flattened source-side indexing) rather than a bug specific to either
+tool release.
+
+**Source reverted**: `compute_pipeline.cpp`'s `#if 0` isolation wrapper
+has been removed again; the seed loop is back in its real, working
+state. This was a read-only diagnostic, not a fix.
+
+**Next step, not yet started**: design a differently-shaped initial-
+regs seeding mechanism that avoids this specific loop-nest shape -
+per §16.8's original recommendation, now confirmed necessary rather
+than hypothetical. Candidates worth weighing before picking one
+(deliberately not decided here - this needs a real design discussion,
+same as §16.6): flatten the double loop into a single loop over
+`MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD` with a single derived
+index; move the seeding out of `compute_pipeline` entirely into a
+separate small function/process seeded once outside the per-dispatch
+loop; or reduce/restructure the array partitioning on `regs` so the
+loop nest has less for the flattening/access-analysis passes to chew
+on.
+
+---
+
+### 16.11 Fix implemented and confirmed: single flattened loop replaces the t/r nested loop - real csim + real csynth both pass
+
+Picked the first candidate from §16.10's list: collapse the two nested
+loops into one loop over the flat index. Since
+`base + t*NUM_REGS_PER_THREAD + r` was already exactly `base + i` for
+`i = t*NUM_REGS_PER_THREAD + r`, the DRAM-side index needed no change
+at all - only the on-chip write side needed `t`/`r` recovered from `i`
+via `i / NUM_REGS_PER_THREAD` / `i % NUM_REGS_PER_THREAD`:
+
+```cpp
+if (d.fresh_launch) {
+    uint64_t base = uint64_t(d.warp_id) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
+SEED_INITIAL_REGS:
+    for (int i = 0; i < MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD; ++i) {
+        regs[d.slot_id][i / NUM_REGS_PER_THREAD][i % NUM_REGS_PER_THREAD] =
+            initial_regs_ptr[base + i];
+    }
+}
+```
+
+**Correctness, verified, not assumed**: all 20 HLS csim tests pass
+(`test_compute_pipeline` 8/8 including `BarrierStallThenResume`, which
+specifically exercises `fresh_launch` semantics across a barrier;
+`test_pipeline_integration` 3/3; `test_hls_data_structures` 9/9).
+
+**Synthesis, verified against the real source** (not a `#if 0`
+diagnostic strip-down this time): standalone `compute_pipeline` csynth
+on Vitis HLS 2026.1 completed cleanly - `CSYNTH_QUALTEST: DONE`, VHDL
+and Verilog RTL both generated, "All loop constraints were satisfied,"
+estimated Fmax 251.93 MHz, ~46s total elapsed. No crash, in either the
+`SeqAccessesInfoPass`-shaped way (2023.1) or the `FlattenLoopNest`-
+shaped way (2026.1, §16.10).
+
+**Two more environment-only bugs found and fixed while getting the
+csim tests running** (neither is an HLS/RTL issue, both were exposed
+incidentally by testing against the 2026.1 reinstall):
+
+1. `tests/hls/CMakeLists.txt`'s Vitis HLS header auto-detection only
+   globbed the old standalone layout
+   (`/tools/Xilinx/Vitis_HLS/*/include`) - added the unified-installer
+   layout (`/tools/Xilinx/*/Vitis/include`) alongside it, same fix
+   shape as `setup-env.sh` in §16.10.
+2. `setup-env.sh`'s SystemC detection unconditionally overwrote an
+   already-correct, profile-exported `SYSTEMC_HOME` with an empty
+   string whenever `pkg-config` didn't know about the install (true
+   here - this host's SystemC lives at `/usr/local/systemc`, unregistered
+   with pkg-config) - then its own fallback directory scan didn't check
+   that exact path shape (`<prefix>/systemc/include/systemc.h`) either,
+   so `SYSTEMC_HOME` ended up empty after sourcing the script even
+   though the shell already had it set correctly beforehand. Fixed to
+   respect an existing `SYSTEMC_HOME` first, and widened the fallback
+   scan to include `/usr/local/systemc`.
+
+**Where this leaves T025**: the architectural blocker (SS16.6,
+committed) and the compiler-crash blocker (SS16.8-16.11, fixed here)
+are both resolved. `compute_pipeline` synthesizes cleanly standalone.
+Not yet done: re-verify `memory_pipeline` standalone and the merged
+`gpgpu_scheduler` DATAFLOW region both still synthesize cleanly on
+2026.1 (last verified on 2023.1, pre-reinstall), then move on to
+T025's actual remaining scope - RTL export/packaging and FPGA build
+scripts, which haven't been started yet.
+
+---
+
+### 16.12 Full-system re-verification on 2026.1: compute_pipeline, memory_pipeline, and the merged gpgpu_scheduler all synthesize cleanly
+
+Closing out §16.11's remaining item. Two more `set_top`-qualification
+fixes needed first (same 2026.1 behavior as §16.10, applied to real
+tracked/scratch scripts this time, not just the throwaway test):
+
+1. `tests/fpga/test_flow.tcl` (T020's real smoke test, tracked in git):
+   `set_top $top_fn` -> `set_top "riscv_gpgpu_hls::$top_fn"`. Its
+   pass/fail check also hardcoded the unqualified name into the
+   expected report path (`${top_fn}_csynth.rpt`), which no longer
+   exists under that name once `set_top` is qualified (`::` becomes
+   `_` in generated artifact names, e.g.
+   `riscv_gpgpu_hls_compute_pipeline_csynth.rpt`). Fixed by checking
+   the generic, naming-scheme-independent `solution1/syn/report/
+   csynth.rpt` instead, which Vitis HLS always produces alongside the
+   qualified one.
+2. `build/fpga_smoke/csynth_gpgpu_scheduler.tcl` (gitignored scratch
+   script): same `set_top gpgpu_scheduler` -> `set_top
+   riscv_gpgpu_hls::gpgpu_scheduler` fix.
+
+**Results, all real (non-diagnostic) source, all on 2026.1:**
+
+- `tests/fpga/test_flow.tcl` (compute_pipeline + memory_pipeline,
+  KV260): `PASS: all 2 csynth run(s) completed cleanly`.
+- `gpgpu_scheduler` (scheduler + compute_pipeline + mem_arbiter,
+  DATAFLOW-merged - the actual integrated top-level kernel, SS15/16.6):
+  `CSYNTH_GPGPU_SCHEDULER: DONE`, VHDL and Verilog RTL both generated,
+  "All loop constraints were satisfied," estimated Fmax 273.97 MHz,
+  ~53s total elapsed. No DATAFLOW conflict, no compiler crash.
+
+Every synthesis blocker this project has hit since starting T025 is
+now resolved and independently re-confirmed on the reinstalled
+toolchain: the SS16.6 `WarpSlot` DATAFLOW conflict (architectural,
+fixed by redesign), and the SS16.7-16.11 seed-loop compiler crash
+(tool-triggered, fixed by flattening the loop). T025's remaining scope
+is genuinely new work from here - RTL export/IP packaging and FPGA
+build scripts - not further debugging of what's already synthesizing.
+
+---
+
+### 16.13 Real resource reports pulled for the first time - memory_pipeline overflows BRAM 251%; root-caused and fixed (L2 on URAM + II=4); a new timing regression found and deliberately deferred
+
+T020's smoke test only ever checked that `csynth_design` completes, not
+what it actually produces (deliberately - see that task's own note).
+This is the first time this project has looked at real utilization
+numbers.
+
+**compute_pipeline** (KV260): BRAM 2 (~0%), DSP 260 (20%), FF 38163
+(16%), LUT 60480 (51%), but **timing violation**: slack -0.32ns at the
+5ns/200MHz target, traced to `executeALU`. Minor (~6% over), not
+investigated further this session - noted, deferred alongside item 2
+below.
+
+**memory_pipeline** (KV260): **BRAM 361, 251% of the device's 144
+available - a hard overflow, would fail place & route outright.**
+Root-caused via isolated probes (`SetAssocCache` alone, `PIPELINE
+II=1` alone) rather than guesswork:
+
+- `cache_bank.h`'s own `ARRAY_PARTITION`/`BIND_STORAGE` pragmas are
+  correct in isolation (12 BRAM for a standalone `L1Cache`, exactly
+  the intended "N parallel way-banks" shape - not the cause).
+- `memory_pipeline.h`'s `l1_caches_[NUM_CUS]` (array-of-cache-objects,
+  runtime-indexed by `cu_id`) is also not the cause (11 BRAM in
+  isolation).
+- The real cause: `memory_pipeline.cpp`'s `MEMORY_PIPELINE_LOOP`
+  `PIPELINE II=1`, applied across the full L1/L2 lookup -> miss ->
+  fill control flow. Confirmed by direct A/B test on the real design:
+  `PIPELINE off` alone drops BRAM 361 -> 169 (still 117% over).
+  Requesting II=1 forces the tool to fragment each way's line-data
+  array into one BRAM *per word* (32 separate 1-word memories per way)
+  to guarantee zero port conflicts between concurrently in-flight
+  pipeline stages, rather than sharing a port across stages.
+
+**Two independent fixes, both real design changes, both csim-verified
+(20/20 relevant tests) and re-synthesized against actual (non-
+diagnostic) source:**
+
+1. **L2Cache moved to URAM** (`cache_bank.h`): `xck26` has 64 URAM
+   blocks, previously 0 used - `BIND_STORAGE ... impl=BRAM` was
+   hardcoded for both L1 and L2 (same template, same constructor).
+   `SetAssocCache` gained a `DataStorage DATA_IMPL` template parameter
+   (`BRAM` default) selecting `data_`'s binding via `if constexpr`;
+   `tag_`/`valid_` stay BRAM always (URAM is a poor fit for their
+   1-bit/TAG_BITS widths, and they were never the bulk of the cost -
+   L2's `data_` alone was 128 of the 361 BRAM entries). `L1Cache`
+   stays BRAM (small, latency-critical, was never the problem);
+   `L2Cache` now specifies `DataStorage::URAM`.
+2. **`MEMORY_PIPELINE_LOOP` relaxed from `II=1` to `II=4`**
+   (`memory_pipeline.cpp`). A real II sweep (1/2/4/8/off), all with
+   L2-on-URAM already applied, found a **hard cliff, not a smooth
+   tradeoff**:
+
+   | Requested II | Achieved II | BRAM | URAM | Fits? |
+   |---|---|---|---|---|
+   | 1 | 47 cycles | 105 (73%) | 128 (200%) | No |
+   | 2 | 47 cycles | 105 (73%) | 128 (200%) | No |
+   | 4 | 76 cycles | 48 (33%) | 16 (25%) | Yes |
+   | 8 | 76 cycles | 48 (33%) | 16 (25%) | Yes |
+   | off | 76 cycles | 49 (34%) | 16 (25%) | Yes |
+
+   II=1/2 fight for low latency by fragmenting storage (same 47-cycle
+   achieved rate either way) but blow URAM to 200% - can't be built.
+   II=4/8/off all land on the identical resource/latency point (the
+   achieved rate becomes memory-dependency-bound, not resource-bound,
+   once the tool stops fragmenting) - no reason to prefer one over the
+   others within that cluster. Picked II=4 over `off` for one fewer
+   BRAM (48 vs 49) at zero cost, per explicit instruction.
+
+**Final, real, non-diagnostic-source measurement**: 48 BRAM (33%), 16
+URAM (25%) - comfortably fits. Also checked and ruled out as further
+optimization targets: shared memory (24 BRAM, correctly sized for its
+role - a per-CU scratchpad that genuinely needs BRAM's lower latency,
+moving it to URAM would hurt the thing it exists for) and AXI read/
+write buffering (4 BRAM, fixed minimal overhead).
+
+**A new, real timing regression found and deliberately deferred, not
+silently absorbed**: the L2-on-URAM change drops the design's
+estimated clock period from 3.65ns (~274MHz, comfortable margin) to
+**7.02ns (~142MHz)** - slack -3.37ns against the 5ns/200MHz target,
+larger than item 1's `compute_pipeline` violation. Traced to
+`lookup()`'s combinational tag-compare-then-read of `data_` not
+accounting for the real cascade delay of URAM: each L2 way's
+16384-deep array spans 4 physical URAM primitives, and reading through
+that cascade in the same cycle as the 4-way parallel tag comparison
+is a longer path than BRAM's equivalent. (Also: the Pragma Report
+flags all of `SetAssocCache`'s `ARRAY_PARTITION`/`UNROLL` pragmas as
+"Not implemented" post-`if constexpr` - cross-checked against the real
+Storage Report and confirmed to be a reporting/source-attribution
+artifact of pragmas living inside a templated `if constexpr` block,
+not an actual functional failure: L1/L2 way-partitioning is present
+and correct in the synthesized design exactly as intended.)
+
+**Decision**: keep the resource fix - it's not optional tuning, it's
+the only configuration that fits the device at all (even pure-BRAM
+`PIPELINE off` still overflows at 169/144). Defer real timing closure
+for both open violations (`compute_pipeline`'s -0.32ns and this
+-3.37ns) as a dedicated follow-up rather than continuing to extend
+this session - noted explicitly here so neither is later mistaken for
+"passing," and `hls/constraints/kv260.tcl`'s own comment already frames
+200MHz as an early-design-space-exploration target, not a hard
+requirement, at this stage of the project.
+
+---
+
+### 16.14 General optimization strategy (proposal, not yet implemented) - grounded in real AMD documentation (UG949, UG1399) plus this session's own measurements
+
+Requested strategy for area and timing optimization across the design,
+informed by real §16.13 measurements (not generic advice) and checked
+against two real AMD guides. **Correction on the request**: "UG1197"
+does not appear to be a real, current AMD document (verified via
+search - no such document exists in AMD's documentation portal); the
+correct Vitis HLS user guide is **UG1399**. Used that instead, plus
+**UG949** (UltraFast Design Methodology Guide) as requested. Every
+claim below marked "UG949"/"UG1399" is a real, fetched quote from
+docs.amd.com, not a paraphrase from training-data recollection -
+distinguished from this session's own analysis, marked "this session."
+
+Current resource picture, for reference (§16.13):
+
+| Module | BRAM | URAM | DSP | FF | LUT | Timing |
+|---|---|---|---|---|---|---|
+| compute_pipeline | ~0% | - | 20% | 16% | **51%** | -0.32ns |
+| memory_pipeline | 33% | 25% | - | 8% | 9% | -3.37ns |
+| gpgpu_scheduler (merged) | 24% | - | 20% | 18% | **53%** | - |
+
+#### A. Timing - the two known violations, now with a real, documented fix path
+
+**memory_pipeline's -3.37ns (URAM cascade, §16.13 item 2)**:
+
+- **UG949, "Performance Considerations When Implementing RAM"**: *"Using
+  an output register is required for designs operating at higher clock
+  frequency, and is recommended for all designs to ease timing
+  closure."* Further: *"a second output register is beneficial, as
+  slice output registers have faster clock to out timing than a block
+  RAM register. Having both registers has a total read latency of 3."*
+  Critically: *"they should be in the same level of hierarchy as the
+  RAM array. This allows the tools to merge the block RAM output
+  register into the primitive"* - placing the register at the wrong
+  hierarchy level defeats the fix.
+- **UG949, "Decomposing Deeper Memory Configurations..."**: confirms
+  our L2 cascade depth (4 URAM primitives per way, 16384/4096) is
+  already the *good* shape - *"Creating a 4-deep cascaded block RAM
+  chain is better for maximum clock frequency when compared to an
+  8-deep cascaded block RAM chain."* This rules out "make the cascade
+  shallower" as the fix (it's already shallow) and points squarely at
+  the missing-output-register explanation instead.
+- **UG1399's `BIND_STORAGE` `latency=` parameter** is the direct Vitis
+  HLS-level lever for this: it controls how many pipelined register
+  stages the memory access gets, exactly the "output register"
+  UG949 describes. **Concrete fix to test**: `#pragma HLS BIND_STORAGE
+  variable=data_ type=RAM_2P impl=URAM latency=2` (or `3`, per UG949's
+  "second register" note) on `cache_bank.h`'s `data_` member, inside
+  the same `if constexpr (DATA_IMPL == DataStorage::URAM)` branch
+  added in §16.13 - this is additive to that fix, not a replacement.
+- **UG949, "Address/Control Line Timing"**: for large RAMs, *"adding
+  an extra register after the generation of these signals and before
+  the RAMs"* improves address/control path timing - relevant to
+  `lookup()`'s `set`/`tag`/`widx` computation feeding directly into
+  the URAM read combinationally; worth an explicit pipeline stage
+  there too if `latency=` alone doesn't close the gap.
+
+**compute_pipeline's -0.32ns (`executeALU`, §16.13 item 1)**: no new
+documentation lead beyond what was already proposed - relax the clock
+target (kv260.tcl already frames 200MHz as exploratory) or add one
+pipeline stage. Minor (~6% over) relative to item 1 above.
+
+**UG949, "Timing Closure" (general)**: *"Focus on worst negative slack
+(WNS) of each clock as the main way to improve total negative slack
+(TNS)"* - supports fixing memory_pipeline's -3.37ns before
+compute_pipeline's -0.32ns, since it's the larger violation. Also:
+*"tools do not try to further improve timing after timing is met"* -
+once a fix closes the gap, no further clock-uncertainty tightening is
+needed or productive.
+
+#### B. Area - real, named pragmas confirmed, not generic advice
+
+**LUT is the tightest resource (51-53% on the compute side) while DSP
+sits comparatively slack (20%)** - real, measured imbalance (§16.13),
+now the guiding constraint for everything below.
+
+- **UG1399, `ALLOCATION`**: `#pragma HLS ALLOCATION instances=<func>
+  limit=N function` explicitly limits how many hardware instances of a
+  called function exist, forcing call sites to share one instance
+  instead of each getting its own. Documented example: constraining 3
+  instances to 1 achieved *"one-third the area."* Candidate targets:
+  `decodeInstruction`/`handleBranch`, called once per lane inside
+  `compute_pipeline`'s 32-wide `UNROLL` - worth checking whether these
+  are already being shared or duplicated 32x (Bind Op Report would
+  show this directly, not yet checked this session).
+- **UG1399, `INLINE off`**: *"prevent automatic inlining... preserving
+  sharing opportunities"* - pairs directly with `ALLOCATION` above;
+  Vitis HLS's default aggressive inlining is what causes the
+  duplication `ALLOCATION` alone can't fix if the function was already
+  inlined away before allocation limits apply.
+- **UG1399, `BIND_STORAGE` port count**: *"stream of blocks uses
+  2-port block RAM (`type=RAM_2P`) by default... optimize by selecting
+  single-port RAM (`RAM_1P`) when only one access port is needed."*
+  `cache_bank.h` currently hardcodes `RAM_2P` for `tag_`/`valid_`/
+  `data_` regardless of actual port need - worth auditing whether any
+  of these only ever need one port (e.g. `tag_`/`valid_` in `lookup()`
+  read-only, single accessor per cycle) once the URAM timing fix (A) 
+  is confirmed working, so port-count changes aren't tested
+  simultaneously with a timing fix and conflated.
+- **UG1399, `BIND_OP`**: explicit operator-to-resource binding,
+  confirmed real syntax for controlling DSP vs. LUT-fabric
+  implementation per operation - the direct mechanism for addressing
+  the measured LUT/DSP imbalance (rebalance wide comparators/muxes,
+  e.g. `DivergenceStack::popcount`, L2's 4-way tag compare, onto DSP
+  slices where LUT is the pressured resource).
+- **UG1399, array partitioning warning**: *"partitioning increases
+  BRAM count proportionally to partition width"* - direct restatement
+  of §16.13's own hard-won lesson (`MEMORY_PIPELINE_LOOP`'s II=1
+  fragmentation), now confirmed as documented, expected tool behavior
+  rather than a surprise specific to this design.
+
+FP operator policy (relaxed-precision `config_compile
+-unsafe_math_optimizations` for `FpGemm2x2TileK4`/`FpUniformSaxpy`-
+style kernels) remains a real candidate from the original proposal,
+but needs a policy decision (is bit-exact IEEE FP a hard requirement,
+per docs §7's *functional*-not-bit-exact correctness bar) before
+testing, not a documentation question - no UG949/UG1399 guidance
+changes that.
+
+#### C. Zero-risk, source-untouched flags (unchanged from the original proposal)
+
+`config_bind -effort high`, `config_schedule -effort high`,
+`config_array_partition` (auto-partition heuristic tuning), and
+clock-uncertainty review remain valid, cheap-to-test global levers -
+no new documentation lead specifically for these beyond confirming (via UG949's WNS/TNS
+guidance above) that they belong in the timing-closure pass, tried
+before hand-restructuring source.
+
+#### D. Sequencing (updated from the original proposal)
+
+1. **memory_pipeline's -3.37ns**: test `BIND_STORAGE latency=2` (then
+   `3`) on `data_`'s URAM binding first - concrete, documented,
+   directly targets the confirmed root cause (missing output
+   register), highest-confidence fix of everything in this section.
+2. **compute_pipeline's -0.32ns**: clock relaxation or one pipeline
+   stage - minor, either direction is fine.
+3. **Area**: `ALLOCATION`/`INLINE off` audit on `decodeInstruction`/
+   `handleBranch` (real duplication check via Bind Op Report, not yet
+   done) - only worth doing if LUT headroom actually becomes a
+   blocker for something concrete (e.g. `NUM_CUS` scaling, §16.13's
+   planning flag), not preemptively.
+4. **`BIND_OP` DSP/LUT rebalancing** and **`RAM_1P` port audit**: lowest
+   priority - polish tier, no current overflow motivating either.
+
+Everything in this section is a proposal awaiting approval - nothing
+here has been implemented or tested yet, unlike §16.13's fixes (which
+were implemented, csim-verified, and re-synthesized before being
+written up).
+
+---
+
+### 16.15 §16.14's strategy, tested phase by phase against real synthesis - two real negative results, two premises that didn't survive checking real evidence
+
+Per explicit instruction: implement each phase, verify against real
+synthesis (not just csim), report before continuing. Two phases
+produced real, honest negative results rather than the expected fix;
+two more turned out to have no actionable target once checked against
+real tool reports rather than assumed. Nothing forced through without
+justification - all four are reported as-found.
+
+**Phase 1 - `BIND_STORAGE latency=2` for memory_pipeline's -3.37ns
+(deferred, no effect)**: implemented on `cache_bank.h`'s URAM-bound
+`data_`, csim 8/8 passing, pragma confirmed applied (present in the
+report's "Valid Pragma Syntax" table). **Real result: zero effect** -
+Fmax identical to the byte, 142.43MHz, slack still exactly -3.37ns.
+The sub-loops (`readLine_r`, `fillLine`, `fillLine_1`) all show
+*positive* slack, confirming the violation was never inside the URAM
+read path at all - UG949's "missing output register" explanation,
+while a real and correctly-applied fix, was diagnosing the wrong
+mechanism for this specific design. The real critical path is still
+unidentified (most likely `lookup()`'s combinational 4-way tag-compare,
+not captured in the per-loop table since it isn't a pipelined loop) -
+open, deferred, needs a targeted isolation probe (same method as
+§16.13's original root-causing) to actually find it. `latency=2` left
+in place (harmless, still good general practice per UG949) but does
+not close this violation.
+
+**Phase 2 - relax shared clock 5.0ns -> 6.0ns (reverted, net negative)**:
+real, measured result on the actual shared `kv260.tcl` (affects every
+kernel synthesized against it):
+
+| Kernel | @ 5.0ns | @ 6.0ns |
+|---|---|---|
+| compute_pipeline | -0.32ns slack | -0.21ns slack (improved, not closed) |
+| memory_pipeline | Fmax 142.43MHz | Fmax **129.02MHz** (worse) |
+| gpgpu_scheduler | 0.00ns slack | 0.00ns slack (no change) |
+
+Relaxing the period let the scheduler pack *more* combinational logic
+per stage (a known, real HLS self-defeating effect, not a tool bug) -
+it measurably hurt memory_pipeline while only partially helping
+compute_pipeline. Since this constraint is shared project-wide, a
+partial win for one kernel at a real cost to another isn't a net
+improvement at the file level - reverted to 5.0ns. Both violations
+remain open, and the real fix for compute_pipeline's -0.32ns needs to
+be source-level (FP datapath restructuring or `BIND_OP` latency tuning
+on `executeALU`'s `FADD`/`FMUL`, scoped to that function only, not a
+global clock change) - not yet attempted.
+
+**Phase 3 - `ALLOCATION`/`INLINE off` area audit (no actionable
+target, premise didn't hold)**: §16.14 speculated `decodeInstruction`/
+`handleBranch` might be duplicated 32x if called from inside
+`compute_pipeline`'s lane-level `UNROLL`. Checked against real source
+before touching anything: both are called **exactly once per
+instruction** (`decodeInstruction` at `compute_pipeline.cpp:224`,
+`handleBranch` at `:194`) - the 32-wide `UNROLL` lives inside
+`executeALU`/`executeVector`/`executeBranch` themselves, which is
+necessary SIMT lane parallelism, not wasteful duplication. Confirmed
+via the Bind Op Report too: neither function appears as a separate
+multi-instance module (both single-call-site, so inlining them is
+free either way - no duplication to deduplicate). No code change
+made - the original hypothesis simply didn't survive contact with the
+real call graph.
+
+**Phase 4 - `BIND_OP` DSP/LUT rebalance + `RAM_1P` port audit (no safe
+actionable target)**: checked the real Bind Op Report before applying
+anything (learned from Phase 1/2 above - verify before touching
+source). `executeOneWarp`'s dominant LUT consumers are 32 sets of
+per-lane `addr_N`/`req_write_data_N` (real memory-address computation,
+one set per SIMT lane): `add` operations already correctly bound to
+`fabric` (DSP would be wasteful for narrow address arithmetic), and
+`select` (mux) operations, which **cannot** be bound to DSP at all -
+DSP performs arithmetic, not general multiplexing. The measured
+DSP(20%)/LUT(51%) imbalance reflects the real, necessary shape of
+32-wide SIMT fanout logic, not a misplaced-resource bug `BIND_OP`
+could fix. Separately, `RAM_1P` for `cache_bank.h`'s `tag_`/`valid_`
+was not tested: `lookup()` (read) and `fillLine()` (write) can
+genuinely overlap under `MEMORY_PIPELINE_LOOP`'s free-running,
+pipelined (`II=4`) execution - a real concurrent read/write access
+pattern that single-port memory can't safely provide without risking
+either incorrect scheduling or a serialization penalty. No code
+change made.
+
+**Net state after this pass**: `cache_bank.h`'s harmless `latency=2`
+addition is the only surviving source change from this section;
+`kv260.tcl` is back to its original 5.0ns. Both timing violations from
+§16.13 remain open and are now better-understood (Phase 1 ruled out
+one explanation for memory_pipeline's; Phase 2 ruled out a cheap
+global fix for compute_pipeline's) rather than closed - real progress
+in diagnosis, not yet in resolution. Both need dedicated, source-level
+follow-up: an isolation probe for memory_pipeline's actual critical
+path, and `executeALU`-scoped FP pipeline/`BIND_OP` tuning for
+compute_pipeline's.
+
+---
+
+### 16.16 Real goal clarified (fit a 2nd CU); real fix found - ALLOCATION operator sharing closes compute_pipeline's timing violation AND cuts LUT by 28%, as a side effect of area reduction
+
+**Context correction, important for future work**: this session's
+resource/timing optimization work was assumed to be general polish.
+It is not - **the actual objective is fitting a second CU into the
+design.** This reframes prior conclusions: `compute_pipeline` alone at
+51% LUT (pre-fix) meant two instances would need ~102-104% LUT -
+doesn't fit, independent of any timing question. Area reduction on
+`compute_pipeline` specifically is the real gating constraint for the
+project's stated direction, not a nice-to-have.
+
+**Root cause, confirmed by direct testing**: `executeALU`'s Bind Op
+Report showed each of the 32 SIMT lanes instantiating a **separate,
+full copy of every opcode's hardware** - its own adder, subtractor,
+AND/OR/XOR, comparator, and (for `executeVector`) multiplier and
+float-adder - even though the enclosing `switch` only ever executes
+exactly one case per lane per instruction. This is distinct from the
+32-way lane parallelism itself (genuinely necessary for true SIMT
+execution, confirmed not-a-problem in §16.15's Phase 4) - the waste is
+*within* each lane, across mutually-exclusive opcode cases, not across
+lanes.
+
+**Fix**: `#pragma HLS ALLOCATION operation instances=<op> limit=<N>`
+(UG1399, confirmed real syntax via direct fetch) inside `executeALU`
+(`add`, `sub`) and `executeVector` (`add`, `sub`, `mul`, `fadd`,
+`fsub`, `fmul`) - forces the tool to share hardware across what it was
+leaving as independently-instantiated per-lane-per-opcode logic.
+
+**Real limit sweep** (all re-synthesized against real, non-diagnostic
+source, csim-verified at each point):
+
+| `limit=` | Total LUT | DSP | FF | Top-level timing | `executeALU` latency | `executeOneWarp` total latency |
+|---|---|---|---|---|---|---|
+| 32 (baseline, implicit) | 60295 (51%) | 263 (21%) | 37863 (16%) | -0.32ns violation | 9 cyc | 8261 cyc |
+| 16 (`executeALU` only) | 56551 (48%) | 225 (18%) | 34125 (14%) | -0.35ns violation | 10 cyc | 8261 cyc |
+| **8 (both functions)** | **43414 (37%)** | **108 (8%)** | **23777 (10%)** | **0.00ns - clean** | 12 cyc | 8261 cyc |
+| 4 | 38482 (32%) | 57 (4%) | 20278 (8%) | -0.26ns violation (returns) | - | 8261 cyc |
+| 2 | 35752 (30%) | 30 (2%) | 18952 (8%) | -0.12ns violation | 33 cyc | 8776 cyc |
+| 1 | 32138 (27%) | 15 (1%) | 18119 (7%) | -0.24ns violation | 66 cyc | 17257 cyc |
+
+**`limit=8` is a real local optimum, not just a stopping point on a
+monotonic curve**: it's the *only* setting where compute_pipeline's
+existing -0.32ns timing violation (§16.13/16.15) closes completely
+(0.00ns slack) - not something predicted going in, but real and
+reproducible (confirmed via a clean re-synthesis on the exact restored
+source). Below `limit=8`, the violation *returns* (the input-muxing
+logic needed to route 32 lanes down to fewer shared units becomes its
+own long combinational path) while latency cost explodes
+disproportionately to the shrinking area gain: `8`->`1` buys another
+26% LUT reduction at the cost of 5.5x more cycles per ALU dispatch and
+a full doubling of per-warp execution latency (8261 -> 17257 cycles).
+`limit=8` kept as the real value.
+
+**Functional correctness**: verified at every sweep point via csim
+(`test_compute_pipeline` 8/8, `test_pipeline_integration` 3/3,
+`test_gpgpu_top` 3/3 at the final `limit=8` value) - `ALLOCATION`
+changes scheduling/resource binding only, never behavior, but this was
+still checked at each step rather than assumed.
+
+**Real, integrated-system result** (`gpgpu_scheduler` re-synthesized
+with the fixed `compute_pipeline`): LUT 53% -> **39%**, DSP 20% ->
+**8%**, FF 18% -> **11%**, and the merged design is also now
+timing-clean (0.00ns slack, was already 0.00 before but now with much
+more margin underneath it).
+
+**2-CU feasibility, the actual point of this work**: two
+`compute_pipeline` instances at 37% LUT each, plus scheduler/arbiter
+overhead (~2% per the single-instance merge delta) - roughly
+**77-79% LUT** for the full 2-CU system, comfortably within budget.
+Before this fix: ~102-104%, did not fit at all. DSP scales even more
+comfortably (2 x 108 = 216 of 1248, 17%). This is now a real,
+evidenced answer to the stated goal, not just a resource-report
+curiosity - though it covers `compute_pipeline` only; `memory_pipeline`
+and `gpgpu_scheduler`'s own scheduling/arbitration logic still need
+their own 2-CU scaling check (not yet done - `l1_caches_[NUM_CUS]`'s
+per-CU array structure in `memory_pipeline.h`, explicitly preserved
+this session rather than collapsed to a scalar, is exactly what makes
+that scaling path possible later).
+
+**Status of the two open timing violations from §16.13/16.15**:
+compute_pipeline's -0.32ns is now closed (confirmed side effect of
+this fix, not separately targeted). memory_pipeline's -3.37ns remains
+open and unrelated to this fix (different function, different root
+cause per §16.15 Phase 1's investigation) - still needs its own
+dedicated isolation work.
+
+---
+
+### 16.17 3-CU feasibility assessed (does not fit); cu_id_t narrowed anyway (real-sizing, not a timing fix - tested and ruled out for that)
+
+**3-CU feasibility, real measured math** (not further synthesis - the
+real per-instance and per-merge numbers from §16.16 were sufficient):
+
+```
+compute_pipeline:              43414 LUT (37.1%)
+scheduler+arbiter overhead:     2766 LUT (2.4%, 1-CU merge delta)
+
+2 CUs: 2x43414 + ~5532 overhead =  92360 LUT (78.9%) -- FITS
+3 CUs: 3x43414 + ~8298 overhead = 138540 LUT (118.3%) -- DOES NOT FIT
+```
+
+3 CUs' `compute_pipeline` footprint alone (130242 LUT) already exceeds
+the device's entire 117120-LUT budget before any scheduler/arbiter
+overhead - not a close call. DSP (3x8%=24%) and BRAM/URAM
+(memory_pipeline's L1 caches would grow from 1 to 3 instances, an
+estimated 48->~72 BRAM, still well under the 144 available) are not
+the constraint - LUT is the sole, decisive wall. **2 CUs remains the
+real, confirmed target**; 3 would need another substantial round of
+`compute_pipeline` area reduction beyond §16.16's fix, not attempted.
+
+**`cu_id_t` narrowing (`ap_uint<8>` -> `ap_uint<3>`), tested as a
+timing-violation fix, real result: no effect.** Real synthesis of
+`memory_pipeline` with the narrowed type: Fmax identical (142.43MHz),
+slack identical (-3.37ns), FF/LUT essentially unchanged (7824->7819,
+noise-level). The `icmp_ln127`/`l1_caches_[cu_id]` muxing chain
+identified in §16.15 Phase 1 as a plausible contributor does not
+appear to be a significant one after all - ruled out by direct test,
+not assumption.
+
+**Kept anyway**, on different grounds: given 3 CUs don't fit, `cu_id_t`
+only ever needs to represent 0-1 in the confirmed-feasible 2-CU case;
+3 bits (0-7) is reasonable, modest headroom above that, not the
+original 8-bit/256-value over-provisioning. Extensively verified
+harmless before keeping it: a first run of the full `test_gpgpu_top`
+suite hit a real-looking deadlock/crash on
+`TwoWarpBarrierKernelDrivenEntirelyByTheScheduler` - investigated
+rather than dismissed (checked every `cu_id` use site across
+`mem_arbiter.h`/`cu_dispatch_unit.h`/`gpgpu_top.h` for width-dependent
+bit-packing or overflow - found none), then re-tested: 12/12 clean runs
+at the narrow width, 8/8 clean runs at the original width for direct
+comparison, 3 full-suite runs (138/138 individual test passes) at the
+narrow width after. Conclusion: a pre-existing thread-timing flake in
+that specific test's background-thread/polling design (consistent with
+its known fragility profile, not this project's first encounter with
+it), not a real width-dependent bug - real but unlucky, not swept under
+the rug.
+
+**Status, memory_pipeline's -3.37ns violation**: still open. Two real,
+well-reasoned, UG949-informed and evidence-informed candidate fixes
+have now been tested and ruled out (§16.15 Phase 1's `BIND_STORAGE
+latency=`, this section's `cu_id_t` narrowing) - the actual critical
+path is still unidentified. Next real step: a targeted isolation probe
+(same method as §16.13's original BRAM root-causing) purpose-built to
+locate it directly, rather than continuing to test plausible-but-
+unconfirmed hypotheses one at a time.
+
+---
+
+### 16.18 Real bisection locates the exact cause; the obvious fix (Option 1) has zero effect - same non-result pattern as two prior attempts
+
+**Targeted isolation probes, real bisection** (not another blind
+hypothesis test): built `mem_probe_read`/`mem_probe_write` (isolate
+`loadWord()`'s path from `storeWord()`'s path via `handleRequest()`
+with `is_write` forced each way) - **the read path alone reproduces
+the exact violation byte-for-byte** (Fmax 142.43MHz, -3.37ns,
+identical); the write path is completely clean. Then bisected inside
+`loadWord()` itself by temporarily modifying the real source
+(reverted after each test, csim not required for these since they're
+timing-only diagnostics, not committed changes):
+
+1. Miss path (burst-fetch + both `fillLine()` calls) removed entirely
+   (`return 0` after the L2-miss increment): **clean, 0.00ns slack,
+   Fmax 273.97MHz.** Confirms the L1+L2 hit-path logic alone (tag
+   compares, `lookup()`) is not the cause - only checked, never
+   suspected after §16.15/16.17's negative results on `cu_id_t`.
+2. Burst-fetch kept, final dynamic `line[widx]` read replaced with a
+   fixed `line[0]`: **still -3.37ns, unchanged.** Rules out the final
+   dynamic-indexed read as the cause.
+3. Burst-fetch kept, both `fillLine()` calls removed (fixed-index
+   return kept): **clean, 0.00ns slack, Fmax 273.97MHz again.**
+
+**Conclusion, now with real evidence, not inference**: the two
+back-to-back `fillLine()` calls in `loadWord()`'s miss path (L2's,
+then L1's) are the -3.37ns violation's actual, sole cause.
+`fillLine()`'s write - `data_[victim][set][i] = line[i]`, where
+`victim` is a **runtime** read of `next_victim_[set]` - requires
+real write-side demux logic to route into the WAYS-complete-
+-partitioned `data_` array (the opposite problem from `lookup()`'s
+read-side mux), and this happens twice in a row with nothing
+separating them.
+
+**Option 1 attempted (of the three discussed with the user): function-
+scope `#pragma HLS PIPELINE II=1` added to `fillLine()` itself**, on
+the reasoning that it would give the tool license to register `victim`
+separately from the write. Real result: **zero effect** - identical
+Fmax, identical slack, identical resource counts. Confirmed the pragma
+was actually applied (present in the report's "Valid Pragma Syntax",
+not "Ignored Pragmas"). The redundancy is the likely explanation:
+`FILL_WORDS` (the inner loop) already carries its own `PIPELINE II=1`,
+and Vitis HLS appears to treat that as already establishing the whole
+function's pipelining semantics - adding a second, function-scope
+`PIPELINE` on top gave the tool no *new* retiming freedom, since it
+wasn't being denied any freedom the first pragma didn't already grant.
+
+**Pattern now visible across three independent, well-reasoned,
+individually-plausible fix attempts** (§16.15 Phase 1's `BIND_STORAGE
+latency=`, §16.17's `cu_id_t` narrowing, this section's function-scope
+`PIPELINE`): **all three produced measurements identical to the
+byte**, not just "didn't fully close the gap" - the exact same
+Fmax/slack/resource numbers before and after, every time. That's a
+different, stronger signal than "this particular fix wasn't enough" -
+it suggests Vitis HLS's scheduler is reaching the *same scheduling
+decision* regardless of these particular pragma-level hints, which
+these three otherwise-reasonable techniques cannot influence once
+applied at this level. Options 2 (separate the two `fillLine()` calls
+at the *call site* rather than inside `fillLine()` itself) and 3
+(restructure victim selection to avoid a dynamic write target
+entirely) remain untried - discussed with the user, not yet attempted.
+Given the pattern above, Option 2 is now a real open question rather
+than a safe bet (touches a different point in the design, may or may
+not fare differently) - Option 3 is the only one of the three that
+changes the *mechanism* rather than adding a hint around it, and may
+be the one most likely to actually move the needle given how resistant
+this scheduling decision has proven to pragma-level nudges.
+
+---
+
+### 16.19 Option 2 works - memory_pipeline's -3.37ns violation is closed, real, confirmed, reproducible
+
+**Fix implemented** (`memory_pipeline.h`): extracted the two `fillLine()`
+calls from `loadWord()`'s miss path into a new private helper,
+`fillBothCaches(L1Cache& l1, addr_t line_base, const L2Cache::word_t
+line[WORDS_PER_LINE])`, marked `#pragma HLS DATAFLOW`. Unlike §16.18's
+Option 1 (a pragma hint inside `fillLine()` itself, which changed
+nothing), this targets the actual scheduling boundary between the two
+*independent* calls (no data dependency - both read `line`, write to
+different cache instances) - and needed the extraction because
+`loadWord()` itself has early-return branches (L1 hit/L2 hit/miss)
+that `DATAFLOW` doesn't tolerate well; the extracted function is a
+clean, branch-free 2-statement body, a legal `DATAFLOW` target.
+
+**Real result, verified three ways**: ad hoc synthesis, full csim
+regression, and the official `tests/fpga/test_flow.tcl` smoke test all
+agree. Every single entry in the real, per-function/per-loop report
+table now shows non-negative slack - `fillBothCaches` itself (0.00 at
+the top level; its own row shows 1.18), and both `fillLine`/`fillLine_1`
+sub-instances (the L2 and L1 calls, now separately scheduled and
+reported) individually clean (1.84, 1.18). Top-level: **slack 0.00**
+(was -3.37ns), BRAM 50 (17%, was 48/33%), FF 2665 (1%, was 7824/3%
+- note this comparison mixes device-total-relative percentages
+recomputed against a smaller absolute count, real reduction not just
+rounding), LUT 4387 (3%, was 7329/6%), URAM 16 (25%, unchanged).
+Resource usage dropped substantially alongside the timing fix, not
+just neutrally - `DATAFLOW`'s explicit staging apparently let the tool
+avoid whatever redundant same-cycle hardware the forced-parallel
+scheduling was creating, a genuine bonus beyond what Option 2 was
+attempting to fix.
+
+**Functional correctness**: csim 46/46 (full HLS suite, every test
+binary) passing both before and after, confirmed at each step per this
+session's established practice, not assumed because `DATAFLOW` is
+"just a scheduling pragma."
+
+**Status update**: both timing violations opened across this session
+are now closed - `compute_pipeline`'s -0.32ns (§16.16, closed as a
+side effect of the `ALLOCATION` area fix) and `memory_pipeline`'s
+-3.37ns (this section). `gpgpu_scheduler` (the merged system,
+unaffected by this specific fix since it doesn't include
+`memory_pipeline`) was already clean. Real synthesis confirms every
+kernel in this project's HLS port - `compute_pipeline`,
+`memory_pipeline`, `gpgpu_scheduler` - now synthesizes with zero
+timing violations and comfortable resource margins, including real
+headroom for the 2-CU scaling goal (§16.16/16.17).
+
+---

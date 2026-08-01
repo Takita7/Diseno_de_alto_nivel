@@ -76,6 +76,15 @@ typedef reg_t RegFile[MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
 // Golden reference: ComputeUnit::executeALU() (compute_unit.cpp:124-147).
 static void executeALU(RegFile regs, const Instruction& instr, thread_mask_t mask) {
     Opcode op = instr.opcode;
+    // TEMP: SS16.16 scratch experiment - is the per-lane, per-opcode
+    // hardware duplication (add/sub/and/or/xor/icmp/fmul/fadd all
+    // separately instantiated per lane, per the Bind Op Report) real,
+    // fixable waste, or already-necessary/already-shared under the hood?
+    // Testing by forcing a lower instance count than the natural 32
+    // (one per lane) and observing whether the tool can actually share
+    // (LUT drops, some latency cost) or refuses (already minimal).
+#pragma HLS ALLOCATION operation instances=add limit=8
+#pragma HLS ALLOCATION operation instances=sub limit=8
 EXECUTE_ALU_LANES:
     for (int t = 0; t < MAX_THREADS_PER_WARP; ++t) {
 #pragma HLS UNROLL
@@ -108,6 +117,14 @@ EXECUTE_ALU_LANES:
 // Golden reference: ComputeUnit::executeVector() (compute_unit.cpp:151-171).
 static void executeVector(RegFile regs, const Instruction& instr, thread_mask_t mask) {
     Opcode op = instr.opcode;
+    // TEMP: SS16.16 scratch experiment - same technique as executeALU, same
+    // 8-opcode-per-lane duplication pattern (add/sub/mul/fadd/fsub/fmul).
+#pragma HLS ALLOCATION operation instances=add limit=8
+#pragma HLS ALLOCATION operation instances=sub limit=8
+#pragma HLS ALLOCATION operation instances=mul limit=8
+#pragma HLS ALLOCATION operation instances=fadd limit=8
+#pragma HLS ALLOCATION operation instances=fsub limit=8
+#pragma HLS ALLOCATION operation instances=fmul limit=8
 EXECUTE_VECTOR_LANES:
     for (int t = 0; t < MAX_THREADS_PER_WARP; ++t) {
 #pragma HLS UNROLL
@@ -308,15 +325,17 @@ void compute_pipeline(
         // state then). initial_regs_ptr is global-warp-id-indexed (SS16),
         // not slot-indexed - different threads/warps get different
         // tid/address argument values, unlike program[] (broadcast,
-        // SS10.8).
+        // SS10.8). Flattened to a single loop (SS16.10/16.11): the 2D
+        // t/r nested-loop form crashed two independent HLS compiler
+        // versions (2023.1 SeqAccessesInfoPass, 2026.1 FlattenLoopNest)
+        // in their own loop-nest analysis passes; this form needs no
+        // such analysis since there's only one loop level.
         if (d.fresh_launch) {
             uint64_t base = uint64_t(d.warp_id) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
-        SEED_INITIAL_REGS_THREADS:
-            for (int t = 0; t < MAX_THREADS_PER_WARP; ++t) {
-            SEED_INITIAL_REGS_REGS:
-                for (int r = 0; r < NUM_REGS_PER_THREAD; ++r) {
-                    regs[d.slot_id][t][r] = initial_regs_ptr[base + t * NUM_REGS_PER_THREAD + r];
-                }
+        SEED_INITIAL_REGS:
+            for (int i = 0; i < MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD; ++i) {
+                regs[d.slot_id][i / NUM_REGS_PER_THREAD][i % NUM_REGS_PER_THREAD] =
+                    initial_regs_ptr[base + i];
             }
         }
 

@@ -35,9 +35,15 @@ if(NOT DEFINED XILINX_HLS_INCLUDE)
     if(DEFINED ENV{XILINX_HLS_INCLUDE})
         set(XILINX_HLS_INCLUDE "$ENV{XILINX_HLS_INCLUDE}")
     else()
+        # Old standalone-installer layout (2023.1 and earlier):
+        # Vitis_HLS/<ver>/include. New unified-installer layout (2026.1+,
+        # see docs/hls/interfaces.md SS16.10): <ver>/Vitis/include, no
+        # separate Vitis_HLS tree.
         file(GLOB _hls_include_candidates
             "/tools/Xilinx/Vitis_HLS/*/include"
             "/opt/Xilinx/Vitis_HLS/*/include"
+            "/tools/Xilinx/*/Vitis/include"
+            "/opt/Xilinx/*/Vitis/include"
         )
         if(_hls_include_candidates)
             list(GET _hls_include_candidates -1 XILINX_HLS_INCLUDE)  # newest version sorts last

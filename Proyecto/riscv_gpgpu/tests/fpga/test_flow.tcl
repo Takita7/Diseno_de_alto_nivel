@@ -83,7 +83,12 @@ foreach board $boards {
         if {[catch {
             open_project -reset $proj_dir
             add_files $src_file -cflags "-I$src_dir -D$board_macro"
-            set_top $top_fn
+            # riscv_gpgpu_hls:: prefix required as of Vitis HLS 2026.1 -
+            # unqualified set_top silently fails to resolve namespaced
+            # functions there (see docs/hls/interfaces.md SS16.10). 2023.1
+            # resolved the unqualified name fine, so this is a real
+            # cross-version behavior difference, not a source bug.
+            set_top "riscv_gpgpu_hls::$top_fn"
             open_solution -reset solution1
             source "$repo_root/hls/constraints/${board_name}.tcl"
             csynth_design
@@ -94,7 +99,11 @@ foreach board $boards {
             continue
         }
 
-        set rpt "$proj_dir/solution1/syn/report/${top_fn}_csynth.rpt"
+        # The generic report name (not the qualified-name-derived one, e.g.
+        # riscv_gpgpu_hls_compute_pipeline_csynth.rpt as of the 2026.1
+        # set_top qualification above) - stable regardless of top-function
+        # naming/qualification across tool versions.
+        set rpt "$proj_dir/solution1/syn/report/csynth.rpt"
         if {![file exists $rpt]} {
             puts "FAIL: $top_fn/$board_name - csynth reported success but no report at $rpt"
             incr failed_count

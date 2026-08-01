@@ -27,7 +27,19 @@ namespace riscv_gpgpu_hls {
 
 // ── Primitive aliases (docs/hls/interfaces.md SS4) ───────────────────────────
 typedef ap_uint<32>          warp_id_t;
-typedef ap_uint<8>           cu_id_t;
+// 3 bits (0-7), not 8 (0-255, the old width): docs/hls/interfaces.md SS16.16.
+// Real measured math (SS16.17): 2 CUs fit KV260's LUT budget (~79%), 3 do
+// not (~118%, compute_pipeline's own footprint alone already exceeds the
+// device at 3x), so 8 bits (256 CUs) was pure over-provisioning against a
+// device that realistically caps out at 2. This width selects
+// memory_pipeline.h's l1_caches_[NUM_CUS] array (kept as a real array, not
+// collapsed to a scalar, specifically to support NUM_CUS>1 - see SS16.16).
+// NOTE: tested directly as a candidate fix for the -3.37ns memory_pipeline
+// timing violation (SS16.13/16.15) - real synthesis showed zero effect
+// (identical Fmax, identical slack, SS16.17) - kept anyway as a harmless,
+// verified-safe (46/46 csim tests) right-sizing matching the real 2-CU
+// target, not because it fixes anything.
+typedef ap_uint<3>           cu_id_t;
 typedef ap_uint<6>           lane_id_t;                    // 0..31
 typedef ap_uint<MAX_THREADS_PER_WARP> thread_mask_t;        // ap_uint<32>
 typedef ap_uint<32>          reg_t;
