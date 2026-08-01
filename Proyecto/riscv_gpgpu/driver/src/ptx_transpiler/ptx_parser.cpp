@@ -139,8 +139,18 @@ PtxKernel PtxParser::parse(const std::string& ptx_text) {
     tokenize(ptx_text);
 
     PtxKernel k;
-    // Scan forward for .entry
     while (cur().type != TK::END) {
+        if (cur().type == TK::WORD && cur().text == ".address_size") {
+            advance();
+            if (cur().type != TK::INT || (cur().ival != 32 && cur().ival != 64)) {
+                error_ = ".address_size must be 32 or 64";
+                return {};
+            }
+            k.address_size = static_cast<uint32_t>(cur().ival);
+            k.address_size_seen = true;
+            advance();
+            continue;
+        }
         if (cur().type == TK::WORD && cur().text == ".entry") {
             advance();
             if (!parseKernel(k)) return {};
@@ -189,9 +199,30 @@ bool PtxParser::parseParams(std::vector<PtxParam>& out) {
     while (cur().type != TK::RPAREN && cur().type != TK::END) {
         PtxParam p;
         p.index = idx++;
-        // .param .type name
         if (cur().type == TK::WORD && cur().text == ".param") advance();
         if (cur().type == TK::WORD) { p.space = cur().text; advance(); }
+        else { error_ = "Expected parameter type"; return false; }
+        while (cur().type == TK::WORD && !cur().text.empty() && cur().text[0] == '.') {
+            if (cur().text == ".ptr") {
+                p.is_pointer = true;
+                advance();
+            } else if (cur().text == ".global" || cur().text == ".shared"
+                       || cur().text == ".local" || cur().text == ".const") {
+                p.pointer_space = cur().text;
+                advance();
+            } else if (cur().text == ".align") {
+                advance();
+                if (cur().type != TK::INT || cur().ival <= 0) {
+                    error_ = "Expected positive parameter alignment";
+                    return false;
+                }
+                p.alignment = static_cast<uint32_t>(cur().ival);
+                advance();
+            } else {
+                error_ = "Unsupported parameter attribute: " + cur().text;
+                return false;
+            }
+        }
         if (cur().type == TK::WORD) { p.name = cur().text; advance(); }
         else { error_ = "Expected param name"; return false; }
         out.push_back(p);
@@ -248,13 +279,12 @@ bool PtxParser::parseRegDecl(PtxKernel& k) {
     std::string type_str = cur().text;  // ".pred", ".u32", etc.
     advance();
 
-    // Map type to rd.type
     if (type_str == ".pred")       rd.type = "pred";
     else if (type_str == ".u32" || type_str == ".b32") rd.type = "u32";
     else if (type_str == ".s32")   rd.type = "s32";
     else if (type_str == ".f32")   rd.type = "f32";
-    else if (type_str == ".u64" || type_str == ".b64") rd.type = "b64";
-    else                           rd.type = "u32";  // fallback
+    else if (type_str == ".u64" || type_str == ".b64" || type_str == ".s64") rd.type = "b64";
+    else { error_ = "Unsupported register type: " + type_str; return false; }
 
     // Register name with count: %r<16>
     if (cur().type != TK::PERCENT) { error_ = "Expected %reg in .reg decl"; return false; }
@@ -282,7 +312,12 @@ bool PtxParser::parseInstr(PtxInstr& out) {
     if (cur().type == TK::AT) {
         advance();
         if (cur().type == TK::BANG) { out.pred_not = true; advance(); }
-        if (cur().type == TK::PERCENT) { out.pred = cur().text; advance(); }
+        if (cur().type != TK::PERCENT) {
+            error_ = "Expected predicate register after @";
+            return false;
+        }
+        out.pred = cur().text;
+        advance();
     }
 
     // Opcode (WORD)
@@ -296,7 +331,9 @@ bool PtxParser::parseInstr(PtxInstr& out) {
     // Operands, comma-separated, terminated by ';'
     while (cur().type != TK::SEMICOLON && cur().type != TK::RBRACE
            && cur().type != TK::END) {
-        out.operands.push_back(parseOperand());
+        PtxOperand operand;
+        if (!parseOperand(operand)) return false;
+        out.operands.push_back(operand);
         if (cur().type == TK::COMMA) advance();
     }
     if (cur().type == TK::SEMICOLON) advance();
@@ -305,8 +342,7 @@ bool PtxParser::parseInstr(PtxInstr& out) {
 
 // ── Operand ───────────────────────────────────────────────────────────────────
 
-PtxOperand PtxParser::parseOperand() {
-    PtxOperand op;
+bool PtxParser::parseOperand(PtxOperand& op) {
 
     if (cur().type == TK::PERCENT) {
         // Register or special register
@@ -321,32 +357,32 @@ PtxOperand PtxParser::parseOperand() {
             op.kind = PtxOperand::Kind::Reg;
         }
         op.name = name;
-        return op;
+        return true;
     }
 
     if (cur().type == TK::DOLLAR) {
         op.kind = PtxOperand::Kind::Label;
         op.name = cur().text;
         advance();
-        return op;
+        return true;
     }
 
     if (cur().type == TK::LBRACKET) {
-        return parseMemRef();
+        return parseMemRef(op);
     }
 
     if (cur().type == TK::INT) {
         op.kind    = PtxOperand::Kind::IntImm;
         op.int_val = cur().ival;
         advance();
-        return op;
+        return true;
     }
 
     if (cur().type == TK::FLOAT) {
         op.kind    = PtxOperand::Kind::FltImm;
         op.flt_val = cur().fval;
         advance();
-        return op;
+        return true;
     }
 
     if (cur().type == TK::MINUS) {
@@ -361,7 +397,7 @@ PtxOperand PtxParser::parseOperand() {
             op.flt_val = -cur().fval;
             advance();
         }
-        return op;
+        return true;
     }
 
     // Word — could be a label reference (branch target without $)
@@ -369,18 +405,16 @@ PtxOperand PtxParser::parseOperand() {
         op.kind = PtxOperand::Kind::Label;
         op.name = cur().text;
         advance();
-        return op;
+        return true;
     }
 
-    // Unknown — skip
-    advance();
-    return op;
+    error_ = "Unsupported operand token: " + cur().text;
+    return false;
 }
 
 // ── Memory reference ──────────────────────────────────────────────────────────
 
-PtxOperand PtxParser::parseMemRef() {
-    PtxOperand op;
+bool PtxParser::parseMemRef(PtxOperand& op) {
     op.kind = PtxOperand::Kind::MemRef;
     advance();  // consume '['
 
@@ -391,23 +425,47 @@ PtxOperand PtxParser::parseMemRef() {
         // Optional offset
         if (cur().type == TK::PLUS) {
             advance();
-            if (cur().type == TK::INT) { op.mem_offset = cur().ival; advance(); }
+            if (cur().type != TK::INT) {
+                error_ = "Expected immediate memory offset";
+                return false;
+            }
+            op.mem_offset = cur().ival;
+            advance();
         } else if (cur().type == TK::MINUS) {
             advance();
-            if (cur().type == TK::INT) { op.mem_offset = -cur().ival; advance(); }
+            if (cur().type != TK::INT) {
+                error_ = "Expected immediate memory offset";
+                return false;
+            }
+            op.mem_offset = -cur().ival;
+            advance();
+        } else if (cur().type == TK::INT && cur().ival < 0) {
+            op.mem_offset = cur().ival;
+            advance();
         }
     } else if (cur().type == TK::WORD) {
-        // [param_name] or [param_name + offset]
         op.param_name = cur().text;
         advance();
         if (cur().type == TK::PLUS) {
             advance();
-            if (cur().type == TK::INT) { op.mem_offset = cur().ival; advance(); }
+            if (cur().type != TK::INT) {
+                error_ = "Expected immediate memory offset";
+                return false;
+            }
+            op.mem_offset = cur().ival;
+            advance();
         }
+    } else {
+        error_ = "Expected register or symbol in memory reference";
+        return false;
     }
 
-    if (cur().type == TK::RBRACKET) advance();
-    return op;
+    if (cur().type != TK::RBRACKET) {
+        error_ = "Expected closing ']' in memory reference";
+        return false;
+    }
+    advance();
+    return true;
 }
 
 } // namespace ptx

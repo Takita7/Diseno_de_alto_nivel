@@ -108,6 +108,44 @@ $L__saxpy_end:
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+TEST(PtxParser, ParsesAddressSize64AndPointerAttributes) {
+    const char* ptx = R"(
+.version 7.0
+.target sm_52
+.address_size 64
+.visible .entry k(
+    .param .u64 .ptr .global .align 4 p0
+) {
+    .reg .b64 %rd<1>;
+    ld.param.u64 %rd0, [p0];
+    ret;
+})";
+    PtxParser parser;
+    auto kernel = parser.parse(ptx);
+    ASSERT_EQ(kernel.name, "k") << parser.lastError();
+    EXPECT_EQ(kernel.address_size, 64u);
+    EXPECT_TRUE(kernel.address_size_seen);
+    ASSERT_EQ(kernel.params.size(), 1u);
+    EXPECT_EQ(kernel.params[0].space, ".u64");
+    EXPECT_TRUE(kernel.params[0].is_pointer);
+    EXPECT_EQ(kernel.params[0].pointer_space, ".global");
+    EXPECT_EQ(kernel.params[0].alignment, 4u);
+}
+
+TEST(PtxParser, RejectsUnsupportedAddressSize) {
+    PtxParser parser;
+    auto kernel = parser.parse(".address_size 128 .entry k() { ret; }");
+    EXPECT_TRUE(kernel.name.empty());
+    EXPECT_FALSE(parser.lastError().empty());
+}
+
+TEST(PtxParser, RejectsMalformedMemoryReference) {
+    PtxParser parser;
+    auto kernel = parser.parse(".entry k() { .reg .u32 %r<2>; ld.global.u32 %r0, [%r1; }");
+    EXPECT_TRUE(kernel.name.empty());
+    EXPECT_FALSE(parser.lastError().empty());
+}
+
 TEST(PtxParser, ParsesKernelName) {
     PtxParser p;
     auto k = p.parse(kVectorAddPtx);
