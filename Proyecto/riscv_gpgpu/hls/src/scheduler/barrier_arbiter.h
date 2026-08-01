@@ -41,6 +41,7 @@
 #ifndef RISCV_GPGPU_HLS_BARRIER_ARBITER_H
 #define RISCV_GPGPU_HLS_BARRIER_ARBITER_H
 
+#include <hls_stream.h>
 #include "../common/hls_config.h"
 #include "../common/hls_types.h"
 
@@ -95,6 +96,103 @@ inline void barrierAcknowledgeRelease(BarrierState& b) {
 // wave - the whole kernel is finished.
 inline bool barrierKernelComplete(const BarrierState& b) {
     return b.total_warps_ != 0 && b.done_count_ == b.total_warps_;
+}
+
+// ── Real, multi-CU global barrier arbiter (docs/hls/interfaces.md SS16.37) ──
+// The one genuinely new piece needed for NUM_CUS>1: BarrierState is
+// inherently kernel-wide (release/completion depend on every CU's warps
+// together, not any one CU's own share), so it can't simply be duplicated
+// per-CU the way schedulerCore's own WarpSlot[] correctly is - each CU
+// deciding release "locally" would release its own warps without waiting
+// for the others, silently wrong. barrierCore owns the one real
+// BarrierState and is the sole source of the top-level busy/done/fault
+// signals - schedulerCore no longer owns any of the three.
+//
+// Broadcast from barrierCore to each CU's schedulerCore, one entry per
+// pending action - deliberately two independent bools, not an enum, since
+// a release and a kernel-done can both be true possibilities the receiver
+// needs to check every pass (though not simultaneously in practice: a
+// release fires mid-kernel while warps are still resident, done fires only
+// once every warp has reached COMPLETE).
+struct barrier_signal_t {
+    bool release;      // un-stall my resident STALLED slots
+    bool kernel_done;  // whole kernel (every CU) finished - return to IDLE
+};
+
+// Free-running top-level task, same persistent-hardware model every other
+// free-running kernel in this project already uses. Mirrors mem_arbiter's
+// proven N:1/1:N array-of-streams shape (docs/hls/interfaces.md SS10.9) -
+// NUM_CUS event-in streams (one per CU, forwarding the WarpStatusCode each
+// CU's schedulerCore already extracted from its own status_in for its own
+// recordResult() call - not re-deriving anything, just relaying), NUM_CUS
+// signal-out streams (release/done broadcasts).
+//
+// Independently observes the SAME start/total_warps every CU's own
+// schedulerCore also observes (matching how program_ptr/program_len are
+// already broadcast to every CU, not routed, SS10.8) - no explicit
+// "launch" message needed from any CU. Each CU's schedulerCore
+// independently recomputes the identical launch-fault condition
+// (total_warps > NUM_CUS*MAX_WARPS_PER_CU) before self-launching, so a
+// faulted launch never causes a CU to dispatch warps that barrierCore
+// itself refused to accept - a pure, stateless check every caller derives
+// the same way, not a value that needs relaying.
+inline void barrierCore(
+    warp_id_t total_warps,
+    bool&     start,
+    bool&     busy,
+    bool&     done,
+    bool&     fault,
+    hls::stream<WarpStatusCode>   (&events_in)[NUM_CUS],
+    hls::stream<barrier_signal_t> (&signal_out)[NUM_CUS]
+) {
+    BarrierState barrier;
+    busy = false; done = false; fault = false;
+
+    while (true) {
+#pragma HLS PIPELINE off
+        if (!busy) {
+            if (!start) continue;
+
+            barrierLaunch(barrier, total_warps);
+            if (barrierLaunchFault(barrier)) { fault = true; continue; }
+
+            busy = true;
+        } else {
+        POLL_CU_EVENTS:
+            for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+                if (!events_in[c].empty()) {
+                    WarpStatusCode code = events_in[c].read();
+                    barrierOnEvent(barrier, code);
+                }
+            }
+
+            if (barrierReleaseReady(barrier)) {
+                barrierAcknowledgeRelease(barrier);
+            SIGNAL_RELEASE:
+                for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+                    barrier_signal_t sig;
+                    sig.release     = true;
+                    sig.kernel_done = false;
+                    signal_out[c].write(sig);
+                }
+            }
+
+            if (barrierKernelComplete(barrier)) {
+                busy = false;
+                done = true;
+            SIGNAL_DONE:
+                for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+                    barrier_signal_t sig;
+                    sig.release     = false;
+                    sig.kernel_done = true;
+                    signal_out[c].write(sig);
+                }
+            }
+        }
+    }
 }
 
 }  // namespace riscv_gpgpu_hls

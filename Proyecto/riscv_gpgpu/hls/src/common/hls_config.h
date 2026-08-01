@@ -66,10 +66,14 @@ constexpr int ADDR_BITS = RISCV_GPGPU_ADDR_BITS;
 constexpr int CACHE_LINE_BYTES  = 128;
 constexpr int WORDS_PER_LINE    = CACHE_LINE_BYTES / 4;   // 32 words/line
 
-// L1: per-CU, 16KB default (arch_config.yaml), WAYS=2 (SS6.3 proposed default)
-constexpr int L1_WAYS           = 2;
-constexpr int L1_SIZE_BYTES     = 16 * 1024;
-constexpr int L1_LINES_TOTAL    = L1_SIZE_BYTES / CACHE_LINE_BYTES;      // 128
+// docs/hls/interfaces.md SS16.36: WAYS 2->4 (matching L2), real cost
+// verified via synthesis - the SS16.35 attempt was reverted only to avoid
+// an open-ended rework loop mid-session, not because of any real problem
+// with the change itself; real BRAM budget (SS16.27) comfortably allows
+// it. 16KB -> 32KB (SS16.35) unchanged here.
+constexpr int L1_WAYS           = 4;
+constexpr int L1_SIZE_BYTES     = 32 * 1024;
+constexpr int L1_LINES_TOTAL    = L1_SIZE_BYTES / CACHE_LINE_BYTES;      // 256
 constexpr int L1_SETS_PER_WAY   = L1_LINES_TOTAL / L1_WAYS;              // 64
 
 // L2: shared across CUs, 256KB default (arch_config.yaml), WAYS=4
@@ -79,14 +83,23 @@ constexpr int L2_LINES_TOTAL    = L2_SIZE_BYTES / CACHE_LINE_BYTES;      // 2048
 constexpr int L2_SETS_PER_WAY   = L2_LINES_TOTAL / L2_WAYS;              // 512
 
 // Shared memory (scratchpad, not a cache - always resident, no tags)
-// DECIDED (docs/hls/interfaces.md SS10.11), not a placeholder: measured from
-// real T020 csynth reports, compute_pipeline alone is 52% of KV260's LUT
-// budget; two instances + memory_pipeline projects to 111% - infeasible.
-// NUM_CUS=1 is KV260's real target until compute_pipeline's LUT footprint is
-// optimized down. KV260 is the sole target board (SS14) - this is not a
-// per-board decision anymore.
-constexpr int NUM_CUS                    = 1;
-constexpr int SHARED_MEM_SIZE_BYTES      = 48 * 1024;   // arch_config.yaml default
+// 1 -> 2 DECIDED (docs/hls/interfaces.md SS16.37), not a placeholder: the
+// original NUM_CUS=1 call (SS10.11) was made when compute_pipeline alone
+// was 52% of KV260's LUT budget - since fixed (SS16.16's ALLOCATION
+// sharing, LUT 51%->37%), and the real BRAM budget itself was later found
+// to be double what earlier sessions assumed (SS16.27). Real 2-CU support
+// needed a genuinely new architectural piece - barrierCore
+// (barrier_arbiter.h) - since the global barrier can't simply be
+// duplicated per-CU the way schedulerCore's own WarpSlot[] correctly is.
+// KV260 is the sole target board (SS14) - this is not a per-board decision.
+constexpr int NUM_CUS                    = 2;
+// 48KB -> 16KB (docs/hls/interfaces.md SS16.26) -> 32KB (SS16.35): the
+// 16KB step matched the golden model's real, live-executed default
+// (compute_unit.h:28) and freed real BRAM for the 2-CU question
+// (§16.20/16.25). This step doubles it again for more scratchpad headroom
+// per kernel, now that real BRAM budget is well understood (SS16.27) and
+// comfortably has room - a capability increase, not a fidelity match.
+constexpr int SHARED_MEM_SIZE_BYTES      = 32 * 1024;
 constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;
 
 // ── On-chip scheduler (docs/hls/interfaces.md SS2.5) ──────────────────────────
@@ -96,7 +109,15 @@ constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;
 // ceiling (a kernel with total_warps > NUM_CUS*MAX_WARPS_PER_CU is an invalid
 // launch, SS10.6's hazard mitigation), not a barrier-group size. Barrier
 // scope itself is global, matching the golden model exactly (SS10.6).
-constexpr int MAX_WARPS_PER_CU           = 4;
+// 4 -> 8 DECIDED (docs/hls/interfaces.md SS16.25), not a placeholder: real
+// csynth showed doubling this costs zero extra BRAM/LUT/DSP/FF (the
+// execution datapath isn't replicated per warp - warps are dispatched
+// sequentially through the same shared hardware - and regs_'s existing
+// 2-BRAM-per-lane allocation had headroom to absorb the doubled depth,
+// 128->256, without needing a 3rd BRAM primitive). A real, felt increase in
+// resident-warp capacity for free; chosen over adding a 2nd CU, which a
+// real BRAM projection showed likely doesn't fit (~214/144).
+constexpr int MAX_WARPS_PER_CU           = 8;
 
 }  // namespace riscv_gpgpu_hls
 

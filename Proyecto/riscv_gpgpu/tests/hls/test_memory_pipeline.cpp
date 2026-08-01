@@ -78,12 +78,23 @@ TEST(MemorySubsystem, GlobalMissThenL1HitThenL2RefillsL1) {
     MemorySubsystem mem;
     auto backing = makeIdentityBackedMemory();
 
-    // X, Y, Z chosen (see test file's design note / commit context) so all
-    // three share the same L1 set (evicting each other with L1_WAYS=2) but
-    // land in three DIFFERENT L2 sets (so filling Y and Z into L1/L2 never
-    // touches X's L2 entry) - lets this test force "L1 miss, L2 hit" for X
-    // without a std::map-style cache that has no such distinction.
-    addr_t X = 0x100000, Y = 0x102000, Z = 0x104000;
+    // X, plus L1_WAYS filler addresses, all sharing X's L1 set (so the
+    // fillers evict X via round-robin after exactly L1_WAYS more same-set
+    // fills - the loop below, not just 2 fixed calls) but landing in
+    // L1_WAYS+1 distinct L2 sets (so filling them into L1/L2 never
+    // touches X's L2 entry) - lets this test force "L1 miss, L2 hit" for
+    // X without a std::map-style cache that has no such distinction.
+    // Recomputed (docs/hls/interfaces.md SS16.36) for L1_WAYS=4's real
+    // 6-bit set index (L1_SIZE_BYTES=32KB / WAYS=4). The static_assert
+    // below turns a future silent break (this test has now broken
+    // silently twice - SS16.35 x2 - from unrelated config changes) into
+    // a loud compile error pointing straight at this comment instead.
+    static_assert(L1_WAYS == 4,
+                   "fillers[] below is hand-computed for L1_WAYS=4 - recompute "
+                   "(same-L1-set, distinct-L2-set addresses) if L1_WAYS or "
+                   "L1_SIZE_BYTES changes again");
+    addr_t X = 0x102000;
+    addr_t fillers[L1_WAYS] = {0x104000, 0x106000, 0x108000, 0x10A000};
     ASSERT_GE(X, addr_t(SHARED_MEM_SIZE_BYTES));
 
     auto rX1 = mem.handleRequest(makeReq(0, 0, 0, X, false), backing.data());
@@ -95,12 +106,15 @@ TEST(MemorySubsystem, GlobalMissThenL1HitThenL2RefillsL1) {
     EXPECT_EQ(static_cast<uint32_t>(rXhit.data), X);
     EXPECT_EQ(mem.getL1CacheHits(), 1u) << "X should be an L1 hit immediately after its own fill";
 
-    mem.handleRequest(makeReq(0, 0, 0, Y, false), backing.data());  // evicts nothing yet (way1)
-    mem.handleRequest(makeReq(0, 0, 0, Z, false), backing.data());  // round-robin: evicts X from L1 way0
+    // Round-robin: X took way0; each filler takes the next way in order;
+    // the L1_WAYS-th filler wraps back to way0, evicting X.
+    for (int i = 0; i < L1_WAYS; ++i) {
+        mem.handleRequest(makeReq(0, 0, 0, fillers[i], false), backing.data());
+    }
 
-    // X is gone from L1 (Z took its way) but still resident in L2 (Y/Z used
-    // different L2 sets) - this load must be an L1 miss + L2 hit, and must
-    // still return the correct data.
+    // X is gone from L1 (the last filler took its way) but still resident
+    // in L2 (every filler used a different L2 set) - this load must be an
+    // L1 miss + L2 hit, and must still return the correct data.
     auto rX2 = mem.handleRequest(makeReq(0, 0, 0, X, false), backing.data());
     EXPECT_EQ(static_cast<uint32_t>(rX2.data), X);
     EXPECT_EQ(mem.getL2CacheHits(), 1u) << "X's line should still be resident in L2";

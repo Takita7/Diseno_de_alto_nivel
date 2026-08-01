@@ -53,7 +53,15 @@ TEST(BarrierArbiter, AtCapacityLaunchDoesNotFault) {
 TEST(BarrierArbiter, ReleaseFiresOnlyOnceEveryWarpHasArrived) {
     WarpSlot slots[MAX_WARPS_PER_CU];
     BarrierState b;
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // launchSlots()'s real assignment formula is `w = cu_id + slot*NUM_CUS`
+    // - to get exactly 2 READY slots on cu_id=0 regardless of NUM_CUS's
+    // real value, total_warps must be 1*NUM_CUS+1 (docs/hls/interfaces.md
+    // SS16.37 - this test crashed with a real stack-smashing out-of-bounds
+    // write, via nextReadySlot() returning INVALID_SLOT, before this fix).
+    // barrierLaunch()'s own total_warps stays a literal 2 - it's testing
+    // BarrierState's arrival-counting behavior for 2 real events, a
+    // separate concern from how those 2 slots got resident on this CU.
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     barrierLaunch(b, warp_id_t(2));
 
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::STALLED_AT_BARRIER, 9, 1);
@@ -66,7 +74,9 @@ TEST(BarrierArbiter, ReleaseFiresOnlyOnceEveryWarpHasArrived) {
 TEST(BarrierArbiter, AcknowledgeReleaseResetsArrivalCounterForNextWave) {
     WarpSlot slots[MAX_WARPS_PER_CU];
     BarrierState b;
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // Same NUM_CUS-derived total_warps as the test above (SS16.37) - 2
+    // READY slots on cu_id=0 regardless of NUM_CUS.
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     barrierLaunch(b, warp_id_t(2));
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::STALLED_AT_BARRIER, 9, 1);
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::STALLED_AT_BARRIER, 9, 1);
@@ -83,7 +93,9 @@ TEST(BarrierArbiter, AcknowledgeReleaseResetsArrivalCounterForNextWave) {
 TEST(BarrierArbiter, KernelCompleteOnceEveryWarpFinishes) {
     WarpSlot slots[MAX_WARPS_PER_CU];
     BarrierState b;
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // Same NUM_CUS-derived total_warps as the tests above (SS16.37) - 2
+    // READY slots on cu_id=0 regardless of NUM_CUS.
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     barrierLaunch(b, warp_id_t(2));
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::STALLED_AT_BARRIER, 9, 1);
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::STALLED_AT_BARRIER, 9, 1);
@@ -105,7 +117,10 @@ TEST(BarrierArbiter, KernelCompleteOnceEveryWarpFinishes) {
 TEST(BarrierArbiter, NonUniformBarrierParticipationNeverReleases) {
     WarpSlot slots[MAX_WARPS_PER_CU];
     BarrierState b;
-    launchSlots(slots, cu_id_t(0), warp_id_t(3));
+    // 3 READY slots on cu_id=0 regardless of NUM_CUS (SS16.37 - same
+    // derivation as the K=2 tests above, generalized to K=3:
+    // (K-1)*NUM_CUS+1).
+    launchSlots(slots, cu_id_t(0), warp_id_t(2 * NUM_CUS + 1));
     barrierLaunch(b, warp_id_t(3));
 
     dispatchAndRecord(slots, b, nextReadySlot(slots), WarpStatusCode::COMPLETE, 0);            // warp0: no barrier

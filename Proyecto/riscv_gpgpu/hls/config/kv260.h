@@ -27,13 +27,22 @@
 #define RISCV_GPGPU_MAXI_MAX_READ_BURST_LEN  32
 #define RISCV_GPGPU_MAXI_MAX_WRITE_BURST_LEN 32
 
-// DDR4 has meaningfully higher per-access latency than on-chip BRAM/URAM;
-// a modest outstanding-transaction depth hides some of that without
-// over-provisioning AXI ID tracking hardware. PROVISIONAL: not validated
-// against a real Vitis HLS C-synthesis/co-simulation run (vitis_hls is not
-// available in the environment this was authored in) - revisit once real
-// resource/latency reports exist (docs/hls/interfaces.md SS5 step 5).
-#define RISCV_GPGPU_MAXI_NUM_READ_OUTSTANDING  4
-#define RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING 2
+// 4/2 -> 16/16 DECIDED (docs/hls/interfaces.md SS16.31), not a
+// placeholder: real synthesis confirmed the cost is negligible (+4 FF,
+// +4 LUT), matching Evaluacion_Corta_3's real, working grayscale_accel.cpp
+// reference (num_read_outstanding=16). DDR4 has meaningfully higher
+// per-access latency than on-chip BRAM/URAM; a deeper outstanding-
+// transaction depth hides more of that. The prior 4/2 values were
+// PROVISIONAL/never-validated (vitis_hls wasn't available when they were
+// authored) - this session's real synthesis run supersedes that.
+#define RISCV_GPGPU_MAXI_NUM_READ_OUTSTANDING  16
+#define RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING 16
+
+// docs/hls/interfaces.md SS16.29: 128 matches Zynq UltraScale+'s real
+// PL-side AXI HP/HPC port width (AMD's own sizing guidance) - lets Vitis
+// HLS pack multiple sequential 32-bit reads into fewer, wider AXI beats.
+// The Vivado IP flow's own default is 0 (widening disabled) - confirmed
+// via this port's real burst.xml report before this fix, not assumed.
+#define RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH 128
 
 #endif  // RISCV_GPGPU_HLS_CONFIG_KV260_H

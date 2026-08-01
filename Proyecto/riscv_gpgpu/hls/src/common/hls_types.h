@@ -143,8 +143,15 @@ struct mem_resp_t {
 
 // slot_id indexes one of a CU's MAX_WARPS_PER_CU resident warp slots -
 // declared here (moved ahead of its original SS2.5.3 position below) since
-// warp_status_t now needs it too.
-typedef ap_uint<3> slot_id_t;
+// warp_status_t now needs it too. Width must hold MAX_WARPS_PER_CU+1 distinct
+// values (0..MAX_WARPS_PER_CU-1 for real slots, plus cu_dispatch_unit.h's
+// INVALID_SLOT sentinel == MAX_WARPS_PER_CU itself) - ap_uint<3> (0-7) was
+// only ever one value short of overflowing at MAX_WARPS_PER_CU=8
+// (INVALID_SLOT=8 silently wrapped to 0), found real via a genuine csim
+// test failure (docs/hls/interfaces.md SS16.25) while testing that value,
+// not by inspection. ap_uint<4> (0-15) covers MAX_WARPS_PER_CU up to 14
+// with headroom.
+typedef ap_uint<4> slot_id_t;
 
 // ── Warp status (docs/hls/interfaces.md SS2.4 - host-orchestrated barriers) ─
 enum class WarpStatusCode : uint8_t { COMPLETE = 0, STALLED_AT_BARRIER = 1 };

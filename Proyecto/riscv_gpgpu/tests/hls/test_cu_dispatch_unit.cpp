@@ -37,27 +37,36 @@ warp_status_t stalledStatus(barrier_id_t bid, ap_uint<16> resume_pc) {
 
 TEST(CuDispatchUnit, LaunchAssignsWarpsRoundRobinAndLeavesUnusedSlotsEmpty) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    // 3 warps on a single CU (NUM_CUS=1 build default) fit within
-    // MAX_WARPS_PER_CU=4 - slot 3 must stay EMPTY.
-    launchSlots(slots, /*cu_id=*/cu_id_t(0), /*total_warps=*/warp_id_t(3));
+    // assignSlot()'s real formula is `w = cu_id + slot*NUM_CUS` - for
+    // cu_id=0, slot s becomes READY (holding warp_id s*NUM_CUS) once
+    // total_warps > s*NUM_CUS. To get exactly 3 READY slots (0,1,2) with
+    // slot 3 EMPTY regardless of NUM_CUS's real value, total_warps must be
+    // (2*NUM_CUS)+1 - expressed via the real constant, not a hardcoded
+    // literal, so this doesn't silently break again on the next NUM_CUS
+    // change the way it did going 1->2 (docs/hls/interfaces.md SS16.37).
+    launchSlots(slots, /*cu_id=*/cu_id_t(0),
+                /*total_warps=*/warp_id_t(2 * NUM_CUS + 1));
 
     EXPECT_EQ(slots[0].state, WarpSlot::State::READY);
     EXPECT_EQ(slots[1].state, WarpSlot::State::READY);
     EXPECT_EQ(slots[2].state, WarpSlot::State::READY);
     EXPECT_EQ(slots[3].state, WarpSlot::State::EMPTY);
-    EXPECT_EQ(slots[0].warp_id, 0);
-    EXPECT_EQ(slots[1].warp_id, 1);
-    EXPECT_EQ(slots[2].warp_id, 2);
+    EXPECT_EQ(slots[0].warp_id, warp_id_t(0 * NUM_CUS));
+    EXPECT_EQ(slots[1].warp_id, warp_id_t(1 * NUM_CUS));
+    EXPECT_EQ(slots[2].warp_id, warp_id_t(2 * NUM_CUS));
     EXPECT_FALSE(allSlotsDone(slots));
 }
 
 TEST(CuDispatchUnit, DispatchOrderIsAscendingFifo) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    launchSlots(slots, cu_id_t(0), warp_id_t(3));
+    // Same NUM_CUS-derived total_warps as the test above - 3 READY slots.
+    launchSlots(slots, cu_id_t(0), warp_id_t(2 * NUM_CUS + 1));
 
     // Mirrors WarpScheduler::selectWarp()'s FIFO order: launchSlots()
-    // assigns warps in increasing warp_id order, and ascending slot order
-    // reproduces that pop order exactly.
+    // assigns warps in increasing warp_id order, and ascending SLOT order
+    // (not warp_id - nextReadySlot()/recordResult() below are entirely
+    // slot-index-based, unaffected by NUM_CUS) reproduces that pop order
+    // exactly.
     EXPECT_EQ(nextReadySlot(slots), 0);
     recordResult(slots, 0, completeStatus());
     EXPECT_EQ(nextReadySlot(slots), 1);
@@ -83,7 +92,9 @@ TEST(CuDispatchUnit, RecordResultStalledCarriesBarrierIdAndResumePc) {
 
 TEST(CuDispatchUnit, NoReadySlotWhenNoneAvailable) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // 2 READY slots regardless of NUM_CUS (same derivation as the tests
+    // above - docs/hls/interfaces.md SS16.37).
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     recordResult(slots, 0, completeStatus());
     recordResult(slots, 1, stalledStatus(9, 1));
 
@@ -92,7 +103,9 @@ TEST(CuDispatchUnit, NoReadySlotWhenNoneAvailable) {
 
 TEST(CuDispatchUnit, ReleaseBarrierRestoresOnlyStalledSlots) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    launchSlots(slots, cu_id_t(0), warp_id_t(3));
+    // 3 READY slots regardless of NUM_CUS (same derivation as
+    // LaunchAssignsWarpsRoundRobinAndLeavesUnusedSlotsEmpty above).
+    launchSlots(slots, cu_id_t(0), warp_id_t(2 * NUM_CUS + 1));
     recordResult(slots, 0, completeStatus());                    // slot0 -> DONE
     recordResult(slots, 1, stalledStatus(7, 4));                  // slot1 -> STALLED
     recordResult(slots, 2, stalledStatus(7, 4));                  // slot2 -> STALLED
@@ -107,7 +120,9 @@ TEST(CuDispatchUnit, ReleaseBarrierRestoresOnlyStalledSlots) {
 
 TEST(CuDispatchUnit, BuildDispatchUsesFullActiveMaskAndCarriesResumePc) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // 2 READY slots regardless of NUM_CUS - slot1 holds warp_id
+    // 1*NUM_CUS, not the literal 1 (only true when NUM_CUS==1).
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     recordResult(slots, 0, completeStatus());                        // slot0 out of the way
     recordResult(slots, 1, stalledStatus(7, /*resume_pc=*/4));
     releaseBarrierSlots(slots);
@@ -116,7 +131,7 @@ TEST(CuDispatchUnit, BuildDispatchUsesFullActiveMaskAndCarriesResumePc) {
     ASSERT_EQ(s, 1);
     warp_dispatch_t d = buildDispatch(slots, s);
 
-    EXPECT_EQ(d.warp_id, 1);
+    EXPECT_EQ(d.warp_id, warp_id_t(1 * NUM_CUS));
     EXPECT_EQ(d.active_mask_init, thread_mask_t(-1))
         << "active_mask_init is always the full mask, fresh or resumed alike "
            "(matches DivergenceStack::initializeWarp() being called on every "
@@ -126,7 +141,12 @@ TEST(CuDispatchUnit, BuildDispatchUsesFullActiveMaskAndCarriesResumePc) {
 
 TEST(CuDispatchUnit, AllDoneOnlyAfterEveryActiveSlotCompletes) {
     WarpSlot slots[MAX_WARPS_PER_CU];
-    launchSlots(slots, cu_id_t(0), warp_id_t(2));
+    // 2 READY slots regardless of NUM_CUS - without this, slot1 would
+    // stay EMPTY (not READY) once NUM_CUS>1, and allSlotsDone() would
+    // (correctly, given its own real "every non-EMPTY slot is DONE"
+    // semantics) return true after just slot0 completes - a real failure
+    // this test caught directly (docs/hls/interfaces.md SS16.37).
+    launchSlots(slots, cu_id_t(0), warp_id_t(1 * NUM_CUS + 1));
     recordResult(slots, 0, completeStatus());
     EXPECT_FALSE(allSlotsDone(slots)) << "slot1 still READY";
 

@@ -29,6 +29,14 @@
 #ifndef RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING
 #define RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING 2
 #endif
+// docs/hls/interfaces.md SS16.29: real fix for a real, confirmed missed-
+// widen finding (burst.xml: "threshold of 0", the Vivado IP flow's actual
+// default) - 128 (KV260) matches Zynq UltraScale+'s real PL-side AXI HP/
+// HPC port width. Falls back to 0 (disabled - prior behavior) if no board
+// macro is defined.
+#ifndef RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH
+#define RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH 0
+#endif
 
 namespace riscv_gpgpu_hls {
 
@@ -54,7 +62,8 @@ void memory_pipeline(
         max_read_burst_length=RISCV_GPGPU_MAXI_MAX_READ_BURST_LEN \
         max_write_burst_length=RISCV_GPGPU_MAXI_MAX_WRITE_BURST_LEN \
         num_read_outstanding=RISCV_GPGPU_MAXI_NUM_READ_OUTSTANDING \
-        num_write_outstanding=RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING
+        num_write_outstanding=RISCV_GPGPU_MAXI_NUM_WRITE_OUTSTANDING \
+        max_widen_bitwidth=RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH
 #pragma HLS INTERFACE s_axilite port=global_mem bundle=control
 #pragma HLS INTERFACE s_axilite port=return     bundle=control
 
@@ -67,16 +76,22 @@ void memory_pipeline(
 
 MEMORY_PIPELINE_LOOP:
     while (true) {
-        // II=1 (real single-cycle throughput) forces per-word BRAM/URAM
-        // fragmentation across the full hit/miss/fill control flow -
-        // 105 BRAM (73%) + 128 URAM (200%, hard overflow, won't place &
-        // route) on KV260. II=4 lands on the same resource floor as no
-        // pipelining constraint at all (48 BRAM/33%, 16 URAM/25%) - the
-        // achieved II is actually identical either way (~76 cycles,
-        // memory-dependency-bound, not resource-bound) - but costs one
-        // fewer BRAM than leaving PIPELINE unconstrained entirely (see
-        // docs/hls/interfaces.md SS16.13's II sweep: II=1/2 both land on
-        // the fragmented 105/128 point, II=4/8/off all land on 48-49/16).
+        // Re-verified docs/hls/interfaces.md SS16.32: this comment's
+        // original SS16.13 numbers (II=1 forcing 105 BRAM/128 URAM
+        // fragmentation, a hard URAM overflow) no longer reproduce under
+        // the current tool version/source - real re-test at II=1 with
+        // today's source (16KB shared mem, L2 on URAM, outstanding=16/16,
+        // widen=128) landed on 34 BRAM/16 URAM, identical to II=4. Kept at
+        // II=4 anyway: zero cost either way today, and zero latency
+        // benefit from II=1 regardless - the outer loop never actually
+        // achieves the requested II (Pipelined=no either way), since its
+        // body blocks on loadWord()/storeWord()'s own real latency
+        // (90/13 cycles) before the next iteration can start - memory-
+        // dependency-bound, not pipeline-scheduling-bound, matching the
+        // original comment's conclusion for a different underlying reason.
+        // II=4 kept as the documented, already-understood value rather
+        // than switching to a functionally-identical alternative for no
+        // reason.
 #pragma HLS PIPELINE II=4
         mem_req_t req = req_in.read();
         resp_out.write(mem.handleRequest(req, global_mem));

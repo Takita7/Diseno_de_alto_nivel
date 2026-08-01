@@ -3656,3 +3656,1329 @@ timing violations and comfortable resource margins, including real
 headroom for the 2-CU scaling goal (§16.16/16.17).
 
 ---
+
+### 16.20 Real 2-CU BRAM verification - §16.17's estimate was mis-attributed; the real dominant cost is compute_pipeline's regs_ fragmentation inside gpgpu_scheduler's DATAFLOW region, not CuDispatchUnit storage
+
+**Context**: §16.17's 2-CU feasibility check only verified LUT (~79%,
+fits). Asked directly whether BRAM also fits, doing the linear-scaling
+math for the first time surfaced a real, previously-unverified risk:
+naively doubling `gpgpu_scheduler`'s measured 68-BRAM "1-CU overhead"
+projects to ~190 BRAM total (132% of 144) - would not fit. That
+"overhead" figure was real, but its *attribution* (assumed to be
+`CuDispatchUnit`'s per-CU `program_`/`regs_` storage) was never
+verified. Checked directly rather than trusted.
+
+**Real, isolated measurement of `CuDispatchUnit`'s actual storage
+cost**: built a probe instantiating 2 independent `CuDispatchUnit`
+objects (first attempt was invalid - the storage was fully dead-code-
+eliminated since nothing read it back out; fixed by routing
+`regsArray()`/`programArray()` reads to real output ports). **Real
+result: 4 BRAM total for 2 full instances** - nowhere near the ~68
+BRAM the earlier estimate implied per CU. `CuDispatchUnit`'s own
+storage was never the real cost.
+
+**Real source, found by reading `gpgpu_scheduler`'s own Storage Report
+directly** (not re-derived, just actually checked): of the 70 BRAM,
+`gmem0`/`gmem1` AXI buffering + `cu_program_s` channel account for 5,
+`schedulerCore`'s slot state is ~0 (tiny, register-based), and
+**`compute_pipeline`'s own `regs` array accounts for 64** - split into
+32 separate per-lane entries (`regs`, `regs_1` ... `regs_31`, 2 BRAM
+each). Standalone, `compute_pipeline`'s own report shows only **2
+BRAM** for the same array. The DATAFLOW-merged context (`regs` passed
+by reference into a DATAFLOW region alongside `schedulerCore` and
+`mem_arbiter`) is forcing full per-lane partitioning that the
+standalone context doesn't need - the same class of context-dependent
+binding difference already root-caused and fixed for `memory_pipeline`
+earlier this session (§16.13), not yet investigated here.
+
+**Real L1/L2 sizing tradeoff test** (as suggested - shrink L1, grow
+L2, freeing BRAM since L1 is BRAM-bound and L2 is already URAM-bound
+with real headroom): L1 halved (16KB->8KB) + L2 doubled (256KB->512KB),
+real `memory_pipeline` resynthesis: **BRAM 50->46 (-4), URAM 16->32
+(still only 50%, effectively free headroom spent)**. Real, architecturally
+sound (moves cost from the tighter resource to the slacker one,
+matching this project's actual resource profile), but **modest** - a
+few BRAM per CU, dwarfed by the 64-BRAM `regs_` fragmentation finding
+above.
+
+**Real, verified NUM_CUS=2 memory_pipeline cost** (separate from the
+CuDispatchUnit/regs_ question - `memory_pipeline` already correctly
+NUM_CUS-parameterized): BRAM 50 -> **80** (the real cost of a second
+L1 cache instance, confirmed by direct resynthesis, not estimated) -
+still comfortably within budget on its own.
+
+**Conclusion**: the L1/L2 tradeoff is real but small (~4 BRAM/CU). The
+`regs_` fragmentation inside `gpgpu_scheduler`'s DATAFLOW region (64
+BRAM at 1 CU, presumably ~128 at 2 CUs if it scales the same way -
+itself unverified) is the actual dominant, and likely fixable, cost -
+a real next investigation (targeted `BIND_STORAGE`/`ARRAY_PARTITION`
+on `regs` within the DATAFLOW-merged context) is needed before a
+trustworthy 2-CU BRAM total exists. Not yet attempted. All scratch
+changes (`NUM_CUS=2`, L1/L2 resize) reverted after measurement -
+`hls_config.h` unchanged from committed state.
+
+---
+
+### 16.21 L1 cache scaling explained (real, correct - the intuition it "should" save more was based on a wrong assumption about what dominates); regs_ fragmentation fix attempted twice, zero effect both times
+
+**L1 halving investigated precisely** (asked directly whether "only 4
+BRAM saved" made sense): pulled the exact Storage Report entries
+before/after. The cache's own `data` array scaled **exactly** as it
+should - 8 BRAM (4096-deep) -> 4 BRAM (2048-deep), a clean, correct 2x
+matching the 2x depth reduction. `valid_`/`tag_` stayed flat at 1 BRAM
+each in both cases - already far under a single BRAM primitive's
+capacity even at full size (128 x 1 bit / 128 x 19 bit), so there was
+never any possible saving there regardless of L1 sizing. The real
+reason the *total* `memory_pipeline` delta was small: `shared_mem_`
+(24 of 46 BRAM, 52%) and `L2`'s tag/valid overhead (8 BRAM, WAYS-count-
+driven, unrelated to L1 sizing) dominate the budget - L1's data array
+was only ever a minority contributor (8 of 50 before halving). The
+cache optimization worked correctly; the intuition that it "should"
+free proportionally more was based on assuming L1 dominates the
+budget, when `shared_mem_` (a fixed 48KB scratchpad, completely
+unrelated to any cache) actually does. If BRAM reduction is ever a
+real goal on its own, `SHARED_MEM_SIZE_BYTES` is the bigger lever, not
+further L1 shrinking - noted, not acted on (out of scope for what was
+asked).
+
+**`regs_` fragmentation fix, two real attempts, zero effect both
+times.** `CuDispatchUnit` (owns `regs_`/`program_`) has never had any
+explicit `BIND_STORAGE`/`ARRAY_PARTITION`, unlike every other array in
+this project - a real, previously-unnoticed gap, not a deliberate
+choice.
+
+1. Added a constructor with `#pragma HLS BIND_STORAGE variable=regs_
+   type=RAM_T2P impl=BRAM` (+ `program_`). csim clean (8+6+3 tests).
+   Real synthesis: **zero effect** - `gpgpu_scheduler`'s BRAM identical
+   to the byte (70), confirmed the pragma was applied (present in
+   "Valid Pragma Syntax", not ignored).
+2. Added `#pragma HLS ARRAY_PARTITION variable=regs_ dim=2 complete`
+   alongside the same `BIND_STORAGE` (dim=2 = `MAX_THREADS_PER_WARP`,
+   the dimension `executeALU`/`executeVector`'s 32-wide `UNROLL`
+   genuinely needs parallel access to - matching the established
+   project pattern of always pairing these two pragmas, per
+   `cache_bank.h`). csim clean again. Real synthesis: **zero effect**
+   again - identical 70 BRAM, byte-for-byte.
+
+**Both reverted.** This is now the 5th targeted, well-reasoned,
+correctly-applied pragma across this session's deeper investigations
+(§16.15 Phase 1's `BIND_STORAGE latency=`, §16.17's `cu_id_t`
+narrowing, §16.18's function-scope `PIPELINE`, and these two) to
+produce a result identical to the byte rather than even a partial
+improvement. The one fix in this whole arc that *did* work
+(§16.19's `fillLine()` extraction) required genuine code
+restructuring - moving the target logic into its own function with
+`DATAFLOW`, not a pragma added at the existing declaration or call
+site. That's a real, recurring signal: pragmas placed at an array's
+declaration site (where `CuDispatchUnit` owns `regs_`) don't appear to
+influence how `compute_pipeline` (a separate `DATAFLOW` task,
+consuming `regs` by reference across the task boundary) ends up
+binding it - the deciding factor is more likely something about how
+`gpgpu_top.cpp`'s own `DATAFLOW` wiring treats `regs` at the point it
+crosses into `compute_pipeline`'s task boundary, not `regs_`'s
+declaration-site pragmas. A real fix, if one exists, likely needs the
+same kind of structural change §16.19 needed - not yet attempted, real
+scope, not a quick pragma test.
+
+---
+
+### 16.22 The structural fix attempted - zero effect too; the shared-object-reference hypothesis is ruled out
+
+**Real structural change attempted**, matching §16.19's proven pattern
+(the only fix in this whole arc that worked was code restructuring,
+not a pragma) and the exact mechanism §16.21 flagged as suspect:
+`schedulerCore` received the *whole* `CuDispatchUnit& cu` (its only
+real use of it being `cu.loadProgram(...)`, which touches `program_`
+only, never `regs_`) - hypothesis was that this gave the tool reason
+to treat `regs_` as reachable/shared between `schedulerCore` and
+`compute_pipeline` (a sibling `DATAFLOW` task also deriving its `regs`
+reference from that same `cu` object), forcing conservative full
+partitioning even though `schedulerCore` never touches it.
+
+**Fix**: extracted `CuDispatchUnit::loadProgram()` into a free function
+`loadProgram(instr_word_t (&program)[MAX_PROGRAM_LEN], ...)` (matching
+the established free-function pattern - `assignSlot`/`launchSlots`/
+etc.). Narrowed `schedulerCore`'s signature from `CuDispatchUnit& cu`
+to `instr_word_t (&program)[MAX_PROGRAM_LEN]` - it now receives
+*only* the specific array it touches, nothing else reachable through
+it. Updated `gpgpu_top.cpp`'s call site and `test_gpgpu_top.cpp`'s two
+direct `schedulerCore(...)` calls accordingly. `CuDispatchUnit::
+loadProgram()` had exactly one real caller (verified by repo-wide
+grep before touching it) - safe to remove outright, no compat shim.
+
+**csim clean** (all 46 tests). **Real synthesis: zero effect, confirmed
+by directly inspecting the Storage Report** (not just the top-line
+BRAM count) - still exactly 32 separate `regs_N` entries, 64 BRAM,
+identical to before the change. This rules the hypothesis out
+definitively: `compute_pipeline`'s `regs` reference fragments
+identically whether or not `schedulerCore` ever shared the same
+object. **Reverted** (`git checkout` on all four touched files,
+confirmed clean, full 46-test regression re-passed after revert).
+
+**Real conclusion**: the fragmentation is not about sharing between
+sibling `DATAFLOW` tasks at all - it's intrinsic to how `regs` crosses
+into `compute_pipeline`'s *own* `DATAFLOW` task boundary specifically
+(a reference argument needing internal 32-wide parallel access,
+`executeALU`/`executeVector`'s `UNROLL`), independent of anything
+`schedulerCore` does. This is now the 4th real, well-reasoned attempt
+at this specific problem (two pragma variants in §16.21, one
+structural change here) to produce a result identical to the byte.
+Combined with §16.15/16.17/16.18's four zero-effect attempts on the
+memory_pipeline timing question, this class of `DATAFLOW`-boundary
+resource-binding decision has now resisted six independent, real,
+correctly-verified fix attempts across this session - a strong signal
+that further guessing at this specific lever (declaration-site
+pragmas, or removing shared-reference patterns between siblings) is
+unlikely to be productive. A genuinely different lever (e.g. moving
+`regs` to URAM, mirroring L2's §16.13 fix, sidestepping the BRAM
+fragmentation entirely rather than solving why it happens) or
+accepting the current cost is worth deciding deliberately rather than
+continuing to test declaration-site variations.
+
+### 16.23-16.24 Two more real attempts, both zero effect, closing the
+### `regs_` fragmentation thread at 70 BRAM (accepted, not fixed)
+
+Real UG1399 research (fetched directly, not searched-and-guessed)
+found the documented mechanism behind §16.20-16.22's 64-BRAM cost:
+*"If data is accessed in an arbitrary manner, the memory channel must
+be implemented as a PIPO with a default size that is twice the size of
+the original array"* - `regs` is accessed by arbitrary index
+(`slot_id`, thread, register number), so it qualifies. The same
+documentation set names `#pragma HLS SHARED` as the mechanism to
+disable that duplication: it marks an array as *one physical shared
+memory* with ports distributed to whichever tasks touch it, and
+explicitly does **not** duplicate the array, unlike the default PIPO
+channel. Presented to the user as "Option 1" against "Option 2" (make
+`regs` genuinely local to `compute_pipeline`, at the real cost of
+rewriting 13 of 14 HLS tests' white-box seed/inspect pattern - found
+and honestly corrected mid-investigation after initially
+under-scoping it as "2 tests"). User chose to pursue Option 1
+incrementally, "one step at a time."
+
+**§16.23 - `#pragma HLS SHARED variable=regs`, applied in
+`gpgpu_top.cpp` right where `regs` is declared as a local reference.**
+Correctness case for this specific array: `SHARED`'s real caveat is
+*"There is no checking for the SHARED pragma... you must ensure the
+functional correctness of the sharing"* - a real hazard in general,
+since it turns off HLS's own synchronization between tasks racing on
+the same memory. Checked first, directly against the code: `regs_` is
+touched *exclusively* by `compute_pipeline` in this `DATAFLOW` region
+(`schedulerCore` only calls `cu.loadProgram()`, which touches
+`program_`, never `regs_` - confirmed via `gpgpu_top.h`'s body, no
+`cu.regsArray()` call anywhere in `schedulerCore`). No second task
+races against it, so the caveat's actual hazard doesn't apply here.
+
+csim clean (all 3 `test_gpgpu_top` tests). **Real synthesis: zero
+effect** - Storage Report identical to baseline, 70 total / 64 in
+`compute_pipeline` / 32 `regs_N` entries at 2 BRAM each, confirmed by
+direct entry-by-entry diff, not just the summary line. Cause found
+directly in the Pragma Report, not inferred: `SHARED` is **deprecated
+in the installed Vitis HLS 2026.1** - `'shared' is deprecated, and it
+will be removed in future release`. Accepted syntactically, applied
+with no hard error, functionally inert. The mechanism was correctly
+identified; the tool version no longer honors it. No documented
+replacement found via AMD's current UG1399 pages.
+
+**§16.24 - one more real, better-targeted lever, found while reading
+the same Storage Report.** Each of the 32 `regs_N` entries costs 2
+BRAM at `Type: ram_t2p` (true dual port), `Impl: auto`. On UltraScale+,
+true-dual-port mode caps per-port width well under 32 bits, forcing a
+32-bit-wide TDP array across 2 physical BRAM primitives *independent
+of PIPO duplication or depth* - a real, distinct candidate cause from
+the DATAFLOW-channel theory. `executeALU`/`executeVector` read
+`regs[t][rs1]` and `regs[t][rs2]` in the same cycle (two reads), which
+is presumably why the tool auto-picked true dual port. Also newly
+noticed in the same Pragma Report: `compute_pipeline.cpp:309`'s
+long-standing `ARRAY_PARTITION variable=regs dim=2 complete` shows
+`Not implemented` inside this merged `DATAFLOW` build - turned out to
+be a non-issue, not a bug: the 32-way lane split still happens (32
+`regs_N` entries, depth 128 = `MAX_WARPS_PER_CU(4) x
+NUM_REGS_PER_THREAD(32)`, exactly matching the pragma's intent), via
+automatic partitioning inferred from the unrolled per-lane access
+pattern rather than the explicit directive. Worth noting: neither of
+§16.21's two `BIND_STORAGE` attempts had actually tested this array -
+both targeted `CuDispatchUnit::regs_`, a different C++ entity than
+`compute_pipeline`'s own post-partition `regs` parameter (the
+`regs_0..regs_31` sub-arrays only exist inside `compute_pipeline`,
+after its own `ARRAY_PARTITION` takes effect).
+
+**Fix attempted**: `#pragma HLS BIND_STORAGE variable=regs type=RAM_2P
+impl=BRAM`, added directly next to the existing `ARRAY_PARTITION` at
+`compute_pipeline.cpp:309` - the first attempt to target this specific
+entity. csim clean (all 14 tests across `test_gpgpu_top`,
+`test_compute_pipeline`, `test_pipeline_integration`). **Real
+synthesis: confirmed applied** (Storage Report shows `Type: ram_2p`,
+`Impl: bram`, `Pragma: yes` - the first of these attempts where the
+Pragma column ever read "yes"; the RTL module name itself changed,
+`..._RAM_2P_BRAM_1R1W` vs. the prior `..._RAM_AUTO_1R1W`), no
+scheduling conflict reported despite the two-simultaneous-reads risk
+flagged beforehand. **Result: zero effect anyway** - still 2 BRAM per
+lane, 64/70 total, byte-identical. This is a genuine, informative
+negative result: it disproves the port-width theory outright (a
+4096-bit array trivially fits one 18Kb BRAM primitive regardless of
+port count) and leaves DATAFLOW's mandatory PIPO duplication as the
+only surviving explanation - `BIND_STORAGE` controls how each buffer
+*copy* is implemented, not how many copies `DATAFLOW` decides to make.
+
+**Both changes reverted** (`gpgpu_top.cpp`'s `SHARED` pragma,
+`compute_pipeline.cpp`'s `BIND_STORAGE` override) - working tree
+confirmed to match the last commit exactly (`git diff --stat` on both
+files, empty), full 14-test regression re-passed clean after revert.
+
+**Real status, decided deliberately rather than found**: 10 real,
+independently-verified zero-effect attempts now span this problem
+class across the session (6 before this segment, plus §16.21's two,
+§16.22's one, and these two) - a striking, consistent null result
+across pragma placement, storage type, storage width, and structural
+sharing patterns. The one lever the documentation actually prescribes
+for this exact case (`SHARED`) is confirmed dead in Vitis HLS 2026.1,
+not merely untried. `config_dataflow -default_channel fifo` remains
+theoretically available but was not attempted: UG1399 states
+arbitrary-access arrays *must* be PIPO, not FIFO, for correctness, so
+forcing FIFO globally would trade a resource cost for a real
+correctness risk on an array that is genuinely randomly indexed -
+judged not worth testing against the alternative of simply accepting
+the current cost. **Decision: accept 70 BRAM for `gpgpu_scheduler`
+(NUM_CUS=1) as the current, understood cost - this specific thread is
+closed, not fixed.** Revisiting Option 2 (making `regs` genuinely
+local to `compute_pipeline`, at its real, scoped-out 13-test rewrite
+cost) remains available if the BRAM budget becomes a hard blocker
+later (e.g. the 2-CU question from §16.20), but is not pursued now.
+
+---
+
+### 16.25 2-CU BRAM revisited: real projection says it doesn't fit;
+### `MAX_WARPS_PER_CU` 4→8 chosen instead, confirmed free in real synthesis
+
+**2-CU BRAM, real-data projection.** §16.20/16.23's individually-measured
+component costs, combined for the first time: `memory_pipeline` at
+`NUM_CUS=1` is 50 BRAM, confirmed 80 at `NUM_CUS=2`. `gpgpu_scheduler`
+at `NUM_CUS=1` is 70 BRAM (64 of it `regs_`, per §16.20/16.23-16.24 -
+confirmed immovable). A second `CuDispatchUnit`+`compute_pipeline`
+pair would double `regs_` to ~128 BRAM (§16.23-16.24 showed this cost
+doesn't move regardless of storage type/binding), with AXI/slot-state
+overhead staying roughly flat (~6 BRAM) - projecting `gpgpu_scheduler`
+at `NUM_CUS=2` to **~134 BRAM alone**. Combined with `memory_pipeline`'s
+80: **~214 BRAM against a 144 device budget - a ~48% overshoot.** This
+is a projection, not a fresh full-system synthesis (`gpgpu_scheduler`
+doesn't actually support `NUM_CUS=2` in code - `gpgpu_top.cpp:55`
+hardcodes `cu_id_t cu_id = 0`), but it's built entirely from real,
+individually-verified numbers, not guesswork. The important part: BRAM,
+not LUT, is the real wall for 2 CUs - §16.16/16.17 showed LUT fits
+comfortably (77-79%) - and the `regs_` fragmentation this session spent
+10 real attempts trying to fix (§16.20-16.24) turns out to be the
+deciding factor, not a resource-report curiosity.
+
+Real multi-CU implementation was scoped (a new, dedicated global
+barrier-arbiter `DATAFLOW` task would be required - the golden model's
+`barrier_queue.size() == total_warps_` release condition is confirmed
+global across every CU, not per-CU, per `top.cpp:156-157` and
+`barrier_arbiter.h`'s own header comment - so `schedulerCore`'s current
+per-instance-local `BarrierState`, the exact fix that resolved SS16.6's
+DATAFLOW crash, cannot simply be duplicated per CU without breaking
+release semantics) but not started - superseded by a better lever
+found by asking a different question first, below.
+
+**Golden-model research (real source read, not the HLS side or this
+doc), three findings that reframed the question:**
+
+1. `ComputeUnit` (`models/systemc/src/compute_unit/compute_unit.h`) is
+   *not* the golden-model equivalent of `compute_pipeline.cpp` alone -
+   it's the whole per-CU container (warp state, ready/stalled queues,
+   register file, `shared_memory_`, SIMT control, scheduling,
+   dispatch). The HLS port's `schedulerCore` + `CuDispatchUnit` +
+   `compute_pipeline` split is the synthesizable decomposition of that
+   one class, forced by DATAFLOW legality (§16.6) - a naming
+   difference, not a scope divergence. Compliance is judged against
+   `ComputeUnit`'s combined behavior.
+2. `ComputeUnit::Config::max_warps`, `WarpScheduler::Config::
+   max_warps_per_cu`, and `GPGPUTop::Config::max_warps_per_cu` all
+   default to **4** in real, live C++ code - matching the HLS side's
+   pre-this-section `MAX_WARPS_PER_CU` exactly. `arch_config.yaml`
+   says 16, but there is no YAML loader anywhere in the golden model
+   (verified by grep) - that value is never actually read into a
+   running config, a documentation artifact rather than a live target.
+   Both sides treat the value as a freely adjustable capacity knob
+   (`std::vector`-sized in the golden model, no fixed-capacity
+   assumption in its scheduling logic) - increasing it is not a
+   deviation from the reference.
+3. `shared_memory_` is a single flat `std::vector<uint8_t>`, sized once
+   at construction, with no per-warp/per-block partitioning logic
+   anywhere in the golden model - no CUDA-style occupancy coupling
+   between shared-memory size and warp count exists in the reference.
+   Separately, worth flagging: the golden model's real code default is
+   **16KB** (`compute_unit.h:28`), not the 48KB this session's earlier
+   `shared_mem_` investigation attributed to it - that 48KB came from
+   `arch_config.yaml`, which (per finding 2) the golden model never
+   actually loads. Not acted on here - out of scope for this section -
+   but a real discrepancy worth resolving before shared-memory sizing
+   is revisited.
+
+**Given all three, tested `MAX_WARPS_PER_CU` 4→8 directly** (`hls_config.h`)
+as a cheaper alternative to a 2nd CU: same execution hardware, same
+32-lane SIMT width, more warps time-sharing it - matching how warps
+are already dispatched to `compute_pipeline` one at a time through a
+single stream, not spatially replicated.
+
+**A real bug surfaced immediately, not a stale test assumption**: two
+csim tests failed (`CuDispatchUnit.NoReadySlotWhenNoneAvailable`,
+`BarrierArbiter.NonUniformBarrierParticipationNeverReleases`), both
+with `nextReadySlot(slots)` returning `0` instead of the `INVALID_SLOT`
+sentinel. Root cause: `slot_id_t` (`hls_types.h:147`) was `ap_uint<3>`
+(0-7) - at `MAX_WARPS_PER_CU=4`, the sentinel `INVALID_SLOT=4` fit
+fine; at `MAX_WARPS_PER_CU=8`, the sentinel `INVALID_SLOT=8` needs a
+9th distinct value (0-8) that 3 bits can't hold, so it silently
+wrapped to 0. **Fixed**: widened `slot_id_t` to `ap_uint<4>` (0-15,
+headroom to `MAX_WARPS_PER_CU=14`). All 28 csim tests across the 5
+affected suites (`test_gpgpu_top`, `test_compute_pipeline`,
+`test_pipeline_integration`, `test_cu_dispatch_unit`,
+`test_barrier_arbiter`) pass clean after the fix.
+
+**Real synthesis, `gpgpu_scheduler` at `MAX_WARPS_PER_CU=8`**: `regs_`
+depth doubled exactly as expected (128→256, `32, 256, 1` in the
+Storage Report, confirming the change reached synthesis) - but **BRAM,
+LUT, DSP, and FF all stayed flat**: 70 BRAM (64 `compute_pipeline`,
+unchanged), 39% LUT, 8% DSP, 11% FF - byte-for-byte the same top-line
+numbers as the `MAX_WARPS_PER_CU=4` baseline. Two real reasons, both
+confirmed rather than assumed: the execution datapath isn't replicated
+per warp (warps dispatch sequentially through the same shared
+hardware, so LUT/DSP/FF don't scale with resident-warp count at all),
+and the existing 2-BRAM-per-lane allocation had headroom to absorb the
+doubled depth (256×32 = 8192 bits, still well under one BRAM
+primitive's capacity) without needing a 3rd BRAM per lane.
+
+**Decision: `MAX_WARPS_PER_CU` 4→8, kept.** A real, felt increase in
+per-launch resident-warp capacity (`NUM_CUS × MAX_WARPS_PER_CU`: 4→8)
+at zero measured hardware cost - independently worth keeping regardless
+of the 2-CU BRAM verdict below.
+
+**CORRECTION (§16.27): the "2-CU likely doesn't fit" claim two
+paragraphs up was wrong**, and the `regs_` fragmentation was never the
+hard blocker it was framed as here. The ~214/144 BRAM comparison in
+this section used the wrong denominator - `csynth.rpt`'s raw `BRAM`
+column is in `BRAM_18K` (18Kb) units, and this device's real available
+pool is **288** `BRAM_18K` (confirmed directly from Vitis HLS's own
+`<AvailableResources>` XML, not inferred), not 144 - 144 is the
+datasheet's *36Kb tile* count, a different, coarser unit for the same
+physical resource (each tile splits into two independent 18Kb
+primitives, which is exactly why Vitis budgets at the finer
+granularity). Corrected, real-data verdict: 2-CU BRAM is ~186-192/288
+(65-67%), fits comfortably - see §16.27 for the full correction and
+re-verification.
+
+---
+
+### 16.26 Shared memory 48KB→16KB - matching the golden model's real
+### default, not just freeing BRAM
+
+Real golden-model research (a dedicated read of `models/systemc/src/
+compute_unit/compute_unit.h`, not the HLS side or this doc) found that
+`shared_mem_`'s real, live-executed C++ default is **16KB**
+(`compute_unit.h:28`), not the 48KB this session's earlier
+investigation attributed to it. `arch_config.yaml`'s `shared_memory_
+size: 49152` (48KB) is never actually loaded - no YAML reader exists
+anywhere in the golden model (confirmed by repo-wide grep) - so it was
+always a documentation artifact, not the reference implementation's
+real behavior. The HLS side's prior `SHARED_MEM_SIZE_BYTES = 48 * 1024`
+was matched to that artifact, not the real golden model.
+
+**Fresh, current-source baseline synthesized first** (not trusted from
+older session notes): `memory_pipeline` at 48KB, `NUM_CUS=1` - 50
+BRAM_18K total, `shared_mem_` alone 24 of those (depth 12288 = 48KB/4,
+single `ram_2p` bank, cleanly `BIND_STORAGE`'d already - no DATAFLOW-
+channel complications like `regs_` has, since `shared_mem_` never
+crosses a task boundary the way `regs` does).
+
+**Changed to 16KB.** csim clean (11 tests across `test_memory_pipeline`,
+`test_pipeline_integration`, `test_gpgpu_top` - the test suite
+references `SHARED_MEM_SIZE_BYTES` symbolically throughout, not
+hardcoded byte literals, so this needed no test changes). Real
+synthesis: **34 BRAM_18K total, `shared_mem_` now 8** (depth 4096) -
+exactly 1/3 of 24, matching the 48KB→16KB ratio precisely - the same
+clean, linear scaling L1 cache showed under resizing (§16.21), unlike
+`regs_`'s resistant fragmentation. Real `NUM_CUS=2` number (temporarily
+set, reverted after measurement, matching this session's established
+methodology): **52 BRAM_18K total**, `shared_mem_` 16 (a single bank
+spanning both CUs, `[2][4096]` flattened to one `ram_2p` at depth 8192 -
+`shared_mem_[NUM_CUS][SHARED_MEM_WORDS_PER_CU]` was already correctly
+per-CU-indexed, so this scaled exactly as expected with no surprises).
+
+**Decision: kept.** Real, free 16-BRAM_18K win at `NUM_CUS=1` (50→34),
+and better golden-model fidelity as a bonus, not a tradeoff - no
+downside found. Independent of the 2-CU BRAM question either way (see
+§16.27's correction) - this was worth doing on its own merits.
+
+---
+
+### 16.27 A costly detour: `regs`→URAM chased a BRAM overflow that
+### turned out not to exist - real units error found, corrected, 2-CU
+### BRAM re-verified clean on plain BRAM
+
+**What `regs`/`regs_` is, for the record**: the per-thread register file
+for the whole CU - `reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP]
+[NUM_REGS_PER_THREAD]`, live RISC-V-style register values for every
+resident warp × every SIMT lane × every usable register, read on every
+ALU/vector/memory/branch operand and written on every result. Real data
+volume: `8 × 32 × 32 × 32b` = 32KB. The thing §16.20-16.24 measured at
+64 BRAM_18K for one CU's worth.
+
+**URAM tested as an alternative to fixing the fragmentation.**
+`#pragma HLS BIND_STORAGE variable=regs type=RAM_T2P impl=URAM` at
+`compute_pipeline.cpp`'s `regs` parameter (the correct entity this
+time, matching §16.24's finding). csim clean (14 tests). Real
+synthesis, `NUM_CUS=1`: **BRAM 70→6, `regs_` 0 BRAM / 32 URAM (50% of
+the device's 64)** - one URAM primitive per lane, not two, disproving
+the pre-test worry that the PIPO 2x-duplication cost (a `DATAFLOW`-
+channel property, already shown storage-type-agnostic in §16.24) would
+carry over and need 64 URAM. Real explanation: URAM's fixed 4096-row
+minimum depth is so much larger than `regs_`'s real per-lane depth (256
+rows, even doubled) that whatever duplication persists fits inside one
+oversized URAM primitive - where BRAM's much smaller, tightly-
+quantized primitives couldn't absorb the doubled depth without
+spilling into a second one.
+
+**Real, isolated 2-CU probe** (same methodology as §16.20's
+`CuDispatchUnit` probe - `gpgpu_top.cpp` doesn't structurally support
+`NUM_CUS=2`, `regs_` has no `NUM_CUS` dimension at all, so bumping the
+config value alone is a no-op for this measurement, caught and reverted
+before wasting a synthesis run on it): two independent `compute_pipeline`
+calls, matching `gpgpu_scheduler`'s real DATAFLOW shape, scoped
+deliberately to the resource-cost question alone (not the barrier-
+arbiter redesign, kept separately scoped-out). Real result with URAM:
+**64 of 64 URAM (100%)** - exact linear scaling, no surprise this time
+- which collides directly with `memory_pipeline`'s real 16-URAM L2
+requirement: 64+16 = 80 of 64 available, a genuine 16-URAM overshoot.
+
+**Tried resolving the conflict by moving L2 back to BRAM**
+(`cache_bank.h`'s `L2Cache` typedef, a single template-parameter flip,
+`DataStorage::URAM`→`BRAM`) to free URAM for `regs_`. csim clean. Real
+synthesis: **154 BRAM_18K for `memory_pipeline` alone** (L2 `data_`
+30 BRAM_18K/way × 4 ways = 120, the dominant cost) - no timing
+violation reappeared (the original `-3.37ns` from §16.13 was tied to
+URAM's specific read-cascade delay, absent once back on plain BRAM),
+but the BRAM cost alone is large enough that this lever was heading
+toward its own new problem.
+
+**Then the real error was found and fixed.** User pushback ("I'm not
+convinced") on a stated "2-CU doesn't fit, 214/144" claim led to
+checking the tool's own explicit numbers instead of a back-calculated
+percentage. `csynth.rpt`'s `BRAM` column and every raw number this
+session had compared against **144** turned out to be in **`BRAM_18K`**
+units - confirmed directly from Vitis HLS's own XML report
+(`<AvailableResources><BRAM_18K>288</BRAM_18K>...<URAM>64</URAM>
+</AvailableResources>`, not inferred or back-calculated). The Kria K26
+datasheet's "144 BRAM" is the *36Kb Block RAM Tile* count (confirmed
+against AMD's real product page); each tile splits into two
+independent 18Kb primitives (a real UltraScale+ architectural
+capability, UG573), which is exactly why Vitis budgets at the finer
+288-unit grain internally. **The correct comparison denominator for
+every raw BRAM number in this document from §16.20 onward is 288, not
+144.** URAM needed no correction (already 1:1 with the datasheet - 16/
+0.25=64, exact). LUT also needed no correction on a second challenge:
+the datasheet's "256K Logic Cells" and Vitis's real `117120` `<LUT>`
+figure are two different metrics by AMD's own design (Logic Cells is a
+synthetic cross-generation comparison figure, not a literal LUT count -
+confirmed against real ratios from AMD's other UltraScale+ devices,
+e.g. VU9P 2586K/1182K=2.19, SU200P 219K/100K=2.19, matching this
+device's own 262144/117120=2.238 almost exactly) - every LUT-based
+percentage this session already used the correct 117120 figure
+throughout, no change needed there.
+
+**Both `regs`→URAM and L2→BRAM reverted** (`compute_pipeline.cpp`,
+`cache_bank.h` - both confirmed clean, `git diff` empty, matching last
+commit exactly). Full csim regression re-passed after both reverts.
+
+**2-CU BRAM re-verified on plain BRAM with the correct 288 denominator.**
+Re-ran the isolated 2-CU probe (unchanged - `compute_pipeline.cpp` was
+back to default binding) with `regs_` back on BRAM: **136 BRAM_18K**
+(128 for `regs_`, exact 64→128 linear scaling, confirming the same
+clean per-lane behavior BRAM showed for URAM too; 8 for the probe's own
+program-loading overhead). `memory_pipeline`'s real `NUM_CUS=2` number
+from §16.26 (52, 16KB shared mem, L2 back on URAM - its original,
+undisturbed state) still applies unchanged. Combined `gpgpu_scheduler`
+projection: 128 (real `regs_`) + ~6-12 (baseline non-`regs_` overhead,
+real at `NUM_CUS=1`, estimated to scale modestly) ≈ 134-140. **Full
+2-CU total: ~186-192 of 288 (65-67%) - fits with ~96-100 BRAM_18K to
+spare.** LUT/DSP/FF all independently confirmed comfortable at 2-CU
+scale in earlier sections (§16.16/16.17), unaffected by any of this.
+
+**Real, final status**: `regs_`'s 64-BRAM_18K-per-CU fragmentation
+(§16.20-16.24) is still a real, measured, and honestly wasteful-looking
+cost for 32KB of actual data - that finding stands, unaffected by this
+correction. It was never the hard blocker it was framed as, though:
+**2-CU is BRAM-feasible on plain BRAM**, no URAM needed, no further
+`regs_` fix required for the resource-budget question specifically.
+What remains open, unaffected by any of this: actually *building* a
+working 2-CU system still needs the global barrier-arbiter redesign
+scoped out in §16.25 (a real `BarrierState` shared across CUs via a
+dedicated `DATAFLOW` task, mirroring `mem_arbiter`'s existing N:1/1:N
+pattern) - a real implementation task, not a resource question, and
+not started.
+
+---
+
+### 16.28 DSP headroom explored (real negative result): unsharing the
+### float/mul ops doesn't cut latency, costs real LUT, reverted
+
+Real DSP usage at `limit=8` (§16.16's tuned value, chosen for LUT/
+timing, not DSP): ~8% (1 CU) / ~18% (2 CUs projected) of the device's
+1248 - large headroom, unused because `limit=8` was never tuned
+*for* DSP. Real Bind Op Report check (`gpgpu_scheduler_synth_final8`'s
+`executeALU.verbose.bind.rpt`) confirmed which ops are actually DSP-
+bound: `fadd`/`fsub` (`FAddSub_fulldsp` core) and `fmul`
+(`FMul_maxdsp` core) - `mul` (integer, `VMUL`) is very likely DSP-bound
+too (DSP48E2's native integer multiplier), distinct from `add`/`sub`'s
+LUT-fabric binding (already established, §16.15 Phase 4). Also found
+in passing: `executeALU` had no explicit `ALLOCATION` limit on its own
+`fadd`/`fmul` cases (only `add`/`sub` were capped there) - yet the bind
+report showed them sharing anyway, evidence the tool applies some
+default sharing behavior even without an explicit pragma.
+
+**Tested**: raised `mul`/`fadd`/`fsub`/`fmul` to `limit=32` (fully
+unshared, one physical unit per lane - the natural `MAX_THREADS_PER_
+WARP` ceiling) in both `executeALU` and `executeVector`, added the
+previously-missing explicit `fadd`/`fmul` pragmas to `executeALU` for a
+controlled experiment, left `add`/`sub` untouched at `limit=8`. csim
+clean (14 tests).
+
+**Real synthesis result, `gpgpu_scheduler`**: BRAM unchanged (70).
+**DSP 108→480 (8%→38%), LUT 46163→70021 (39%→59%), FF ~27328→60018
+(11%→25%)** - a large resource cost. **Latency barely moved**:
+`executeALU` 12→14 cycles (slightly *worse*), `executeOneWarp` total
+8261→8233 cycles (0.3% - noise-level). No timing violations, Fmax
+unchanged (273.97MHz).
+
+**Real explanation**: `add`/`sub` stayed shared at `limit=8`
+throughout, unchanged - and those, not the float/mul ops, are what
+gate the unrolled-loop's actual critical path. Unsharing `fadd`/
+`fmul`/`mul` gave them more physical units but didn't touch the real
+bottleneck, so no latency win materialized. The LUT growth was
+unexpected going in (float/mul ops were assumed near-DSP-only) but
+real: each unshared unit carries its own control logic, pipeline
+registers, and operand routing in LUT fabric beyond just its DSP core.
+
+**Reverted** (`compute_pipeline.cpp`, confirmed clean via `git diff`,
+full csim regression re-passed). 59% LUT at 1 CU would have meant
+~118%+ at 2 CUs, breaking the 2-CU feasibility just re-confirmed in
+§16.27 - not a trade worth taking for zero throughput benefit. Real,
+informative negative result: DSP headroom is real, but this specific
+lever (raw `ALLOCATION limit=` on the float/mul ops) isn't how to
+spend it - the actual latency bottleneck lives elsewhere (most likely
+`add`/`sub`'s own sharing, or the unrolled decode loop's structure
+more broadly), not yet identified.
+
+---
+
+### 16.29 AXI interface, Step 1: `max_widen_bitwidth=128` applied (kept);
+### alignment fix identified but deferred - a real host-side decision, not
+### this project's to make yet
+
+**Scope reframing, stated explicitly by the user before this section's
+work began**: a colleague will handle full AXI/ARM SoC system
+integration (the real Vivado block design, driver, host-side buffer
+allocation). This project's job from here is narrower: keep the HLS
+design synthesizing cleanly and compatible with whatever integration
+decisions get made later, not resolve every system-level AXI detail
+now. Several items below are found-and-documented, not found-and-
+fixed, on purpose.
+
+**Real reference material found first** (`Evaluacion_Corta_3` on
+`origin/main`, not checked out locally - confirmed via `git ls-tree`
+and read via `git show`, not fetched into the working tree). Unlike
+`Evaluacion_Corta_2`'s pure-simulation TLM abstraction, this one has a
+real HLS accelerator (`grayscale_accel.cpp`) with genuinely tuned
+`m_axi` pragmas (`max_read_burst_length=64`,
+`num_read_outstanding=16`), plus a validated gem5+SystemC virtual
+prototype (an ARM64 CPU running a real bare-metal binary, driving the
+accelerator over TLM 2.0 through a register map -
+`REG_INPUT_ADDR`/`REG_OUTPUT_ADDR`/`REG_NUM_PIXELS`/`REG_CONTROL`/
+`REG_STATUS`) - almost the same shape as `gpgpu_scheduler`'s existing
+`s_axilite` control bundle (`program_ptr`/`initial_regs_ptr`/
+`program_len`/`total_warps`/`start`/`busy`/`done`/`fault`). Useful as
+validation that the current design's control-register shape is a
+reasonable one for real host integration, not just a HLS-side
+convenience.
+
+**Real, previously-unexamined tool output**: `burst.xml` (generated by
+every `csynth_design` run this whole session, never read until now).
+Two real findings for `gpgpu_scheduler`:
+1. `schedulerCore`'s `LOAD_PROGRAM_WORDS` loop (`program_ptr`, `gmem0`):
+   *"Could not analyze the loop bounds"* - no burst inferred, one word
+   at a time over AXI. Root cause: the loop's own bound is `program_len`
+   (a runtime parameter), not a compile-time constant.
+2. `compute_pipeline`'s `SEED_INITIAL_REGS` loop (`initial_regs_ptr`,
+   `gmem1`): burst *did* infer (1024 sequential reads, statically
+   bounded), but *"Could not widen since type i32 size is greater than
+   or equal to the max_widen_bitwidth threshold of 0"* - real cause,
+   confirmed via UG1399: the Vivado IP flow's own default for
+   `max_widen_bitwidth` is 0 (disabled); the Vitis Kernel flow's
+   default is 512 - we're on the Vivado IP flow (embedded target, no
+   PCIe host), so this needed an explicit override. `memory_pipeline`'s
+   `global_mem` port had the identical missed-widen finding.
+
+**Step 1 applied**: `max_widen_bitwidth=128` on all three `m_axi`
+ports (`program_ptr`, `initial_regs_ptr` in `gpgpu_top.cpp`;
+`global_mem` in `memory_pipeline.cpp`) - 128 bits matches AMD's own
+real sizing guidance for Zynq UltraScale+'s PL-side AXI HP/HPC port
+width, not a guess. Implemented via the same per-board macro pattern
+`memory_pipeline.cpp` already established for burst/outstanding tuning
+(`RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH`, defined 128 in
+`hls/config/kv260.h`, falls back to 0/disabled with no board macro) -
+`gpgpu_top.cpp` didn't have this pattern yet for its own `m_axi` ports,
+added consistently. csim clean (`#pragma HLS INTERFACE` has no csim
+effect - g++ ignores it - but rebuilt and re-passed anyway;
+`test_gpgpu_top` doesn't actually compile `gpgpu_top.cpp` itself, only
+exercises the header-only `schedulerCore()`, so real synthesis is the
+only thing that exercises this pragma at all).
+
+**Real synthesis re-check, `burst.xml` read directly again (not
+trusted from the summary line)**: the `threshold of 0` blocker is
+gone on both ports - confirms `max_widen_bitwidth=128` genuinely
+applied. But a **new, different** blocker appeared in its place on
+both: *"Could not widen since type i32 size is greater than or equal
+to alignment 1(bytes)"*. Resources unchanged on both kernels (70 BRAM/
+111 DSP/46157 LUT for `gpgpu_scheduler`; 34 BRAM/16 URAM/4352 LUT for
+`memory_pipeline`) - expected, this pragma only affects AXI transfer
+shape, not on-chip resource usage.
+
+**Real fix identified, not applied**: `config_interface
+-m_axi_alignment_byte_size <N>` (confirmed exact syntax via UG1399) -
+a **project-wide TCL setting** (`hls/constraints/kv260.tcl`, shared
+across every kernel), not a per-port pragma option. Default in the
+Vivado IP flow is 1 byte (the pessimistic assumption currently
+blocking the widen); the Vitis Kernel flow defaults to 64. Setting it
+to 16 (matching the 128-bit/16-byte widen target) would unlock the
+widen fully.
+
+**Why deferred rather than applied**: this setting is a real claim
+about the *host* side - "every pointer passed into this kernel is
+guaranteed at least 16-byte aligned in DRAM." That's a property of
+however the eventual host/runtime allocates buffers, which this
+project has not decided (the real Vivado block design and driver
+layer don't exist yet - the colleague's scope, per this section's
+opening). Setting it now on an unverified assumption risks a real
+hardware correctness bug (misaligned burst access) that neither csim
+nor C/RTL co-simulation would catch, since it depends on host
+allocation behavior neither exercises. **Decision: leave
+`m_axi_alignment_byte_size` at its default (1, safe/conservative),
+documented here as an explicit, deferred decision for whoever owns
+the real system integration** - not a gap that was missed, a boundary
+deliberately left for the information that will actually settle it.
+
+**Net state**: `max_widen_bitwidth=128` kept (real, harmless, and
+already-useful groundwork - it does nothing until alignment is
+resolved, but costs nothing either). `m_axi_alignment_byte_size`
+explicitly deferred. `program_ptr`'s missed burst (loop-bounds cause)
+remains open - see the next section for Step 2's real trade-off
+analysis before deciding whether to fix it.
+
+---
+
+### 16.30 AXI interface, Step 2: `program_ptr`'s missed burst - real
+### trade-off analysis, deferred (not a gap, a boundary)
+
+**Scope note, same as §16.29**: a colleague owns full AXI/ARM SoC
+system integration going forward. This project's job is to keep the
+HLS design synthesizing cleanly and staying compatible with whatever
+integration decisions get made later - not to resolve every possible
+AXI optimization pre-emptively. This section documents a real,
+considered "leave it" decision, not an unexamined gap.
+
+**The real, documented fix exists** (UG1399, "Working with Variable
+Loop Bounds", found in §16.29's research): `schedulerCore`'s
+`LOAD_PROGRAM_WORDS` loop (`cu_dispatch_unit.h`'s `loadProgram()`)
+fails burst analysis because its own bound is `program_len`, a runtime
+parameter -
+
+```cpp
+// Current shape - fails burst analysis (the bound itself is runtime):
+for (uint32_t i = 0; i < program_len; ++i) {
+    if (i >= uint32_t(MAX_PROGRAM_LEN)) break;
+    program_[i] = program_ptr[i];
+}
+
+// Documented fix - static bound, runtime check moved inside the body:
+for (uint32_t i = 0; i < MAX_PROGRAM_LEN; ++i) {
+    if (i < program_len) {
+        program_[i] = program_ptr[i];
+    }
+}
+```
+
+**Why it's not applied - a real, reasoned trade-off, not a difficulty
+excuse.** Two independent real numbers argue against it:
+
+1. **Rough transfer-time estimate** (no precise post-implementation
+   timing exists for this board yet - explicitly an estimate, not a
+   measurement): today's unbursted transfer costs roughly 10-20 cycles
+   *per word*, so a realistic ~10-instruction kernel (`hls_config.h`'s
+   own comment: golden model's `kernel_programs.h` kernels run ~6-12
+   instructions) costs on the order of 100-200 cycles total. The fixed-
+   bound version always transfers `MAX_PROGRAM_LEN` (256) words - and
+   since `program_ptr` has no `max_read_burst_length` set (unlike
+   `memory_pipeline`'s `global_mem`, which does), Vitis HLS's default
+   16-beat burst cap would split that into 256/16=16 separate bursts,
+   each still paying its own setup overhead - plausibly landing in the
+   same range as today's cost, or worse, for small kernels. The fix
+   trades "small but proportional to real program size" for "always
+   the maximum," which is not obviously a win at this project's real
+   kernel sizes.
+2. **`MAX_PROGRAM_LEN=256` is itself an open, unsettled placeholder**
+   (`hls_config.h`'s own comment: *"not yet sized against a real
+   kernel corpus"*). Any burst-length/trip-count decision built on it
+   now would be optimized against a number nobody has actually
+   committed to - real risk of doing work that gets invalidated the
+   moment real kernel sizes are decided.
+
+**Decision: deferred, not fixed.** The current code already
+synthesizes cleanly - the missed burst is an `INFO`-level tool message,
+not an error, and blocks nothing. Fixing it now would mean committing
+early to a burst-shape decision entangled with an unrelated, unsettled
+sizing question, for a trade-off that's plausibly unfavorable at
+today's real kernel sizes anyway.
+
+**For whoever picks this up next** (the AXI/ARM integration colleague,
+or whoever eventually sizes `MAX_PROGRAM_LEN` against real kernels):
+1. Resize `MAX_PROGRAM_LEN` against a real kernel corpus first (T034,
+   already flagged as future work in `hls_config.h`) - this is the
+   actual prerequisite, not the burst fix itself.
+2. Once that's settled, re-run the transfer-time comparison above with
+   the real max size (not 256) and a real `max_read_burst_length`
+   value for `program_ptr` (currently unset - add one, sized to the
+   real program length, mirroring `memory_pipeline.cpp`'s existing
+   per-board macro pattern for `global_mem`).
+3. Only then apply the documented static-bound-plus-conditional
+   rewrite above if the real numbers favor it - the code pattern
+   itself is simple and low-risk; the *decision* of whether it's worth
+   applying depends entirely on numbers this project doesn't have yet.
+4. `initial_regs_ptr`'s burst already passes (§16.29) - its widen is
+   blocked purely by the alignment question (§16.29's deferred
+   `m_axi_alignment_byte_size` decision), not a loop-bounds issue like
+   this one. The two ports have different blockers; don't conflate
+   them when revisiting either.
+
+---
+
+### 16.31 AXI interface, Step 3: `memory_pipeline`'s outstanding-
+### transaction depth 4/2→16/16, real cost confirmed negligible
+
+`hls/config/kv260.h`'s `num_read/write_outstanding` values (4/2) carried
+their own comment flagging them as **"PROVISIONAL: not validated
+against a real Vitis HLS C-synthesis run"** - written when `vitis_hls`
+wasn't available in the authoring environment. That's been untrue for a
+while (real synthesis has been running all session) but the comment
+was never updated - fixed now as part of this section, not a separate
+cleanup.
+
+**Tested raising both to 16** (matching `Evaluacion_Corta_3`'s real,
+working `grayscale_accel.cpp` reference, which uses
+`num_read_outstanding=16` successfully). csim unaffected (`kv260.h` is
+never included in plain csim builds - `RISCV_GPGPU_BOARD_KV260` is
+never defined there - confirmed via a no-op rebuild, expected and
+correct, not a missed step).
+
+**Real synthesis result, `memory_pipeline`**: BRAM 34→34, URAM 16→16,
+DSP 0→0, **FF 2665→2669 (+4), LUT 4352→4356 (+4)** - negligible, noise-
+level cost against a 234240/117120 budget. No timing violation, Fmax
+unchanged (273.97MHz). Interface summary confirms the tool actually
+applied it (`Num Read Outstanding=16, Num Write Outstanding=16`), not
+silently ignored.
+
+**Real limitation, stated plainly**: this session cannot directly
+measure the *throughput* benefit of deeper outstanding-transaction
+depth - that requires modeling real DRAM contention under concurrent
+in-flight requests, which neither csim nor the `csynth` resource/
+latency estimate does (no post-implementation or real-board timing
+exists for this project yet). What's confirmed is the *cost*:
+negligible. Combined with a real, working reference using the same
+value, there's little downside to keeping it even without a directly-
+measured upside.
+
+**Decision: kept.** `hls/config/kv260.h` updated to 16/16, comment
+corrected to describe this as validated (real synthesis, real cost
+measured) rather than provisional/unvalidated.
+
+---
+
+### 16.32 Pipeline stages: `memory_pipeline`'s II=4→1 re-verified - the
+### old resource concern is gone, the latency conclusion isn't
+
+Prompted by the BRAM correction (§16.27): could `memory_pipeline`'s
+`MEMORY_PIPELINE_LOOP` `PIPELINE II=4` (SS16.13, chosen specifically to
+avoid a real BRAM/URAM overflow at `II=1`) now be reverted to `II=1`
+for better latency, given the device turned out to have double the
+real BRAM budget we'd been assuming?
+
+**Real re-test, current source** (16KB shared mem, L2 on URAM,
+outstanding=16/16, widen=128 - all this session's changes, not the
+config SS16.13 was written against): `II=1` synthesized to **34 BRAM /
+16 URAM - identical to `II=4`**, not the 105 BRAM/128 URAM (a real,
+hard URAM overflow independent of the BRAM unit miscalibration) the
+original comment describes. Whatever caused that fragmentation no
+longer reproduces - most likely a Vitis HLS tool-version difference
+(this project moved from 2023.1 to 2026.1 since SS16.13 was written),
+though the exact mechanism wasn't isolated. **This part of the
+original concern is real and gone - a genuine, free correction, unlike
+§16.27's BRAM-unit correction, this one wasn't a measurement error,
+something in the tool or design actually changed.**
+
+**But the latency conclusion still holds, for a different reason.**
+`MEMORY_PIPELINE_LOOP` shows `Pipelined: no` regardless of the
+requested `II` - its body calls `loadWord()` (90 cycles) or
+`storeWord()` (13 cycles), each a real, multi-stage call that must
+fully complete before the next outer-loop iteration can start. The
+outer loop's requested `II` was never the actual constraint - the real
+cadence is bound by the inner calls' own latency (memory-dependency-
+bound), exactly matching SS16.13's original conclusion, just no longer
+for a resource-avoidance reason.
+
+**Decision: kept at `II=4`.** Zero cost either way today (confirmed,
+not assumed), and zero latency benefit from `II=1` either way -
+switching would trade a well-understood, documented value for a
+functionally identical one, for no reason. Comment updated in-source
+to record this re-verification rather than leave the stale SS16.13
+numbers standing unqualified.
+
+**Real, useful side-finding for future pipeline-stage work**: since the
+loop's real bottleneck is `loadWord`/`storeWord`'s own internal
+latency, not the outer loop's scheduling, any future latency work on
+this specific loop should target *those* functions' internal
+structure (their own `PIPELINE II=1` sub-loops, `FETCH_LINE_WORDS`/
+`FILL_WORDS`, or the L1/L2 lookup chain within them) rather than the
+outer dispatch loop - the outer loop was never the real constraint.
+
+---
+
+### 16.33 `readLine()`/`fillLine()` UNROLL tested for L1 (BRAM only) -
+### a real, decisive negative result on both axes, reverted
+
+Following SS16.32's finding, `cache_bank.h`'s `readLine()`/`fillLine()`
+were the next real candidate: both are deliberately `PIPELINE`, not
+`UNROLL`, with the tradeoff explicitly reasoned in a T024-era comment
+(unrolling needs `data_`'s `WORDS_PER_LINE` dimension fully partitioned
+too, on top of the existing `WAYS`-dimension partition - `WAYS ×
+SETS_PER_WAY × WORDS_PER_LINE` independent single-word memories).
+Written under the same pre-SS16.27 pessimistic BRAM assumption as
+`II=4` - worth real-testing whether it still holds.
+
+**Tested L1 only** (`DATA_IMPL == DataStorage::BRAM`), via `if
+constexpr` branching on the same template parameter that already
+separates L1 from L2 in this class - L2 (`URAM`, `WAYS=4,
+SETS_PER_WAY=512`, already burned once this session via `regs_`'s
+URAM granularity surprise, SS16.27) deliberately left untouched.
+`#pragma HLS ARRAY_PARTITION variable=data_ dim=3 complete` added
+(BRAM branch only) alongside `UNROLL`ing both loops. csim clean (11
+tests).
+
+**Real synthesis result - a strict loss, not a tradeoff:**
+
+| | `PIPELINE` (before) | `UNROLL` (L1 only) |
+|---|---|---|
+| BRAM | 34 | **91 (+57)** |
+| LUT | 4356 (3%) | **52215 (44%, +47859)** |
+| FF | 2669 | **13047 (+10378)** |
+| `loadWord` total latency | 90 cyc | **117 cyc (worse)** |
+| L1's `fillLine` latency | 36 cyc | **63 cyc, `Pipelined: no` (worse)** |
+
+Unrolling didn't even deliver the latency win it was supposed to buy
+with the extra resources - the unrolled `fillLine` never compressed
+toward 1 cycle the way full unrolling should; something (most likely
+the runtime `victim`/`way` selection into the now fully-partitioned
+array - `way`/`victim` are runtime values, not unrolled/compile-time
+indices, so the tool still needs a real mux/arbitration path across
+the partitioned banks) kept it sequential anyway. Paid the full
+resource cost of 32-way partitioning for zero benefit and a real
+latency regression.
+
+**Reverted** (`git checkout --` on `cache_bank.h`, confirmed clean via
+`git diff --stat`, full csim regression re-passed - one transient,
+unrelated flake in `test_gpgpu_top`'s threaded spin-wait harness on
+re-run, confirmed not a regression by re-running 2 more times clean;
+pre-existing test infrastructure sensitivity, not caused by this
+change, source was already back to the exact last-committed state
+before the flake occurred).
+
+**Real conclusion**: the original `"PIPELINE, not UNROLL"` decision
+was correct for reasons beyond the BRAM-cost framing its comment gave -
+the SS16.27 BRAM correction doesn't actually unlock this lever the way
+it looked like it might. Unlike SS16.32's `II=4` re-verification
+(where the old concern turned out to be gone), this one's old concern
+turns out to still be real, just for a fuller set of reasons than
+originally documented. `readLine()`/`fillLine()` stay `PIPELINE II=1`
+for both L1 and L2 - not revisiting L2 given L1 alone already produced
+a clear, decisive "no."
+
+---
+
+### 16.34 Cache/shared memory, real limitation found first: hit-rate
+### benefits are unverifiable; the L1 hit-path latency is fine as-is
+
+**Real limitation, found before proposing anything**: the golden
+model's cache (`MemoryHierarchy`) is a plain `std::map` - unbounded,
+fully-associative, no real capacity or miss behavior at all beyond
+first-touch (`hls_config.h`'s own comment already says as much - it's
+*why* this project's correctness bar is explicitly "functional (data)
+parity, not hit-rate parity", per docs/hls/interfaces.md SS7).
+Combined with no real kernel benchmark corpus existing yet (T034,
+still future work - the same prerequisite that blocked SS16.30's
+`program_ptr` decision), there is no reference hit-rate to compare
+against and no realistic access pattern to test one with. Any change
+to `L1_WAYS`/`L1_SIZE_BYTES`/`L2_WAYS`/`L2_SIZE_BYTES` aimed at
+"fewer misses" is unverifiable right now, not just untested - real,
+not hypothetical, so raised before spending any synthesis effort on
+it.
+
+**What's real and testable instead: the L1 hit-path latency** (the
+common case, unlike the miss path SS16.32/16.33 already investigated).
+Traced `loadWord`'s real FSM directly (`loadWord.verbose.sched.rpt`,
+not the summary Latency column, which reflects the miss path's worst
+case): the L1-hit branch (`lookup()`'s result checked at State 3) jumps
+straight to States 27-28 (increment `l1_hits_`, return) - **~5 states
+total for a hit**, versus the miss path's return at State 20 (which
+itself expands into the ~90-cycle total from SS16.32, once
+`FETCH_LINE_WORDS`/`fillBothCaches`'s own multi-cycle sub-loops are
+counted). Confirms the early-return C++ (`if (l1r.hit) {...; return
+l1r.data;}`) genuinely produces a short, fast hardware path - not a
+worst-case-only timing model silently taxing every access. **The
+common case is already efficient; no action needed here.** Also
+confirms SS16.32/16.33's miss-path focus was correctly targeting the
+actual slow path, not neglecting a hidden hit-path cost.
+
+**Status**: hit-path latency question closed (good news, no fix
+needed). WAYS/size resource-cost groundwork (real cost, unverifiable
+benefit until T034) not yet started - next candidate if this thread
+continues.
+
+---
+
+### 16.35 L1 and shared memory 16KB→32KB - real, clean, kept; `L1_WAYS`
+### 2→4 tried first, reverted (test-rework cost, not worth it)
+
+**`L1_WAYS` 2→4 tried first** (matching L2's associativity), real cost
+not yet verified - caught a real, deterministic csim failure before any
+synthesis: `test_memory_pipeline.cpp`'s `GlobalMissThenL1HitThenL2
+RefillsL1` hardcodes addresses tuned to `L1_WAYS=2`'s exact set-index
+width (its own comment already said so). Not a bug in `cache_bank.h`'s
+generic `SetAssocCache` template (already runs at `WAYS=4` for L2,
+unaffected) - purely a test-address assumption. Explicitly decided not
+to chase this further ("leave things as they are... increase l1 and
+shared memory size") - reverted `L1_WAYS` back to 2 without fixing the
+test, to avoid an open-ended optimization/rework loop for a benefit
+that's unverifiable anyway (SS16.34's finding: no real kernel corpus
+exists to test hit-rate against).
+
+**`L1_SIZE_BYTES` and `SHARED_MEM_SIZE_BYTES` both 16KB→32KB instead** -
+`WAYS` unchanged, so no associativity-driven test rework; a capacity
+increase for more per-kernel headroom, not a fidelity match this time
+(unlike SS16.26's 16KB shared-mem step, which matched the golden
+model's real default - this step is a deliberate capability increase
+past that point, now that real BRAM budget comfortably allows it,
+SS16.27).
+
+**Same test broke again anyway**, for a related but distinct reason:
+even with `WAYS` fixed, doubling `L1_SIZE_BYTES` doubles
+`L1_SETS_PER_WAY`, widening the real set-index bit field by one bit
+(6→7 bits) - the same class of hardcoded-address fragility as the
+`WAYS` case, just triggered by a different config axis. Given the
+"leave things as they are" instruction was specifically about not
+chasing the `WAYS` associativity question further (an unverifiable-
+benefit rabbit hole), not about ignoring real, deterministic test
+breaks - fixed this one with a minimal, direct edit (three new literal
+addresses matching the real 7-bit set field, computed by hand;
+verified: same L1 set, three distinct L2 sets, same as the original
+test's intent) rather than a broader parameterized rewrite. csim clean
+(5/5 `test_memory_pipeline`, full 11-test regression across
+`test_memory_pipeline`/`test_pipeline_integration`/`test_gpgpu_top`).
+
+**Real synthesis, `memory_pipeline`**: **34→50 BRAM_18K (+16)**, both
+contributors scaling exactly linearly as expected (`shared_mem_` 8→16,
+L1's `data_` array 8→16 - same clean, predictable behavior L1 showed
+under resizing before, SS16.21/16.26). No timing impact, Fmax
+unchanged (273.97MHz), URAM unaffected (L2 untouched). Combined with
+`gpgpu_scheduler` (70, unaffected by either change): **120/288 (42%)**
+- comfortable headroom remains.
+
+**Decision: kept.** Real, clean, low-risk capacity increase for both
+L1 and shared memory, real cost confirmed modest against the real
+budget. `L1_WAYS` stays at 2 - not revisited, per the explicit decision
+above to not chase it given the unverifiable-benefit ceiling this
+whole "cache/shared memory" thread ran into (SS16.34).
+
+---
+
+### 16.36 `L1_WAYS` 2→4 revisited and done properly - real cost
+### confirmed cheap, test fixed at its root cause not just its symptom
+
+SS16.35's `L1_WAYS` attempt was reverted mid-session specifically to
+avoid an open-ended rework loop, not because of any real problem with
+the change - explicitly revisited here once that concern no longer
+applied.
+
+**Real fix, this time addressing the test's actual structure, not just
+its literal addresses.** `test_memory_pipeline.cpp`'s
+`GlobalMissThenL1HitThenL2RefillsL1` needs `L1_WAYS` *filler*
+insertions (not a fixed 2) to trigger the round-robin eviction it
+checks - the loop is now `for (int i = 0; i < L1_WAYS; ++i)` with the
+filler addresses' count matching, plus a `static_assert(L1_WAYS == 4,
+...)` guarding the hand-computed hex addresses so a future `L1_WAYS`
+change fails loudly at compile time instead of breaking silently a
+third time. csim clean (11/11).
+
+**Real synthesis, `memory_pipeline`**: **50→51 BRAM_18K (+1)**, FF
++69, LUT +254 - essentially free. No timing impact, Fmax unchanged.
+Combined total at the time (with `gpgpu_scheduler`'s then-current 70):
+121/288 (42%), still comfortable.
+
+**Decision: kept.**
+
+---
+
+### 16.37 Real `NUM_CUS=2` implementation - the barrier-arbiter
+### redesign, done incrementally with real verification at every step
+
+The one item scoped out and left unstarted since SS16.25: real,
+working 2-CU support, not just a resource-budget decision. Built
+incrementally, with real csim/synthesis verification after each step
+(explicitly requested - "perform testing each step of the way to
+identify when something breaks immediately"), not as one large,
+unverified change.
+
+**The core problem, unchanged since SS16.25**: `BarrierState` is
+inherently kernel-wide (release/completion depend on every CU's warps
+together), so it can't be duplicated per-CU the way `schedulerCore`'s
+own `WarpSlot[]` correctly is - each CU deciding release "locally"
+would release its own warps without waiting for the others, silently
+wrong.
+
+**The fix: `barrierCore`** (`barrier_arbiter.h`), the one genuinely
+new task. Owns the single, real `BarrierState` and is now the sole
+source of the top-level `busy`/`done`/`fault` signals - `schedulerCore`
+no longer owns any of the three. Communicates with each CU's
+`schedulerCore` via two `NUM_CUS`-sized stream arrays, mirroring
+`mem_arbiter`'s already-proven N:1/1:N array-of-streams shape
+(SS10.9): `events_in[NUM_CUS]` (each CU forwards the `WarpStatusCode`
+it already extracted from its own `status_in` for its own
+`recordResult()` call - relaying, not re-deriving), `signal_out
+[NUM_CUS]` (`barrier_signal_t { release; kernel_done; }` broadcasts).
+Independently observes the same `start`/`total_warps` every CU's own
+`schedulerCore` also observes (matching how `program_ptr`/
+`program_len` are already broadcast, not routed, SS10.8) - no explicit
+"launch" message needed from any CU; each CU's `schedulerCore`
+independently recomputes the identical launch-fault condition
+(`total_warps > NUM_CUS*MAX_WARPS_PER_CU`) before self-launching, a
+pure stateless check every caller derives the same way.
+
+**Step 1 - pure addition** (`barrierCore`/`barrier_signal_t` added to
+`barrier_arbiter.h`, nothing else touched). Full 33-test regression
+unaffected, confirming no syntax/logic issue in the addition itself
+before anything depends on it.
+
+**Step 2 - `schedulerCore`'s signature updated, `NUM_CUS` still 1.**
+Removed `busy`/`done`/`fault` and the local `BarrierState`; added
+`cu_id` (no longer hardcoded `cu_id_t(0)`) and the two new stream
+parameters. `gpgpu_top.cpp`'s single call site updated to wire a real
+`barrierCore` even at `NUM_CUS=1` - isolates "does the new
+`barrierCore` mechanism work at all" from "does real multi-instance
+replication work," on purpose. `test_gpgpu_top.cpp`'s two existing
+tests updated to the new signature plus a `barrierCore` thread. Full
+33-test regression clean - functionally identical behavior to before,
+now routed through the new architecture.
+
+**Step 3 - real synthesis, still `NUM_CUS=1`.** Confirms DATAFLOW
+legality holds with `barrierCore` added, before adding the real
+complexity of multi-instance replication. Real cost: **+1 FF, +263
+LUT** - `barrierCore`'s own control logic and streams, BRAM/DSP
+unchanged (70/111). Clean, no violations.
+
+**Step 4 - `NUM_CUS` 1→2, real instantiation.** `gpgpu_scheduler`'s
+body rewritten with two explicit `CuDispatchUnit`/`schedulerCore`/
+`compute_pipeline` instances (`cu0`/`cu1`, `cu_id0=0`/`cu_id1=1`,
+`dispatch_out0`/`dispatch_out1`, etc.) - DATAFLOW's `[HLS 214-113]`
+canonical-form rule (process-call arguments must be plain declared
+variables) means real multi-CU support is explicit, named duplication,
+not a runtime loop over an array of task instances; if `NUM_CUS` ever
+needs to grow past 2, this section needs the same explicit treatment
+repeated, not a config bump alone. `barrierCore` itself stays
+`NUM_CUS`-generic (takes the whole array), only the per-CU task calls
+needed duplicating. `initial_regs_ptr`/`program_ptr` needed no change -
+both already broadcast/global-warp-id-indexed in a way that's already
+correct for any CU count. `mem_arbiter` needed no change - already
+`NUM_CUS`-generic.
+
+**Real bug caught immediately, exactly as the incremental-testing
+request intended**: `test_gpgpu_top.cpp`'s
+`TwoWarpBarrierKernelDrivenEntirelyByTheScheduler` deadlocked (a real,
+clean failure at its own 1,000,000-spin assertion, not a silent hang)
+the moment `NUM_CUS` became 2. Root cause: `assignSlot()`'s real
+formula (`w = cu_id + slot*NUM_CUS`) sends warp 0 to CU 0 and warp 1 to
+CU 1 once `NUM_CUS>1` - a test only instantiating CU 0 never dispatches
+warp 1, and `barrierCore` (real `total_warps=2`) waits forever for an
+event that can never arrive. **Fixed by making this the real cross-CU
+test** (renamed `TwoWarpBarrierKernelDrivenAcrossTwoRealCUs`) - both
+CUs now genuinely instantiated, each processing its own one warp,
+synchronizing through the one real shared `barrierCore`. This
+simultaneously fixed the break and delivered the actual new functional
+coverage the redesign needed (HLS synthesis alone never checks
+correctness) - not a separate, duplicate test.
+
+**A second, more severe class of the same root cause, found in the
+same regression pass**: `test_cu_dispatch_unit.cpp` (4 tests) and
+`test_barrier_arbiter.cpp` (4 tests, one of them a **real stack-
+smashing crash** - `nextReadySlot()` correctly returning `INVALID_SLOT`
+once a test's hardcoded `launchSlots(..., warp_id_t(2))` no longer
+produced 2 real `READY` slots under `NUM_CUS=2`, and the test's own
+`dispatchAndRecord()` helper indexing `slots[INVALID_SLOT]` = `slots[8]`
+on an 8-element array with no bounds check). All eight fixed at their
+real root cause: `launchSlots`'s real, `NUM_CUS`-dependent output
+(slot *s* on `cu_id=0` holds global warp_id `s*NUM_CUS`, not literally
+`s`) was hardcoded into these tests' setup and expected values,
+correct only when `NUM_CUS==1`. Fixed by expressing the needed
+`total_warps` and expected `warp_id`s in terms of the real `NUM_CUS`
+constant (`(K-1)*NUM_CUS+1` for K desired `READY` slots) rather than
+hardcoding new literals for `NUM_CUS=2` specifically - the same
+literal-vs-derived-from-config fragility already seen twice this
+session (SS16.35's cache-address breaks), fixed the robust way this
+time so a *third* `NUM_CUS` change won't repeat it. Full 33-test
+regression clean after all fixes, including the previously-crashing
+suite (re-run three times clean, no flakiness).
+
+**A benign, understood csim-only artifact, investigated not ignored**:
+`test_gpgpu_top`'s new cross-CU test prints `WARNING [HLS SIM]:
+hls::stream 'barrier_signal_t'... contains leftover data, which may
+result in RTL simulation hanging`. Traced to the test harness's
+detached, never-joined threads (`schedulerCore`/`barrierCore` are
+free-running kernels that never return, matching every other test in
+this file) - the main test thread observes `done` and returns almost
+immediately, sometimes before a detached CU thread has scheduled time
+to read `barrierCore`'s final signal token before process teardown.
+Confirmed this can't be a real hardware hazard: real hardware never
+"exits" the way a test process does, so every written token eventually
+gets read given enough clock cycles - there is no analogous finite-
+process-teardown race in the actual synthesized design. The functional
+assertions (golden-model register/memory values, both CUs) all pass
+correctly before this teardown-timing artifact occurs.
+
+**Real synthesis, final combined `NUM_CUS=2` system - real numbers,
+not projected:**
+
+| | `gpgpu_scheduler` | `memory_pipeline` | Combined | vs budget |
+|---|---|---|---|---|
+| BRAM_18K | 136 | 86 | 222 | 222/288 = **77%** |
+| DSP | 222 | 0 | 222 | 222/1248 = **18%** |
+| FF | 59106 | 2871 | 61977 | 61977/234240 = **26%** |
+| LUT | 92101 | 5428 | 97529 | 97529/117120 = **83%** |
+| URAM | 0 | 16 | 16 | 16/64 = **25%** |
+
+No timing violations. `gpgpu_scheduler`'s Fmax dropped modestly
+(273.97→262.05MHz, still comfortably above the 200MHz/5.0ns target) -
+a real, if small, cost of the added barrier-signal routing across 2
+CUs, not a violation. LUT is the tightest resource at 83% (~19,600 LUT
+of real margin) - closely tracking the earlier projection (§16.27:
+~65-67%, made before this session's L1/shared-mem size increases added
+real LUT/BRAM cost on top of the pure `regs_`/scheduler baseline that
+projection was based on) but now a real, confirmed number rather than
+one built from separately-measured components.
+
+**Decision: `NUM_CUS=2`, kept, real and working** - not a projection,
+not a resource-budget decision alone. `hls_config.h` updated to
+describe this as decided. This closes out the last item scoped out in
+SS16.25.
+
+---
+
+### 16.38 System block diagram - current, final design
+
+Real structure as of SS16.37's implementation - two real, separate
+top-level IPs (`gpgpu_scheduler`, `memory_pipeline`), connected by a
+stream pair that a real Vivado block design would wire together
+directly (both are `axis` ports on their respective IPs, not yet
+routed through any interconnect - that's the AXI/ARM SoC system
+integration scope noted in SS16.29, still owned by whoever picks up
+that work). `(c)` marks the one section of `gpgpu_scheduler` that's
+real, explicit, named duplication for `c = 0` and `c = 1` - not a
+parameterized loop, per DATAFLOW's canonical-form rule (SS16.6/16.37).
+
+```
+ HOST (PS)                              DRAM (4GB DDR4, off-chip)
+ s_axilite "control" bundle             m_axi gmem0        m_axi gmem1
+ program_len/total_warps/start -->      program_ptr        initial_regs_ptr
+ <-- busy/done/fault                    (both broadcast to CU0 and CU1)
+      |          ^                           |                  |
+      v          |                           v                  v
+==============================================================================
+gpgpu_scheduler  --  real top-level IP, set_top
+==============================================================================
+
+                        +----------------------------+
+                        | barrierCore                |
+                        | single, real BarrierState, |
+                        | spans BOTH CUs - sole      |
+                        | source of busy/done/fault  |
+                        +----------------------------+
+                      events_in[c]        signal_out[c]
+                                     (c = 0, 1)
+                            |                      |
+                       +----------+           +----------+
+                                  |                      |
+                                  v                      v
+
+            +------------------+          +---------------------+
+            | schedulerCore(c) |          | compute_pipeline(c) |
+            | cu_id = c        |          | 32 SIMT lanes       |
+            | WarpSlot[8]      |          +---------------------+
+            +------------------+                                 
+                               dispatch[c] -->
+                                <-- status[c]
+
+          +-------------------+          +-------------------------+
+          | CuDispatchUnit(c) |          | mem_req[c]/mem_resp[c]  |
+          | regs_ / program_  |          | (to mem_arbiter, below) |
+          +-------------------+          +-------------------------+
+
+        ^ this whole column (both arms of barrierCore, schedulerCore,
+          CuDispatchUnit, compute_pipeline) is instantiated TWICE,
+          c = 0 and c = 1 - explicit named duplication in source,
+          not a runtime loop (DATAFLOW's canonical-form rule)
+
+                        +----------------------------+
+                        | mem_arbiter                |
+                        | N:1 request mux /          |
+                        | 1:N response demux,        |
+                        | both CUs' mem_req/mem_resp |
+                        +----------------------------+
+                                      |
+                                      v
+                       axis: mem_req_out / mem_resp_in
+                                      |
+==============================================================================
+memory_pipeline  --  real top-level IP, set_top
+==============================================================================
+                                      |
+                           axis: req_in / resp_out
+                                      |
+                                      v
+        +------------------------------------------------------------+
+        | MemorySubsystem                                            |
+        |                                                            |
+        | L1[0]  32KB WAYS=4      L1[1]  32KB WAYS=4                 |
+        | shmem[0]  32KB          shmem[1]  32KB                     |
+        |                                                            |
+        | L2 (shared, 256KB, WAYS=4)                                 |
+        |  tag/valid: BRAM   data: URAM                              |
+        +------------------------------------------------------------+
+                                      |
+                                      v
+                                  m_axi gmem
+                                      |
+                                      v
+                 DRAM (4GB DDR4, off-chip - same physical
+                 memory as gmem0/gmem1 above; real system
+                 integration - AXI interconnect / ARM SoC
+                 side - TBD, docs/hls/interfaces.md SS16.29)
+```
+
+Real resource cost for this whole diagram (SS16.37): BRAM 222/288
+(77%), DSP 222/1248 (18%), FF 61977/234240 (26%), LUT 97529/117120
+(83%), URAM 16/64 (25%) - confirmed synthesis, not projected.
+
+---
