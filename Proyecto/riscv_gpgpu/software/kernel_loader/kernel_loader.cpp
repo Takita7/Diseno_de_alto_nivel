@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -81,13 +82,18 @@ static bool parseJsonUint64Value(const std::string& line, const std::string& key
     }
     auto value_str = trim(line.substr(colon_pos + 1));
     size_t end_pos = 0;
-    out_value = std::stoull(value_str, &end_pos);
+    try {
+        out_value = std::stoull(value_str, &end_pos);
+    } catch (...) {
+        return false;
+    }
     return end_pos > 0;
 }
 
 static bool parseJsonUint32Value(const std::string& line, const std::string& key, uint32_t& out_value) {
     uint64_t temp = 0;
-    if (!parseJsonUint64Value(line, key, temp)) {
+    if (!parseJsonUint64Value(line, key, temp)
+        || temp > std::numeric_limits<uint32_t>::max()) {
         return false;
     }
     out_value = static_cast<uint32_t>(temp);
@@ -124,7 +130,8 @@ bool packKernelBundle(
     std::ostringstream manifest;
     manifest << "{\n";
     manifest << "  \"kernel_name\": \"" << kernel_name << "\",\n";
-    manifest << "  \"binary_path\": \"" << binary_path << "\",\n";
+    manifest << "  \"binary_path\": \"" << fs::absolute(fs::path(binary_path)).lexically_normal().string() << "\",\n";
+    manifest << "  \"binary_format\": \"elf\",\n";
     manifest << "  \"entry_symbol\": \"" << entry_symbol << "\",\n";
     manifest << "  \"binary_size\": " << binary_size << ",\n";
     manifest << "  \"workgroup_x\": " << workgroup_x << ",\n";
@@ -138,6 +145,34 @@ bool packKernelBundle(
 
 bool packKernelBundle(const std::string& kernel_name, const std::string& binary_path, const std::string& manifest_path) {
     return packKernelBundle(kernel_name, binary_path, manifest_path, 1, 1, 1, 0);
+}
+
+bool packPtxKernelBundle(
+    const std::string& kernel_name,
+    const std::string& ptx_path,
+    const std::string& manifest_path,
+    uint32_t workgroup_x,
+    uint32_t workgroup_y,
+    uint32_t workgroup_z,
+    uint64_t shared_mem_bytes) {
+    if (kernel_name.empty() || !pathExists(ptx_path)
+        || workgroup_x == 0 || workgroup_y == 0 || workgroup_z == 0)
+        return false;
+
+    const uint64_t binary_size = fs::file_size(fs::path(ptx_path));
+    std::ostringstream manifest;
+    manifest << "{\n";
+    manifest << "  \"kernel_name\": \"" << kernel_name << "\",\n";
+    manifest << "  \"binary_path\": \"" << ptx_path << "\",\n";
+    manifest << "  \"binary_format\": \"ptx\",\n";
+    manifest << "  \"entry_symbol\": \"" << kernel_name << "\",\n";
+    manifest << "  \"binary_size\": " << binary_size << ",\n";
+    manifest << "  \"workgroup_x\": " << workgroup_x << ",\n";
+    manifest << "  \"workgroup_y\": " << workgroup_y << ",\n";
+    manifest << "  \"workgroup_z\": " << workgroup_z << ",\n";
+    manifest << "  \"shared_mem_bytes\": " << shared_mem_bytes << "\n";
+    manifest << "}\n";
+    return writeManifest(manifest_path, manifest.str());
 }
 
 bool loadKernelBundle(const std::string& manifest_path) {
@@ -165,10 +200,12 @@ bool inspectKernelBundleDetails(
 
     info = KernelBundleInfo{};
     uint64_t seen_size = 0;
+    std::string format = "elf";
     std::string line;
     while (std::getline(manifest, line)) {
         parseJsonStringValue(line, "kernel_name", info.kernel_name);
         parseJsonStringValue(line, "binary_path", info.binary_path);
+        parseJsonStringValue(line, "binary_format", format);
         parseJsonStringValue(line, "entry_symbol", info.entry_symbol);
         parseJsonUint64Value(line, "binary_size", seen_size);
         parseJsonUint32Value(line, "workgroup_x", info.workgroup_x);
@@ -181,12 +218,36 @@ bool inspectKernelBundleDetails(
         std::cerr << "[kernel_loader] Manifest missing required fields.\n";
         return false;
     }
-    if (!pathExists(info.binary_path)) {
-        std::cerr << "[kernel_loader] Binary referenced in manifest is missing: " << info.binary_path << "\n";
+    if (format == "elf") info.format = KernelBundleFormat::Elf;
+    else if (format == "ptx") info.format = KernelBundleFormat::Ptx;
+    else {
+        std::cerr << "[kernel_loader] Unknown binary format: " << format << "\n";
         return false;
     }
 
-    info.binary_size = fs::file_size(fs::path(info.binary_path));
+    fs::path artifact(info.binary_path);
+    if (artifact.is_relative()) {
+        const fs::path manifest_relative = fs::path(manifest_path).parent_path() / artifact;
+        if (fs::exists(manifest_relative)) artifact = manifest_relative;
+    }
+    if (!fs::exists(artifact) || !fs::is_regular_file(artifact)) {
+        std::cerr << "[kernel_loader] Binary referenced in manifest is missing: " << artifact.string() << "\n";
+        return false;
+    }
+    info.binary_path = fs::absolute(artifact).lexically_normal().string();
+    if (info.workgroup_x == 0 || info.workgroup_y == 0 || info.workgroup_z == 0) {
+        std::cerr << "[kernel_loader] Workgroup dimensions must be greater than zero\n";
+        return false;
+    }
+    if (info.format == KernelBundleFormat::Ptx) {
+        if (info.entry_symbol.empty()) info.entry_symbol = info.kernel_name;
+        if (info.entry_symbol != info.kernel_name) {
+            std::cerr << "[kernel_loader] PTX entry symbol must match kernel name\n";
+            return false;
+        }
+    }
+
+    info.binary_size = fs::file_size(artifact);
     if (seen_size != 0 && seen_size != info.binary_size) {
         std::cerr << "[kernel_loader] Binary size mismatch: manifest=" << seen_size << " actual=" << info.binary_size << "\n";
         return false;

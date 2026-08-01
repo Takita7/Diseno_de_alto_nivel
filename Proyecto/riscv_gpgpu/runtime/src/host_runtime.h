@@ -45,6 +45,7 @@ std::vector<ThreadContext> computeThreadContexts(
 
 // Upload a packed kernel bundle manifest to the runtime.
 bool uploadKernelBundle(const std::string& manifest_path);
+bool unloadKernelBundle();
 
 // Launch the currently loaded kernel.
 bool launchKernel(const KernelLaunchInfo& info);

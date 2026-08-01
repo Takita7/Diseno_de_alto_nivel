@@ -72,7 +72,8 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
         memory_hierarchy
         driver_lib
         kernel_loader_lib
-        host_api_lib
+        systemc_host_backend
+        runtime_lib
         llvm_backend_stub
         SystemC::SystemC
     )

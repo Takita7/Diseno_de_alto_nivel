@@ -6,10 +6,13 @@
 
 namespace riscv_gpgpu {
 
+enum class KernelBundleFormat { Elf, Ptx };
+
 struct KernelBundleInfo {
     std::string kernel_name;
     std::string binary_path;
     std::string entry_symbol;
+    KernelBundleFormat format = KernelBundleFormat::Elf;
     uint64_t binary_size = 0;
     uint32_t workgroup_x = 1;
     uint32_t workgroup_y = 1;
@@ -28,6 +31,15 @@ bool packKernelBundle(
     uint64_t shared_mem_bytes);
 
 bool packKernelBundle(const std::string& kernel_name, const std::string& binary_path, const std::string& manifest_path);
+
+bool packPtxKernelBundle(
+    const std::string& kernel_name,
+    const std::string& ptx_path,
+    const std::string& manifest_path,
+    uint32_t workgroup_x = 1,
+    uint32_t workgroup_y = 1,
+    uint32_t workgroup_z = 1,
+    uint64_t shared_mem_bytes = 0);
 
 bool loadKernelBundle(const std::string& manifest_path);
 

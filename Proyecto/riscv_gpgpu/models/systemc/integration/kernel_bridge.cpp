@@ -42,6 +42,13 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                                   const std::string& binary_path,
                                   const std::vector<uint64_t>& kernel_args,
                                   const std::vector<uint64_t>& device_ptrs) {
+    last_error_.clear();
+    auto fail = [this](const std::string& error) {
+        last_error_ = error;
+        std::cerr << "[bridge] " << error << "\n";
+        return false;
+    };
+
     static std::atomic<uint64_t> run_sequence{0};
     const uint64_t run_id = run_sequence.fetch_add(1, std::memory_order_relaxed);
     const std::string run_prefix = "bridge_run_" + std::to_string(run_id);
@@ -72,10 +79,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
     // ── 2. Load ELF into memory ───────────────────────────────────────────────
     ElfLoader elf;
-    if (!elf.load(binary_path, mem)) {
-        std::cerr << "[bridge] Failed to load ELF: " << binary_path << "\n";
-        return false;
-    }
+    if (!elf.load(binary_path, mem))
+        return fail("Failed to load ELF: " + binary_path);
 
     SymbolEntry cuda_thread_ctx_sym;
     const bool has_cuda_thread_ctx = elf.findSymbol("__gpgpu_thread_context", cuda_thread_ctx_sym);
@@ -87,11 +92,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // ── 3. Copy device buffers into SystemC global memory ────────────────────
     for (uint64_t dev_ptr : device_ptrs) {
         std::vector<uint8_t> content;
-        if (!getDeviceBufferContent(dev_ptr, content)) {
-            std::cerr << "[bridge] Device buffer 0x" << std::hex << dev_ptr
-                      << std::dec << " not found\n";
-            continue;
-        }
+        if (!getDeviceBufferContent(dev_ptr, content))
+            return fail("Device buffer not found: " + std::to_string(dev_ptr));
         mem.writeBytes(dev_ptr, content.data(), content.size());
         std::cout << "[bridge] Mapped device buffer 0x" << std::hex << dev_ptr
                   << std::dec << " (" << content.size() << " bytes) into sim memory\n";
@@ -117,16 +119,12 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
     // ── 5. Set up initial register file (RISC-V calling convention) ───────────
     // a0..a7 = x10..x17, n-th kernel_arg maps to a_n.
-    if (kernel_args.size() > 8) {
-        std::cerr << "[bridge] RV32 ABI supports at most 8 kernel arguments\n";
-        return false;
-    }
+    if (kernel_args.size() > 8)
+        return fail("RV32 ABI supports at most 8 kernel arguments");
     std::array<uint32_t, 32> regs{};
     for (size_t i = 0; i < kernel_args.size(); ++i) {
-        if ((kernel_args[i] >> 32) != 0) {
-            std::cerr << "[bridge] Kernel argument " << i << " does not fit RV32\n";
-            return false;
-        }
+        if ((kernel_args[i] >> 32) != 0)
+            return fail("Kernel argument " + std::to_string(i) + " does not fit RV32");
         regs[10 + i] = static_cast<uint32_t>(kernel_args[i]);
     }
     // x2 (sp) = stack area; use a scratch region well above device buffers.
@@ -151,8 +149,10 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
     std::cout << "[bridge] Initial registers: "
               << "sp=0x" << std::hex << regs[2]
-              << " ra=0x" << regs[1] << std::dec
-              << " a0..a" << (kernel_args.size()-1) << "=[args]\n";
+              << " ra=0x" << regs[1] << std::dec;
+    if (!kernel_args.empty())
+        std::cout << " a0..a" << (kernel_args.size() - 1) << "=[args]";
+    std::cout << "\n";
 
     // ── 6. Create and run functional compute units ────────────────────────────
     const uint32_t effective_grid_x = have_launch_args ? launch_args.grid_x : 1;
@@ -171,13 +171,11 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint32_t shared_mem_bytes = have_launch_args
         ? launch_args.shared_mem_bytes
         : cfg_.shared_mem_size;
-    if (shared_mem_bytes > cfg_.shared_mem_size) {
-        std::cerr << "[bridge] Requested shared memory exceeds configured capacity\n";
-        return false;
-    }
-    for (uint32_t block_id = 0; block_id < total_blocks; ++block_id) {
-        if (!mem.allocateSharedMemory(block_id, shared_mem_bytes)) return false;
-    }
+    if (shared_mem_bytes > cfg_.shared_mem_size)
+        return fail("Requested shared memory exceeds configured capacity");
+    for (uint32_t block_id = 0; block_id < total_blocks; ++block_id)
+        if (!mem.allocateSharedMemory(block_id, shared_mem_bytes))
+            return fail("Failed to allocate shared memory for block " + std::to_string(block_id));
 
     struct Worker {
         std::unique_ptr<ComputeUnit>    cu;
@@ -380,10 +378,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 if (all_done) wg.active = false;
             }
             if (!any_active) break;
-            if (!made_progress) {
-                std::cerr << "[bridge] Barrier deadlock in warp scheduler\n";
-                return false;
-            }
+            if (!made_progress)
+                return fail("Barrier deadlock in warp scheduler");
         }
 
     } else {
@@ -434,10 +430,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 }
             }
             if (!any_active) break;
-            if (!made_progress) {
-                std::cerr << "[bridge] Barrier deadlock in scalar scheduler\n";
-                return false;
-            }
+            if (!made_progress)
+                return fail("Barrier deadlock in scalar scheduler");
         }
 
         for (const auto& worker : workers)
@@ -469,10 +463,9 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         if (sz == 0) continue;
         std::vector<uint8_t> result(sz);
         mem.readBytes(dev_ptr, result.data(), sz);
-        if (!setDeviceBufferContent(dev_ptr, result)) {
-            std::cerr << "[bridge] Failed to write results to device buffer 0x"
-                      << std::hex << dev_ptr << std::dec << "\n";
-        } else {
+        if (!setDeviceBufferContent(dev_ptr, result))
+            return fail("Failed to write results to device buffer " + std::to_string(dev_ptr));
+        else {
             std::cout << "[bridge] Wrote " << sz << " bytes back to device buffer 0x"
                       << std::hex << dev_ptr << std::dec << "\n";
         }

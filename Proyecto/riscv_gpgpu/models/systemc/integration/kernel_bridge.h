@@ -64,6 +64,7 @@ public:
     uint32_t lastBlockZ()            const { return last_block_z_; }
     uint32_t lastDivergenceEvents()  const { return last_divergence_events_; }
     const std::string& lastEntrySymbol() const { return last_entry_symbol_; }
+    const std::string& lastError() const { return last_error_; }
 
 private:
     Config   cfg_;
@@ -79,6 +80,7 @@ private:
     uint32_t last_block_z_      = 1;
     uint32_t last_divergence_events_ = 0;
     std::string last_entry_symbol_;
+    std::string last_error_;
 };
 
 } // namespace riscv_gpgpu
