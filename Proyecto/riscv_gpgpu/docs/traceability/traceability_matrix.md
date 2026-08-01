@@ -10,9 +10,9 @@ Detailed traceability mapping requirements to implementation and verification ar
 | REQ-EXE-002 | Execution | Support configurable warps per CU | Warp Scheduler | models/systemc/warp_scheduler.cpp | tests/systemc/test_scheduler.cpp | Planned |
 | REQ-SIMT-001 | SIMT | Implement SIMT divergence handling | SIMT Controller | models/systemc/simt_controller.cpp | tests/systemc/test_simt.cpp | Planned |
 | REQ-SIMT-002 | SIMT | Support immediate/deferred reconvergence | SIMT Controller | models/systemc/simt_controller.cpp | tests/systemc/test_simt.cpp | Planned |
-| REQ-MEM-001 | Memory | Implement shared memory per CU | Memory Hierarchy | models/systemc/memory_hierarchy.cpp | tests/systemc/test_memory.cpp | Planned |
+| REQ-MEM-001 | Memory | Implement shared memory per block | Memory Hierarchy | models/systemc/src/memory/memory_hierarchy.cpp | tests/systemc/test_shared_memory.cpp | Implemented |
 | REQ-MEM-002 | Memory | Support L1/L2 cache hierarchy | Memory Hierarchy | models/systemc/memory_hierarchy.cpp | tests/systemc/test_memory.cpp | Planned |
-| REQ-SYNC-001 | Synchronization | Implement barrier synchronization | Synchronization | models/systemc/synchronization.cpp | tests/systemc/test_sync.cpp | Planned |
+| REQ-SYNC-001 | Synchronization | Implement per-block barrier synchronization | Kernel Bridge / Compute Unit | models/systemc/integration/kernel_bridge.cpp | tests/systemc/test_shared_memory.cpp | Implemented |
 | REQ-SYNC-002 | Synchronization | Support atomic operations | Synchronization | models/systemc/synchronization.cpp | tests/systemc/test_sync.cpp | Planned |
 
 ## Design Decisions

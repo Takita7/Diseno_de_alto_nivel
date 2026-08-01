@@ -423,18 +423,18 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 **Independent Test**: Un kernel de reducción paralela (suma de N elementos) usando shared memory y `__syncthreads()` produce el resultado correcto.
 
-- [ ] T071 [US1] Implement per-block shared memory in `models/systemc/src/memory/memory_hierarchy.cpp`
+- [x] T071 [US1] Implement per-block shared memory in `models/systemc/src/memory/memory_hierarchy.cpp`
   - Add `shared_memory_` map: `block_id → byte array` of size `SHARED_MEM_SIZE_BYTES` (default: 48KB per block)
   - `ld.shared` / `st.shared` PTX instructions → access `shared_memory_[ctaid]`
   - Shared memory is zeroed at block start, freed when all threads in block complete
-  - Address space: `0x0001_0000` base for shared memory (document in `docs/architecture/memory_map.md`)
+  - Address space: `0x0040_0000` base for shared memory, avoiding the ELF region at `0x0001_0000`
 
-- [ ] T072 [US1] Implement `bar.sync` barrier in `models/systemc/src/simt_controller/simt_controller.cpp`
+- [x] T072 [US1] Implement `bar.sync` barrier in `models/systemc/integration/kernel_bridge.cpp` and `models/systemc/src/compute_unit/compute_unit.cpp`
   - `bar.sync 0` → all threads in the same block must reach this point before any continue
   - Implementation: counter per block; when counter == `ntid.x * ntid.y * ntid.z`, release all waiting threads
   - `WarpScheduler` must handle blocked warps (do not schedule a warp waiting on barrier)
 
-- [ ] T073 [P] [US1] Add shared memory and barrier tests in `tests/systemc/test_shared_memory.cpp`
+- [x] T073 [P] [US1] Add shared memory and barrier tests in `tests/systemc/test_shared_memory.cpp`
   - Test: parallel reduction (sum N=32 elements using shared memory + `bar.sync`) → correct sum
   - Test: matrix transpose using shared memory → correct transposed matrix
   - Test: barrier ordering — verify no thread reads shared memory before all writes complete

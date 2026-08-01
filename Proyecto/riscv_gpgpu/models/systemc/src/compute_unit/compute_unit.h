@@ -65,6 +65,10 @@ public:
     void setInitialFloatRegisters(std::array<float, 32> fregs);
     // setReturnSentinel: PC that signals kernel completion (ra = sentinel on entry).
     void setReturnSentinel(uint32_t sentinel_pc);
+    void setBlockID(BlockID block_id);
+    bool isBlocked() const;
+    uint32_t getBlockedBarrierID() const;
+    bool releaseBarrier(uint32_t barrier_id);
     // getRegister: read back an integer register after execution.
     uint32_t getRegister(uint32_t warp_id, uint32_t reg_id) const;
     // getFloatRegister: read back a floating-point register after execution.
@@ -125,6 +129,9 @@ private:
     bool                      binary_halted_           = false;
     std::array<uint32_t, 32>  binary_regs_             = {};
     std::array<float, 32>     binary_fregs_            = {};  // RV32F float registers (f0-f31)
+    BlockID                   binary_block_id_         = 0;
+    bool                      binary_blocked_          = false;
+    uint32_t                  binary_barrier_id_       = 0;
 };
 
 }  // namespace riscv_gpgpu

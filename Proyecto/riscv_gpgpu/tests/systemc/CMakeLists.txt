@@ -121,6 +121,35 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
     add_test(NAME thread_mapping_tests COMMAND test_thread_mapping)
     message(STATUS "Thread mapping tests configured")
 
+    add_executable(test_shared_memory test_shared_memory.cpp sc_gtest_main.cpp)
+    target_link_libraries(test_shared_memory
+        PRIVATE
+        GTest::GTest
+        systemc_integration
+        compute_unit
+        memory_hierarchy
+        driver_lib
+        host_api_lib
+        ptx_transpiler_lib
+        runtime_lib
+        SystemC::SystemC
+    )
+    target_include_directories(test_shared_memory PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/integration
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src/ptx_transpiler
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../software/host_api
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/src
+    )
+    set_target_properties(test_shared_memory PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME shared_memory_tests COMMAND test_shared_memory)
+    message(STATUS "Shared memory tests configured")
+
 elseif(BUILD_TESTS)
     message(STATUS "SystemC not found — skipping systemc_integration tests")
 endif()

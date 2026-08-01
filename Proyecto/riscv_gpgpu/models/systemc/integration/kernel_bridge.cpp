@@ -160,6 +160,17 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint32_t threads_per_block = std::max<uint32_t>(1u,
         effective_block_x * std::max<uint32_t>(1u, effective_block_y) * std::max<uint32_t>(1u, effective_block_z));
     const uint32_t total_threads = total_blocks * threads_per_block;
+    const uint32_t shared_mem_bytes = have_launch_args
+        ? launch_args.shared_mem_bytes
+        : cfg_.shared_mem_size;
+    if (shared_mem_bytes > cfg_.shared_mem_size) {
+        std::cerr << "[bridge] Requested shared memory exceeds configured capacity\n";
+        return false;
+    }
+    for (uint32_t block_id = 0; block_id < total_blocks; ++block_id) {
+        if (!mem.allocateSharedMemory(block_id, shared_mem_bytes)) return false;
+    }
+
     struct Worker {
         std::unique_ptr<ComputeUnit>    cu;
         std::unique_ptr<SIMTController> simt;
@@ -231,6 +242,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
             std::max<uint32_t>(1u, effective_grid_z)
         };
         worker.cu->setReturnSentinel(RETURN_SENTINEL);
+        worker.cu->setBlockID(block_id);
         worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
 
         worker.block_id  = block_id;
@@ -264,35 +276,35 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
             bool currently_diverged = false;
         };
 
-        const uint32_t total_warps = (total_threads + warp_size - 1) / warp_size;
-        const uint32_t concurrent_warps = std::max<uint32_t>(1u,
-            std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units,
-                               total_warps));
+        const uint32_t warps_per_block = (threads_per_block + warp_size - 1) / warp_size;
+        const uint32_t total_warps = total_blocks * warps_per_block;
 
         auto makeWarpGroup = [&](uint32_t warp_idx) {
             WarpGroup wg;
-            uint32_t base = warp_idx * warp_size;
-            for (uint32_t t = 0; t < warp_size && base + t < total_threads; ++t)
-                wg.threads.emplace_back(makeWorker(base + t));
+            const uint32_t block_id = warp_idx / warps_per_block;
+            const uint32_t local_base = (warp_idx % warps_per_block) * warp_size;
+            for (uint32_t t = 0; t < warp_size && local_base + t < threads_per_block; ++t)
+                wg.threads.emplace_back(makeWorker(block_id * threads_per_block + local_base + t));
             return wg;
         };
 
         std::vector<WarpGroup> warp_groups;
-        warp_groups.reserve(concurrent_warps);
-        uint32_t next_warp = 0;
-        for (; next_warp < total_warps && warp_groups.size() < concurrent_warps; ++next_warp)
-            warp_groups.emplace_back(makeWarpGroup(next_warp));
+        warp_groups.reserve(total_warps);
+        for (uint32_t warp_idx = 0; warp_idx < total_warps; ++warp_idx)
+            warp_groups.emplace_back(makeWarpGroup(warp_idx));
 
         uint64_t cycle = 0;
         while (true) {
             bool any_active = false;
+            bool made_progress = false;
             for (auto& wg : warp_groups) {
                 if (!wg.active) continue;
                 any_active = true;
 
                 // Step all non-complete threads in this warp simultaneously.
                 for (auto& w : wg.threads)
-                    if (w.active && w.cu && !w.cu->isComplete()) {
+                    if (w.active && w.cu && !w.cu->isComplete() && !w.cu->isBlocked()) {
+                        made_progress = true;
                         if (has_cuda_thread_ctx) {
                             mem.writeBytes(cuda_thread_ctx_sym.address,
                                 reinterpret_cast<const uint8_t*>(w.cuda_thread_ctx.data()),
@@ -302,6 +314,25 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                     }
                 ++cycle;
 
+                for (auto& w : wg.threads) {
+                    if (!w.active || !w.cu || !w.cu->isBlocked()) continue;
+                    const uint32_t barrier_id = w.cu->getBlockedBarrierID();
+                    uint32_t arrived = 0;
+                    for (auto& other_wg : warp_groups)
+                        for (auto& other : other_wg.threads)
+                            if (other.active && other.block_id == w.block_id && other.cu
+                                && other.cu->isBlocked()
+                                && other.cu->getBlockedBarrierID() == barrier_id)
+                                ++arrived;
+                    if (arrived == threads_per_block) {
+                        for (auto& other_wg : warp_groups)
+                            for (auto& other : other_wg.threads)
+                                if (other.active && other.block_id == w.block_id && other.cu)
+                                    other.cu->releaseBarrier(barrier_id);
+                        made_progress = true;
+                    }
+                }
+
                 if (cycle % 100000 == 0)
                     std::cout << "[bridge]   ... " << cycle << " functional warp-steps\n";
 
@@ -310,7 +341,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 uint32_t ref_pc      = UINT32_MAX;
                 bool     pcs_uniform = true;
                 for (auto& w : wg.threads) {
-                    if (!w.active || !w.cu || w.cu->isComplete()) continue;
+                    if (!w.active || !w.cu || w.cu->isComplete() || w.cu->isBlocked()) continue;
                     uint32_t pc = w.cu->getCurrentPC();
                     if (ref_pc == UINT32_MAX) ref_pc = pc;
                     else if (pc != ref_pc) { pcs_uniform = false; break; }
@@ -338,33 +369,31 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                     }
                 }
 
-                if (all_done) {
-                    wg.active = false;
-                    if (next_warp < total_warps)
-                        wg = makeWarpGroup(next_warp++);
-                }
+                if (all_done) wg.active = false;
             }
             if (!any_active) break;
+            if (!made_progress) {
+                std::cerr << "[bridge] Barrier deadlock in warp scheduler\n";
+                return false;
+            }
         }
 
     } else {
         // ── Single-thread-per-worker path (scalar kernels, threads_per_warp==1) ──
-        const uint32_t live_units = std::max<uint32_t>(1u,
-            std::min<uint32_t>(cfg_.num_compute_units == 0 ? 1u : cfg_.num_compute_units,
-                               total_threads));
-
         std::vector<Worker> workers;
-        workers.reserve(live_units);
-        uint32_t next_thread = 0;
-        for (; next_thread < total_threads && workers.size() < live_units; ++next_thread)
-            workers.emplace_back(makeWorker(next_thread));
+        workers.reserve(total_threads);
+        for (uint32_t thread = 0; thread < total_threads; ++thread)
+            workers.emplace_back(makeWorker(thread));
 
         uint64_t cycle = 0;
         while (true) {
             bool any_active = false;
+            bool made_progress = false;
             for (auto& worker : workers) {
                 if (!worker.active || !worker.cu) continue;
                 any_active = true;
+                if (worker.cu->isBlocked()) continue;
+                made_progress = true;
                 if (has_cuda_thread_ctx) {
                     mem.writeBytes(cuda_thread_ctx_sym.address,
                         reinterpret_cast<const uint8_t*>(worker.cuda_thread_ctx.data()),
@@ -373,6 +402,20 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 worker.cu->step();
                 ++cycle;
 
+                if (worker.cu->isBlocked()) {
+                    const uint32_t barrier_id = worker.cu->getBlockedBarrierID();
+                    uint32_t arrived = 0;
+                    for (const auto& other : workers)
+                        if (other.active && other.block_id == worker.block_id && other.cu
+                            && other.cu->isBlocked()
+                            && other.cu->getBlockedBarrierID() == barrier_id)
+                            ++arrived;
+                    if (arrived == threads_per_block)
+                        for (auto& other : workers)
+                            if (other.active && other.block_id == worker.block_id && other.cu)
+                                other.cu->releaseBarrier(barrier_id);
+                }
+
                 if (cycle % 100000 == 0)
                     std::cout << "[bridge]   ... " << cycle << " functional steps\n";
 
@@ -380,11 +423,13 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                     last_cycles_       += worker.cu->getTotalCycles();
                     last_instructions_ += worker.cu->getTotalInstructions();
                     worker.active = false;
-                    if (next_thread < total_threads)
-                        worker = makeWorker(next_thread++);
                 }
             }
             if (!any_active) break;
+            if (!made_progress) {
+                std::cerr << "[bridge] Barrier deadlock in scalar scheduler\n";
+                return false;
+            }
         }
 
         for (const auto& worker : workers)
@@ -399,6 +444,9 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     last_l1_hits_   = static_cast<uint32_t>(mem.getL1CacheHits());
     last_l1_misses_ = static_cast<uint32_t>(mem.getL1CacheMisses());
     // last_divergence_events_ already set in the execution path above
+    for (uint32_t block_id = 0; block_id < total_blocks; ++block_id)
+        mem.releaseSharedMemory(block_id);
+
     last_grid_x_       = effective_grid_x;
     last_grid_y_       = effective_grid_y;
     last_grid_z_       = effective_grid_z;

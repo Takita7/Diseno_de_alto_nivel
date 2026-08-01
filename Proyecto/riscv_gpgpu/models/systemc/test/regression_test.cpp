@@ -128,10 +128,18 @@ int sc_main(int /*argc*/, char* /*argv*/[]) {
     CHECK(data == 0xDEADBEEF, "Data correct after re-fetch");
 
     LOG_SEP("1d: Shared memory");
-    mem_test.storeSharedMemory(0x0, 0x12345678);
+    mem_test.allocateSharedMemory(0, 16 * 1024);
+    mem_test.storeSharedMemory(0, MemoryHierarchy::SHARED_MEM_BASE, 0x12345678);
     data = 0;
-    mem_test.loadSharedMemory(0x0, data);
+    mem_test.loadSharedMemory(0, MemoryHierarchy::SHARED_MEM_BASE, data);
     CHECK(data == 0x12345678, "Shared memory write→read");
+    mem_test.allocateSharedMemory(1, 16 * 1024);
+    uint32_t isolated = 0xFFFFFFFFu;
+    mem_test.loadSharedMemory(1, MemoryHierarchy::SHARED_MEM_BASE, isolated);
+    CHECK(isolated == 0, "Shared memory is isolated and zeroed per block");
+    mem_test.releaseSharedMemory(0);
+    mem_test.releaseSharedMemory(1);
+    CHECK(!mem_test.hasSharedMemory(0), "Shared memory released at block completion");
 
     LOG_SEP("1e: No aliasing");
     mem_test.storeWord(0x20000, 0xCAFEBABE, latency);
