@@ -1,5 +1,12 @@
-add_library(driver_lib STATIC loader.cpp)
+add_library(driver_lib STATIC
+    loader.cpp
+    fpga_driver.cpp
+    fpga_elf_loader.cpp
+)
 target_include_directories(driver_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(FPGA_TARGET)
+    target_compile_definitions(driver_lib PUBLIC FPGA_TARGET)
+endif()
 
 # ── PTX→RISC-V transpiler library ─────────────────────────────────────────────
 add_library(ptx_transpiler_lib STATIC

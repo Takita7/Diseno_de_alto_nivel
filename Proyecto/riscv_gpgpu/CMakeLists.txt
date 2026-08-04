@@ -31,6 +31,7 @@ option(BUILD_TESTS "Build test suites" ON)
 option(BUILD_HLS "Build HLS implementation (requires Vitis HLS)" OFF)
 option(BUILD_BENCHMARKS "Build benchmark utilities" ON)
 option(BUILD_DOCUMENTATION "Build documentation" OFF)
+option(FPGA_TARGET "Target real FPGA hardware (Kria) instead of the host-memory simulation driver" OFF)
 
 # Find required packages
 if(BUILD_SYSTEMC_MODELS OR BUILD_SYSTEMC_INTEGRATION)
@@ -77,3 +78,4 @@ message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  HLS: ${BUILD_HLS}")
 message(STATUS "  Benchmarks: ${BUILD_BENCHMARKS}")
 message(STATUS "  Documentation: ${BUILD_DOCUMENTATION}")
+message(STATUS "  FPGA target: ${FPGA_TARGET}")

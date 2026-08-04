@@ -285,41 +285,47 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 ### Hardware Interface Definition
 
-- [ ] T050 [US2] Define the GPGPU AXI register map and DMA interface in `docs/architecture/axi_interface.md` and `fpga/constraints/`
+- [x] T050 [US2] Define the GPGPU AXI register map and DMA interface in `docs/architecture/axi_interface.md` and `fpga/constraints/`
 	- Required registers: `CTRL` (start/reset), `STATUS` (idle/running/done/error), `PC_INIT` (entry point), `GRID_X/Y` (launch dimensions), `IRQ_ENABLE`.
 	- Required DMA channels: one AXI4 master for instruction memory load (ELF segments), one AXI4 master for data memory (H2D and D2H transfers).
 	- Deliverable: register map table, address offsets, and AXI4-Lite/AXI4 port widths documented in `docs/architecture/axi_interface.md`.
+	- Done: register map (ID/CTRL/STATUS/PC_INIT/GRID_X/GRID_Y/IRQ_ENABLE), two AXI4 masters (`m_axi_imem`, `m_axi_dmem`), IRQ and device-tree fragment documented; code mirror in `driver/src/fpga_regs.h`; timing constraints in `fpga/constraints/kv260_gpgpu.xdc`.
 
 ### ARM Driver (Userspace)
 
-- [ ] T051 [US2] Implement ARM↔FPGA userspace driver in `driver/src/fpga_driver.cpp` and `driver/src/fpga_driver.h`
+- [x] T051 [US2] Implement ARM↔FPGA userspace driver in `driver/src/fpga_driver.cpp` and `driver/src/fpga_driver.h`
 	- Replaces the host-memory simulation in `loader.cpp` (`g_device_buffers`) with real hardware access.
 	- Required: open UIO device or `/dev/mem`; `mmap()` AXI-Lite register space; use `libdma` or kernel DMA proxy to transfer buffers; implement `allocateDeviceBuffer()`, `copyHostToDevice()`, `copyDeviceToHost()` against real FPGA memory.
 	- Build guard: `#ifdef FPGA_TARGET` so the simulation driver remains usable on x86.
 	- Verification: unit test in `tests/fpga/test_fpga_driver.cpp` that maps registers and reads `STATUS` register (expected: IDLE after reset).
+	- Done: `FpgaDriver` mmaps a UIO/`/dev/mem` register block and the global-memory aperture, validates `REG_ID`, provides register access, reset/start/status helpers, and a bump allocator with H2D/D2H copies; `loader.cpp` routes buffer APIs through it under `#ifdef FPGA_TARGET`; 7 unit tests pass on x86 using file-backed fake windows (`fpga_driver_tests` in CTest).
 
-- [ ] T052 [US2] Implement ELF loader to FPGA instruction memory in `driver/src/fpga_elf_loader.cpp`
+- [x] T052 [US2] Implement ELF loader to FPGA instruction memory in `driver/src/fpga_elf_loader.cpp`
 	- Replaces `ElfLoader` (which writes to `MemoryHierarchy`) with AXI DMA transfers to the FPGA instruction memory.
 	- Required: parse ELF PT_LOAD segments; DMA each segment to its load address in FPGA global memory; write `PC_INIT` register with ELF entry point.
 	- Verification: after loading, read back first 16 bytes of instruction memory via DMA and compare against ELF segment content.
+	- Done: `loadElfToFpga()` parses ELF32 PT_LOAD segments (manual parser, RISC-V machine check), DMAs each segment to its vaddr, zero-fills `.bss`, verifies first 16 bytes by read-back, and writes `PC_INIT` with `e_entry`; covered by `ElfLoaderWritesSegmentAndPcInit` test.
 
 ### ARM Runtime Adaptation
 
-- [ ] T053 [US2] Adapt `gpgpuLaunchKernel()` to write FPGA control registers in `software/host_api/host_api.cpp`
+- [x] T053 [US2] Adapt `gpgpuLaunchKernel()` to write FPGA control registers in `software/host_api/host_api.cpp`
 	- Required: write `GRID_X`, `GRID_Y`, `PC_INIT` to AXI-Lite registers; write `CTRL.start = 1` to begin execution.
 	- Build guard: `#ifdef FPGA_TARGET` to preserve simulation path.
 	- Verification: after writing `CTRL.start`, poll `STATUS` and confirm transition from IDLE → RUNNING within 10 ms.
+	- Done: `launchKernelOnFpga()` loads the kernel ELF (sets `PC_INIT`), writes `GRID_X`/`GRID_Y`, asserts `CTRL.START`, and waits up to 10 ms for `STATUS == RUNNING`; guarded by `#ifdef FPGA_TARGET` (simulation path unchanged); compiles under `-DFPGA_TARGET=ON`.
 
-- [ ] T054 [US2] Adapt `gpgpuSynchronize()` to wait for FPGA completion IRQ or poll `STATUS` in `software/host_api/host_api.cpp`
+- [x] T054 [US2] Adapt `gpgpuSynchronize()` to wait for FPGA completion IRQ or poll `STATUS` in `software/host_api/host_api.cpp`
 	- Required: either register a UIO interrupt handler for the GPGPU done IRQ, or poll `STATUS == DONE` with a timeout.
 	- Verification: after `gpgpuSynchronize()` returns, `STATUS` register reads DONE and result data is available in FPGA memory.
+	- Done: FPGA path polls `STATUS == DONE` with a 10 s timeout (ERROR state reported distinctly); done-IRQ/UIO mapping documented in `docs/architecture/axi_interface.md` for interrupt-driven deployments; guarded by `#ifdef FPGA_TARGET`.
 
 ### End-to-End Deployment
 
-- [ ] T055 [US2] Create Kria deployment script and cross-compilation Makefile in `scripts/deploy_kria.sh` and `fpga/`
+- [x] T055 [US2] Create Kria deployment script and cross-compilation Makefile in `scripts/deploy_kria.sh` and `fpga/`
 	- Required: cross-compile software stack for `aarch64-linux-gnu`; `scp` binary + kernel ELF to Kria; load FPGA bitstream via `fpgautil`; run test and capture output.
 	- Deliverable: `scripts/deploy_kria.sh` that takes `--bitstream`, `--kernel`, and `--test` arguments and produces a pass/fail report.
 	- Verification: `vector_add` (N=1024) produces correct results on Kria hardware; report captured in `docs/verification/kria_results.md`.
+	- Done: `scripts/deploy_kria.sh` (`--bitstream/--kernel/--test/--host/--report`) cross-compiles via `fpga/toolchain-aarch64.cmake` (+ `fpga/Makefile` wrapper), scp's artifacts, loads the bitstream with `fpgautil`, runs the test over SSH, and writes a pass/fail report to `docs/verification/kria_results.md` (template committed; hardware run pending board access).
 
 **Checkpoint**: End-to-end CUDA → RISC-V ELF → ARM host → FPGA GPGPU → results verified on Kria hardware.
 

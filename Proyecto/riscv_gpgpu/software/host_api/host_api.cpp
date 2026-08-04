@@ -4,6 +4,11 @@
 #include "../../driver/src/loader.h"
 #include "../../driver/src/ptx_transpiler/ptx_transpiler.h"
 
+#ifdef FPGA_TARGET
+#include "../../driver/src/fpga_driver.h"
+#include "../../driver/src/fpga_elf_loader.h"
+#endif
+
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -19,6 +24,37 @@ static std::map<std::string, std::string> g_registered_ptx;
 static std::set<std::string> g_required_ptx;
 static std::string g_last_error;
 static KernelExecutionBackend g_execution_backend = nullptr;
+
+#ifdef FPGA_TARGET
+// T053: launch a kernel on the FPGA GPGPU by programming the AXI-Lite
+// control registers defined in docs/architecture/axi_interface.md.
+static bool launchKernelOnFpga(const KernelLaunchArgs& launch,
+                               std::string& error) {
+    using namespace fpga;
+    FpgaDriver& driver = FpgaDriver::instance();
+    if (!driver.isOpen()) {
+        error = "FPGA driver is not open";
+        return false;
+    }
+    uint32_t entry_point = 0;
+    const std::string& elf_path = getKernelBinaryPath();
+    if (elf_path.empty() || !loadElfFileToFpga(driver, elf_path, entry_point)) {
+        error = "Failed to load kernel ELF into FPGA instruction memory";
+        return false;
+    }
+    driver.writeReg(REG_GRID_X, launch.grid_x);
+    driver.writeReg(REG_GRID_Y, launch.grid_y);
+    // PC_INIT was written by the ELF loader; assert start.
+    driver.start();
+    // Verification contract: IDLE → RUNNING within 10 ms.
+    if (!driver.waitForStatus(Status::RUNNING, 10)
+        && driver.status() != Status::DONE) {
+        error = "FPGA did not transition to RUNNING within 10 ms";
+        return false;
+    }
+    return true;
+}
+#endif
 
 static bool failHostOperation(const std::string& error) {
     g_last_error = error;
@@ -157,7 +193,17 @@ bool gpgpuLaunchKernel(
         if (g_required_ptx.count(kernel_name) != 0)
             return failHostOperation("Required PTX source is not registered: " + kernel_name);
         if (!configureLaunch(launch)) return failHostOperation("Failed to configure kernel launch");
+#ifdef FPGA_TARGET
+        std::string fpga_error;
+        if (!beginKernelExecution())
+            return failHostOperation("Failed to begin FPGA kernel execution");
+        if (!launchKernelOnFpga(launch, fpga_error)) {
+            finishKernelExecution(false);
+            return failHostOperation(fpga_error);
+        }
+#else
         if (!startKernel()) return failHostOperation("Failed to start kernel");
+#endif
         g_staged_args.clear();
         return true;
     }
@@ -231,12 +277,32 @@ bool gpgpuLaunchKernel(
 }
 
 bool gpgpuSynchronize() {
+#ifdef FPGA_TARGET
+    // T054: wait for the FPGA GPGPU to reach DONE (poll with timeout; on
+    // deployments with the done IRQ wired to UIO, a blocking read() of the
+    // UIO device may be used instead — see docs/architecture/axi_interface.md).
+    using namespace fpga;
+    FpgaDriver& driver = FpgaDriver::instance();
+    if (!driver.isOpen())
+        return failHostOperation("FPGA driver is not open");
+    constexpr uint32_t kSyncTimeoutMs = 10000;
+    if (!driver.waitForStatus(Status::DONE, kSyncTimeoutMs)) {
+        finishKernelExecution(false);
+        return failHostOperation(driver.status() == Status::ERROR
+            ? "FPGA reported ERROR during kernel execution"
+            : "Timed out waiting for FPGA kernel completion");
+    }
+    finishKernelExecution(true);
+    std::cout << "[host_api] gpgpuSynchronize: FPGA status = DONE\n";
+    return true;
+#else
     bool completed = false;
     if (!pollKernelCompletion(completed)) return false;
     std::string status;
     queryKernelStatus(status);
     std::cout << "[host_api] gpgpuSynchronize: kernel status = " << status << "\n";
     return completed;
+#endif
 }
 
 } // namespace riscv_gpgpu
