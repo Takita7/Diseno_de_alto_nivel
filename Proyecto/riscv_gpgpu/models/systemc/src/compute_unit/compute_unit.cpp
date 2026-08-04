@@ -59,9 +59,10 @@ void ComputeUnit::setSIMTController(SIMTController* simt) {
 }
 
 void ComputeUnit::setEntryPoint(uint32_t pc) {
-    binary_pc_     = pc;
-    binary_mode_   = true;
-    binary_halted_ = false;
+    binary_pc_      = pc;
+    binary_mode_    = true;
+    binary_halted_  = false;
+    binary_blocked_ = false;
     LOG_INFO("ComputeUnit " + std::to_string(unit_id_)
              + ": entry point 0x" + [&]{ std::ostringstream s; s << std::hex << pc; return s.str(); }());
 }
@@ -77,6 +78,24 @@ void ComputeUnit::setInitialFloatRegisters(std::array<float, 32> fregs) {
 
 void ComputeUnit::setReturnSentinel(uint32_t sentinel_pc) {
     binary_return_sentinel_ = sentinel_pc;
+}
+
+void ComputeUnit::setBlockID(BlockID block_id) {
+    binary_block_id_ = block_id;
+}
+
+bool ComputeUnit::isBlocked() const {
+    return binary_mode_ && binary_blocked_;
+}
+
+uint32_t ComputeUnit::getBlockedBarrierID() const {
+    return binary_barrier_id_;
+}
+
+bool ComputeUnit::releaseBarrier(uint32_t barrier_id) {
+    if (!binary_blocked_ || binary_barrier_id_ != barrier_id) return false;
+    binary_blocked_ = false;
+    return true;
 }
 
 uint32_t ComputeUnit::getRegister(uint32_t /*warp_id*/, uint32_t reg_id) const {
@@ -259,6 +278,7 @@ void ComputeUnit::executeJoin(WarpContext& ctx,
 // ── Legacy clock-driven path ──────────────────────────────────────────────────
 
 void ComputeUnit::launchKernel(BlockID block_id, uint32_t grid_x, uint32_t grid_y) {
+    binary_block_id_ = block_id;
     std::stringstream ss;
     ss << "ComputeUnit " << unit_id_ << ": launchKernel block=" << block_id
        << " grid=" << grid_x << "x" << grid_y;
@@ -294,8 +314,10 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
                         uint32_t& next_pc,
                         std::array<uint32_t, 32>& r,
                         std::array<float, 32>&    fr,
-                        uint32_t sentinel,
-                        MemoryHierarchy* mem) {
+                         uint32_t sentinel,
+                         MemoryHierarchy* mem,
+                         BlockID block_id) {
+
     using Op = RV32Instr::Op;
     r[0] = 0;  // x0 is always 0
 
@@ -337,35 +359,35 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
     case Op::LW: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint32_t val = 0, lat = 0;
-        if (mem) mem->loadWord(addr, val, lat);
+        if (mem) mem->loadWord(addr, val, lat, block_id);
         r[instr.rd] = val;
         break;
     }
     case Op::LB: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t b = 0;
-        if (mem) mem->readBytes(addr, &b, 1);
+        if (mem) mem->readBytes(addr, &b, 1, block_id);
         r[instr.rd] = static_cast<uint32_t>(static_cast<int8_t>(b));
         break;
     }
     case Op::LBU: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t b = 0;
-        if (mem) mem->readBytes(addr, &b, 1);
+        if (mem) mem->readBytes(addr, &b, 1, block_id);
         r[instr.rd] = b;
         break;
     }
     case Op::LH: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t bytes[2] = {};
-        if (mem) mem->readBytes(addr, bytes, 2);
+        if (mem) mem->readBytes(addr, bytes, 2, block_id);
         r[instr.rd] = static_cast<uint32_t>(static_cast<int16_t>(bytes[0] | (static_cast<uint16_t>(bytes[1]) << 8)));
         break;
     }
     case Op::LHU: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t bytes[2] = {};
-        if (mem) mem->readBytes(addr, bytes, 2);
+        if (mem) mem->readBytes(addr, bytes, 2, block_id);
         r[instr.rd] = static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8);
         break;
     }
@@ -373,19 +395,19 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
     case Op::SW: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint32_t lat = 0;
-        if (mem) mem->storeWord(addr, r[instr.rs2], lat);
+        if (mem) mem->storeWord(addr, r[instr.rs2], lat, block_id);
         break;
     }
     case Op::SB: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t b = static_cast<uint8_t>(r[instr.rs2]);
-        if (mem) mem->writeBytes(addr, &b, 1);
+        if (mem) mem->writeBytes(addr, &b, 1, block_id);
         break;
     }
     case Op::SH: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint8_t bytes[2] = { static_cast<uint8_t>(r[instr.rs2]), static_cast<uint8_t>(r[instr.rs2] >> 8) };
-        if (mem) mem->writeBytes(addr, bytes, 2);
+        if (mem) mem->writeBytes(addr, bytes, 2, block_id);
         break;
     }
     // ── Control flow ──────────────────────────────────────────────────────────
@@ -415,6 +437,7 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
         r[0] = 0;
         return true;  // treat as halt
     case Op::FENCE:
+    case Op::BAR_SYNC:
     case Op::UNKNOWN:
     default:
         break;
@@ -424,7 +447,7 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
     case Op::FLW: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint32_t bits = 0, lat = 0;
-        if (mem) mem->loadWord(addr, bits, lat);
+        if (mem) mem->loadWord(addr, bits, lat, block_id);
         fr[instr.rd] = u32_to_f32(bits);
         break;
     }
@@ -432,7 +455,7 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
     case Op::FSW: {
         Address addr = static_cast<Address>(static_cast<int32_t>(r[instr.rs1]) + instr.imm);
         uint32_t lat = 0;
-        if (mem) mem->storeWord(addr, f32_to_u32(fr[instr.rs2]), lat);
+        if (mem) mem->storeWord(addr, f32_to_u32(fr[instr.rs2]), lat, block_id);
         break;
     }
     // FP arithmetic (IEEE 754 single precision)
@@ -465,7 +488,7 @@ static bool executeRV32(const RV32Instr& instr, uint32_t cur_pc,
 
 void ComputeUnit::step() {
     if (binary_mode_) {
-        if (binary_halted_) return;
+        if (binary_halted_ || binary_blocked_) return;
         // Timeout guard: maps to FPGA watchdog timer
         if (config_.max_cycles > 0 && total_cycles_ >= config_.max_cycles) {
             binary_halted_ = true;
@@ -477,7 +500,7 @@ void ComputeUnit::step() {
 
         // ── Fetch ─────────────────────────────────────────────────────────────
         uint32_t raw = 0, lat = 0;
-        ext_memory_->loadWord(binary_pc_, raw, lat);
+        ext_memory_->loadWord(binary_pc_, raw, lat, binary_block_id_);
 
         // ── Decode (handle 16-bit compressed instructions) ────────────────────
         RV32Instr instr;
@@ -494,10 +517,20 @@ void ComputeUnit::step() {
 
         uint32_t next_pc = binary_pc_ + instr_len;
 
+        if (instr.op == RV32Instr::Op::BAR_SYNC) {
+            binary_pc_ = next_pc;
+            binary_barrier_id_ = static_cast<uint32_t>(instr.imm);
+            binary_blocked_ = true;
+            ++total_cycles_;
+            ++total_instructions_;
+            return;
+        }
+
         // ── Execute ───────────────────────────────────────────────────────────
         bool halt = executeRV32(instr, binary_pc_, next_pc,
-                                binary_regs_, binary_fregs_,
-                                binary_return_sentinel_, ext_memory_);
+                                 binary_regs_, binary_fregs_,
+                                 binary_return_sentinel_, ext_memory_, binary_block_id_);
+
         binary_pc_ = next_pc;
         ++total_cycles_;
         ++total_instructions_;

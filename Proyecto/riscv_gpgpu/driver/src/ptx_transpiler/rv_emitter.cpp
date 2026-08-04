@@ -17,7 +17,7 @@ namespace ptx {
 // Caller-saved first (t), then callee-saved (s) so we don't need a prologue
 // for typical kernels that don't call subroutines.
 static const char* kIRegs[] = {
-    "t0","t1","t2","t3","t4","t5","t6",
+    "t0","t1","t2","t3","t4","t5",
     "s0","s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11"
 };
 static constexpr size_t kNIRegs = sizeof(kIRegs) / sizeof(kIRegs[0]);
@@ -163,13 +163,13 @@ void RvEmitter::emitInstr(const PtxInstr& instr, std::ostringstream& out) {
     if (startsWith(op, "ld.param"))   { emitLdParam(instr, out);  return; }
     if (startsWith(op, "ld.global"))  { emitLdGlobal(instr, out); return; }
     if (startsWith(op, "st.global"))  { emitStGlobal(instr, out); return; }
-    if (startsWith(op, "st.shared"))  { emitStGlobal(instr, out); return; }  // treat as global
-    if (startsWith(op, "ld.shared"))  { emitLdGlobal(instr, out); return; }
+    if (startsWith(op, "st.shared"))  { emitStShared(instr, out); return; }
+    if (startsWith(op, "ld.shared"))  { emitLdShared(instr, out); return; }
     if (startsWith(op, "mov"))        { emitMov(instr, out);       return; }
     if (startsWith(op, "cvta") || startsWith(op, "cvt")) { emitCvt(instr, out); return; }
     if (startsWith(op, "setp"))       { emitSetp(instr, out);      return; }
+    if (op == "bar.sync")             { emitBarSync(instr, out);   return; }
     if (op == "bra" || op == "ret")   { emitBra(instr, out);       return; }
-    if (!instr.pred.empty() && op == "bra") { emitBra(instr, out); return; }
 
     // Arithmetic and other ops
     emitArith(instr, out);
@@ -268,6 +268,40 @@ void RvEmitter::emitStGlobal(const PtxInstr& instr, std::ostringstream& out) {
         out << "    sw " << ireg(val_op.name) << ", " << offset_str
             << "(" << base_rv << ")  # " << instr.op << "\n";
     }
+}
+
+void RvEmitter::emitLdShared(const PtxInstr& instr, std::ostringstream& out) {
+    if (instr.operands.size() < 2 || instr.operands[1].kind != PtxOperand::Kind::MemRef) return;
+    const auto& dst = instr.operands[0];
+    const auto& src = instr.operands[1];
+    std::string base = "t6";
+    out << "    li " << base << ", 0x00400000\n";
+    if (!src.mem_base.empty()) {
+        const std::string offset_reg = ireg(src.mem_base);
+        out << "    add " << base << ", " << base << ", " << offset_reg << "\n";
+    }
+    const std::string offset = std::to_string(src.mem_offset);
+    if (instr.op.find(".f32") != std::string::npos)
+        out << "    flw " << freg(dst.name) << ", " << offset << "(" << base << ")\n";
+    else
+        out << "    lw " << ireg(dst.name) << ", " << offset << "(" << base << ")\n";
+}
+
+void RvEmitter::emitStShared(const PtxInstr& instr, std::ostringstream& out) {
+    if (instr.operands.size() < 2 || instr.operands[0].kind != PtxOperand::Kind::MemRef) return;
+    const auto& dst = instr.operands[0];
+    const auto& src = instr.operands[1];
+    std::string base = "t6";
+    out << "    li " << base << ", 0x00400000\n";
+    if (!dst.mem_base.empty()) {
+        const std::string offset_reg = ireg(dst.mem_base);
+        out << "    add " << base << ", " << base << ", " << offset_reg << "\n";
+    }
+    const std::string offset = std::to_string(dst.mem_offset);
+    if (instr.op.find(".f32") != std::string::npos)
+        out << "    fsw " << freg(src.name) << ", " << offset << "(" << base << ")\n";
+    else
+        out << "    sw " << ireg(src.name) << ", " << offset << "(" << base << ")\n";
 }
 
 // ── mov ───────────────────────────────────────────────────────────────────────
@@ -400,11 +434,11 @@ void RvEmitter::emitSetp(const PtxInstr& instr, std::ostringstream& out) {
     bool is_signed = (op.find(".s32") != std::string::npos);
 
     if (op.find(".lt") != std::string::npos) {
-        if (b_is_imm) out << "    slti " << preg << ", " << ra << ", " << b.int_val << "\n";
+        if (b_is_imm) out << "    " << (is_signed ? "slti " : "sltiu ") << preg << ", " << ra << ", " << b.int_val << "\n";
         else out << "    " << (is_signed ? "slt " : "sltu ") << preg << ", " << ra << ", " << rb << "\n";
     } else if (op.find(".ge") != std::string::npos) {
         if (b_is_imm) {
-            out << "    slti  " << preg << ", " << ra << ", " << b.int_val << "\n";
+            out << "    " << (is_signed ? "slti  " : "sltiu ") << preg << ", " << ra << ", " << b.int_val << "\n";
         } else {
             out << "    " << (is_signed ? "slt " : "sltu ") << preg << ", " << ra << ", " << rb << "\n";
         }
@@ -412,7 +446,7 @@ void RvEmitter::emitSetp(const PtxInstr& instr, std::ostringstream& out) {
     } else if (op.find(".gt") != std::string::npos) {
         if (b_is_imm) {
             // a > imm ⟺ a >= imm+1 ⟺ !(a < imm+1)
-            out << "    slti  " << preg << ", " << ra << ", " << (b.int_val + 1) << "\n";
+            out << "    " << (is_signed ? "slti  " : "sltiu ") << preg << ", " << ra << ", " << (b.int_val + 1) << "\n";
             out << "    xori  " << preg << ", " << preg << ", 1  # invert for gt\n";
         } else {
             out << "    " << (is_signed ? "slt " : "sltu ") << preg << ", " << rb << ", " << ra << "\n";
@@ -420,7 +454,7 @@ void RvEmitter::emitSetp(const PtxInstr& instr, std::ostringstream& out) {
     } else if (op.find(".le") != std::string::npos) {
         if (b_is_imm) {
             // a <= imm ⟺ !(a > imm) ⟺ !(a >= imm+1)
-            out << "    slti  " << preg << ", " << ra << ", " << (b.int_val + 1) << "\n";
+            out << "    " << (is_signed ? "slti  " : "sltiu ") << preg << ", " << ra << ", " << (b.int_val + 1) << "\n";
         } else {
             out << "    " << (is_signed ? "slt " : "sltu ") << preg << ", " << rb << ", " << ra << "\n";
             out << "    xori  " << preg << ", " << preg << ", 1  # invert for le\n";
@@ -478,6 +512,17 @@ void RvEmitter::emitBra(const PtxInstr& instr, std::ostringstream& out) {
         out << "    bnez " << preg << ", " << label
             << "  # @" << instr.pred << " bra\n";
     }
+}
+
+void RvEmitter::emitBarSync(const PtxInstr& instr, std::ostringstream& out) {
+    if (!instr.pred.empty() || instr.operands.size() != 1
+        || instr.operands[0].kind != PtxOperand::Kind::IntImm
+        || instr.operands[0].int_val < 0 || instr.operands[0].int_val > 15) {
+        error_ = "bar.sync requires one unpredicated immediate ID in range 0..15";
+        return;
+    }
+    const uint32_t word = (static_cast<uint32_t>(instr.operands[0].int_val) << 20) | 0x0Bu;
+    out << "    .4byte 0x" << std::hex << word << std::dec << "\n";
 }
 
 // ── Arithmetic ────────────────────────────────────────────────────────────────
@@ -632,7 +677,7 @@ void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
     } else if (startsWith(op, "neg")) {
         if (instr.operands.size() >= 2)
             out << "    neg " << rd << ", " << rarg(1) << "  # " << op << "\n";
-    } else if (op == "bar.sync" || op == "membar.gl" || op == "membar.cta") {
+    } else if (op == "membar.gl" || op == "membar.cta") {
         out << "    fence  # " << op << "\n";
     } else {
         out << "    # Unhandled op: " << op;

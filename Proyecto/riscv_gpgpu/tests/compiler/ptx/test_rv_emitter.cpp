@@ -139,6 +139,19 @@ TEST(RvEmitter, EmitsSetpGe) {
     EXPECT_TRUE(contains(asm_out, "xori")) << asm_out;
 }
 
+TEST(RvEmitter, EmitsUnsignedSetpImmediate) {
+    const char* ptx = R"(
+.visible .entry k() {
+    .reg .pred %p<1>;
+    .reg .u32 %r<1>;
+    mov.u32 %r0, 31;
+    setp.ge.u32 %p0, %r0, 16;
+    ret;
+})";
+    std::string asm_out = emitForPtx(ptx);
+    EXPECT_TRUE(contains(asm_out, "sltiu")) << asm_out;
+}
+
 TEST(RvEmitter, EmitsPredicatedBranch) {
     const char* ptx = R"(
 .visible .entry k(.param .u32 p0) {
@@ -198,6 +211,33 @@ TEST(RvEmitter, EmitsFpFmadd) {
     EXPECT_TRUE(contains(asm_out, "fmadd.s")) << asm_out;
     EXPECT_TRUE(contains(asm_out, "flw")) << asm_out;
     EXPECT_TRUE(contains(asm_out, "fmv.w.x")) << asm_out;
+}
+
+TEST(RvEmitter, EmitsSharedAccessWithSharedBase) {
+    const char* ptx = R"(
+.visible .entry k() {
+    .reg .u32 %r<3>;
+    mov.u32 %r0, 4;
+    mov.u32 %r1, 7;
+    st.shared.u32 [%r0], %r1;
+    ld.shared.u32 %r2, [%r0];
+    ret;
+})";
+    std::string asm_out = emitForPtx(ptx);
+    EXPECT_TRUE(contains(asm_out, "li t6, 0x00400000")) << asm_out;
+    EXPECT_TRUE(contains(asm_out, "sw")) << asm_out;
+    EXPECT_TRUE(contains(asm_out, "lw")) << asm_out;
+}
+
+TEST(RvEmitter, EmitsBarSyncCustomInstruction) {
+    const char* ptx = R"(
+.visible .entry k() {
+    bar.sync 0;
+    ret;
+})";
+    std::string asm_out = emitForPtx(ptx);
+    EXPECT_TRUE(contains(asm_out, ".4byte 0xb")) << asm_out;
+    EXPECT_FALSE(contains(asm_out, "fence  # bar.sync")) << asm_out;
 }
 
 TEST(RvEmitter, EmitsRet) {

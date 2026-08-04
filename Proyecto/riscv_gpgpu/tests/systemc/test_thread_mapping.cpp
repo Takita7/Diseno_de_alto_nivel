@@ -46,6 +46,41 @@ static bool clangAvailable() {
 //   2. Computes global_tid = ctaid.x * ntid.x + tid.x
 //   3. Writes output[global_tid] = global_tid
 
+static const char* kBarrierPtx = R"(
+.version 7.0
+.target sm_20
+.address_size 32
+
+.visible .entry barrier_order(
+    .param .u32 bp_param_0
+)
+{
+    .reg .pred %p<2>;
+    .reg .u32 %r<10>;
+    ld.param.u32 %r0, [bp_param_0];
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mul.lo.u32 %r4, %r2, %r3;
+    add.u32 %r4, %r4, %r1;
+    mul.lo.u32 %r5, %r4, 4;
+    add.u32 %r6, %r0, %r5;
+    mov.u32 %r7, 1;
+    st.global.u32 [%r6], %r7;
+    bar.sync 0;
+    setp.ne.u32 %p0, %r1, 0;
+    @%p0 bra $L__bar_end;
+    add.u32 %r8, %r3, -1;
+    add.u32 %r8, %r4, %r8;
+    mul.lo.u32 %r8, %r8, 4;
+    add.u32 %r8, %r0, %r8;
+    ld.global.u32 %r9, [%r8];
+    st.global.u32 [%r6], %r9;
+$L__bar_end:
+    ret;
+}
+)";
+
 static const char* kTidPrinterPtx = R"(
 .version 7.0
 .target sm_20
@@ -211,6 +246,45 @@ TEST(ThreadMapping, TidPrinter1D_N64) {
 //
 // Verifies T069: when totalThreads > numCUs, threads are scheduled in rounds.
 // Uses 16 threads but only 4 CUs → 4 rounds of 4 threads each.
+
+TEST(ThreadMapping, BarrierOrderingPerBlock) {
+    if (!clangAvailable()) GTEST_SKIP() << "clang riscv32 not available";
+
+    fs::path elf = fs::temp_directory_path() / "barrier_order_test.elf";
+    PtxTranspiler tx;
+    ASSERT_TRUE(tx.compileToFile(kBarrierPtx, elf.string()));
+
+    constexpr uint32_t N = 16;
+    uint64_t out_ptr = 0;
+    ASSERT_TRUE(gpgpuMalloc(out_ptr, N * sizeof(uint32_t)));
+    std::vector<uint32_t> host_out(N, 0);
+    ASSERT_TRUE(gpgpuMemcpyH2D(out_ptr, host_out.data(), N * sizeof(uint32_t)));
+
+    KernelLaunchArgs launch_args;
+    launch_args.kernel_name = "barrier_order";
+    launch_args.entry_symbol = "barrier_order";
+    launch_args.grid_x = 2;
+    launch_args.block_x = 8;
+    launch_args.args = { out_ptr };
+    ASSERT_TRUE(configureLaunch(launch_args));
+
+    KernelBridge::Config cfg;
+    cfg.num_compute_units = 2;
+    cfg.threads_per_warp = 1;
+    cfg.max_warps_per_cu = 1;
+    cfg.max_sim_cycles = 100000;
+    cfg.print_stats = false;
+
+    KernelBridge bridge(cfg);
+    ASSERT_TRUE(bridge.runOnHardware("barrier_order", elf.string(),
+                                     launch_args.args, { out_ptr }));
+    ASSERT_TRUE(gpgpuMemcpyD2H(host_out.data(), out_ptr, N * sizeof(uint32_t)));
+    EXPECT_EQ(host_out[0], 1u);
+    EXPECT_EQ(host_out[8], 1u);
+
+    EXPECT_TRUE(gpgpuFree(out_ptr));
+    fs::remove(elf);
+}
 
 TEST(ThreadMapping, TidPrinterTimeMultiplexed) {
     if (!clangAvailable()) GTEST_SKIP() << "clang riscv32 not available";

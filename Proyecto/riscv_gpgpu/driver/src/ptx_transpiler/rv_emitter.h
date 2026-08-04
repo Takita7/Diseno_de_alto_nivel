@@ -1,13 +1,17 @@
 // rv_emitter.h — PTX AST → RV32IMF assembly text
 //
 // Register allocation strategy:
-//   - Integer PTX regs (%r, %rd, %p) → pool: t0-t6, s0-s11  (19 regs)
+//   - Integer PTX regs (%r, %rd, %p) → pool: t0-t5, s0-s11  (18 regs)
 //   - Float PTX regs (%f)            → pool: fa0-fa7, ft0-ft11 (20 regs)
 //   - Parameters arrive in a0-a7 (integer ABI).
 //     ld.param.u32 %rx, [param_N] → mv {ireg(rx)}, a{N}
 //     ld.param.f32 %fx, [param_N] → fmv.w.x {freg(fx)}, a{N}
 //
-// Special registers (accessed via gp = THREAD_CTX_BASE = 0xE000):\n//   %tid.x   = 0(gp)    %tid.y   = 4(gp)    %tid.z   = 8(gp)\n//   %ctaid.x = 12(gp)   %ctaid.y = 16(gp)   %ctaid.z = 20(gp)\n//   %ntid.x  = 24(gp)   %ntid.y  = 28(gp)   %ntid.z  = 32(gp)\n// Note: THREAD_CTX_BASE is above the shared memory range (0x0000C000)
+// Special registers (accessed via gp = THREAD_CTX_BASE = 0x00200000):
+//   %tid.x   = 0(gp)    %tid.y   = 4(gp)    %tid.z   = 8(gp)
+//   %ctaid.x = 12(gp)   %ctaid.y = 16(gp)   %ctaid.z = 20(gp)
+//   %ntid.x  = 24(gp)   %ntid.y  = 28(gp)   %ntid.z  = 32(gp)
+// THREAD_CTX_BASE is below SHARED_MEM_BASE (0x00400000).
 
 #pragma once
 
@@ -52,11 +56,14 @@ private:
     void emitLdParam   (const PtxInstr& i, std::ostringstream& out);
     void emitLdGlobal  (const PtxInstr& i, std::ostringstream& out);
     void emitStGlobal  (const PtxInstr& i, std::ostringstream& out);
+    void emitLdShared  (const PtxInstr& i, std::ostringstream& out);
+    void emitStShared  (const PtxInstr& i, std::ostringstream& out);
     void emitMov       (const PtxInstr& i, std::ostringstream& out);
     void emitArith     (const PtxInstr& i, std::ostringstream& out);
     void emitSetp      (const PtxInstr& i, std::ostringstream& out);
     void emitBra       (const PtxInstr& i, std::ostringstream& out);
     void emitCvt       (const PtxInstr& i, std::ostringstream& out);
+    void emitBarSync   (const PtxInstr& i, std::ostringstream& out);
 
     // Resolve operand to a register name or immediate string
     std::string resolveReg(const PtxOperand& op);

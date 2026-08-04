@@ -16,7 +16,6 @@ namespace riscv_gpgpu {
 MemoryHierarchy::MemoryHierarchy(sc_core::sc_module_name name, const Config& config)
     : sc_core::sc_module(name), config_(config)
 {
-    shared_memory_.resize(config_.shared_mem_size, 0);
     LOG_INFO("MemoryHierarchy initialized: L1="
              + std::to_string(config_.l1_cache_size   / 1024) + "KB  L2="
              + std::to_string(config_.l2_cache_size   / 1024) + "KB  shared="
@@ -32,7 +31,8 @@ Address MemoryHierarchy::alignAddress(Address addr) {
 }
 
 bool MemoryHierarchy::isSharedMemoryAddress(Address addr) const {
-    return addr < static_cast<Address>(config_.shared_mem_size);
+    const uint64_t end = static_cast<uint64_t>(SHARED_MEM_BASE) + config_.shared_mem_size;
+    return addr >= SHARED_MEM_BASE && static_cast<uint64_t>(addr) < end;
 }
 
 uint32_t MemoryHierarchy::calculateLatency(CacheStatus status) {
@@ -46,40 +46,65 @@ uint32_t MemoryHierarchy::calculateLatency(CacheStatus status) {
 
 // ── Shared memory ─────────────────────────────────────────────────────────────
 
-bool MemoryHierarchy::loadSharedMemory(Address addr, uint32_t& data) {
-    if (addr + 3 >= static_cast<Address>(config_.shared_mem_size)) {
-        LOG_WARNING("MemoryHierarchy: shared read out of range @ "
-                    + std::to_string(addr));
+bool MemoryHierarchy::allocateSharedMemory(BlockID block_id, uint32_t size_bytes) {
+    const uint32_t requested = size_bytes;
+    if (requested > config_.shared_mem_size) {
+        LOG_WARNING("MemoryHierarchy: shared allocation exceeds configured capacity for block "
+                    + std::to_string(block_id));
         return false;
     }
-    data = static_cast<uint32_t>(shared_memory_[addr])
-         | (static_cast<uint32_t>(shared_memory_[addr + 1]) <<  8)
-         | (static_cast<uint32_t>(shared_memory_[addr + 2]) << 16)
-         | (static_cast<uint32_t>(shared_memory_[addr + 3]) << 24);
+    shared_memory_[block_id] = std::vector<uint8_t>(requested, 0);
     return true;
 }
 
-bool MemoryHierarchy::storeSharedMemory(Address addr, uint32_t data) {
-    if (addr + 3 >= static_cast<Address>(config_.shared_mem_size)) {
-        LOG_WARNING("MemoryHierarchy: shared write out of range @ "
-                    + std::to_string(addr));
+void MemoryHierarchy::releaseSharedMemory(BlockID block_id) {
+    shared_memory_.erase(block_id);
+}
+
+bool MemoryHierarchy::hasSharedMemory(BlockID block_id) const {
+    return shared_memory_.count(block_id) != 0;
+}
+
+bool MemoryHierarchy::loadSharedMemory(BlockID block_id, Address addr, uint32_t& data) {
+    auto block = shared_memory_.find(block_id);
+    if (addr < SHARED_MEM_BASE) return false;
+    const uint64_t offset = static_cast<uint64_t>(addr) - SHARED_MEM_BASE;
+    if (block == shared_memory_.end() || offset + 4 > block->second.size()) {
+        LOG_WARNING("MemoryHierarchy: shared read out of range for block "
+                    + std::to_string(block_id) + " @ " + std::to_string(addr));
         return false;
     }
-    shared_memory_[addr]     =  data        & 0xFF;
-    shared_memory_[addr + 1] = (data >>  8) & 0xFF;
-    shared_memory_[addr + 2] = (data >> 16) & 0xFF;
-    shared_memory_[addr + 3] = (data >> 24) & 0xFF;
+    data = static_cast<uint32_t>(block->second[offset])
+         | (static_cast<uint32_t>(block->second[offset + 1]) <<  8)
+         | (static_cast<uint32_t>(block->second[offset + 2]) << 16)
+         | (static_cast<uint32_t>(block->second[offset + 3]) << 24);
+    return true;
+}
+
+bool MemoryHierarchy::storeSharedMemory(BlockID block_id, Address addr, uint32_t data) {
+    auto block = shared_memory_.find(block_id);
+    if (addr < SHARED_MEM_BASE) return false;
+    const uint64_t offset = static_cast<uint64_t>(addr) - SHARED_MEM_BASE;
+    if (block == shared_memory_.end() || offset + 4 > block->second.size()) {
+        LOG_WARNING("MemoryHierarchy: shared write out of range for block "
+                    + std::to_string(block_id) + " @ " + std::to_string(addr));
+        return false;
+    }
+    block->second[offset]     =  data        & 0xFF;
+    block->second[offset + 1] = (data >>  8) & 0xFF;
+    block->second[offset + 2] = (data >> 16) & 0xFF;
+    block->second[offset + 3] = (data >> 24) & 0xFF;
     return true;
 }
 
 // ── Read path: L1 → L2 → global ──────────────────────────────────────────────
 
-bool MemoryHierarchy::loadWord(Address addr, uint32_t& data, uint32_t& latency) {
+bool MemoryHierarchy::loadWord(Address addr, uint32_t& data, uint32_t& latency, BlockID block_id) {
     Address aligned = alignAddress(addr);
 
     if (isSharedMemoryAddress(aligned)) {
         latency = 1;
-        return loadSharedMemory(aligned, data);
+        return loadSharedMemory(block_id, aligned, data);
     }
 
     auto it1 = l1_cache_.find(aligned);
@@ -111,12 +136,12 @@ bool MemoryHierarchy::loadWord(Address addr, uint32_t& data, uint32_t& latency) 
 
 // ── Write path: write-through, no-write-allocate ──────────────────────────────
 
-bool MemoryHierarchy::storeWord(Address addr, uint32_t data, uint32_t& latency) {
+bool MemoryHierarchy::storeWord(Address addr, uint32_t data, uint32_t& latency, BlockID block_id) {
     Address aligned = alignAddress(addr);
 
     if (isSharedMemoryAddress(aligned)) {
         latency = 1;
-        return storeSharedMemory(aligned, data);
+        return storeSharedMemory(block_id, aligned, data);
     }
 
     if (l1_cache_.count(aligned)) l1_cache_[aligned] = data;
@@ -151,20 +176,51 @@ void MemoryHierarchy::invalidateCache() {
 //
 // Each byte is stored via a read-modify-write on the word-granular backing store.
 
-void MemoryHierarchy::writeBytes(Address addr, const uint8_t* data, size_t len) {
+void MemoryHierarchy::writeBytes(Address addr, const uint8_t* data, size_t len, BlockID block_id) {
+    const uint64_t shared_end = static_cast<uint64_t>(SHARED_MEM_BASE) + config_.shared_mem_size;
+    const uint64_t request_end = static_cast<uint64_t>(addr) + len;
+    if (addr >= SHARED_MEM_BASE && static_cast<uint64_t>(addr) < shared_end) {
+        auto block = shared_memory_.find(block_id);
+        const uint64_t offset = static_cast<uint64_t>(addr) - SHARED_MEM_BASE;
+        if (block == shared_memory_.end() || request_end > shared_end
+            || offset + len > block->second.size()) {
+            LOG_WARNING("MemoryHierarchy: shared byte write out of range for block "
+                        + std::to_string(block_id));
+            return;
+        }
+        std::copy(data, data + len, block->second.begin() + offset);
+        return;
+    }
+
     for (size_t i = 0; i < len; ++i) {
         Address byte_addr = addr + static_cast<Address>(i);
         Address word_addr = byte_addr & ~static_cast<Address>(0x3);
         uint32_t shift    = (byte_addr & 0x3u) * 8u;
         uint32_t& word    = global_memory_[word_addr];
         word = (word & ~(0xFFu << shift)) | (static_cast<uint32_t>(data[i]) << shift);
-        // Invalidate cache lines so subsequent loads see the new value.
         l1_cache_.erase(word_addr);
         l2_cache_.erase(word_addr);
     }
 }
 
-void MemoryHierarchy::readBytes(Address addr, uint8_t* data, size_t len) {
+void MemoryHierarchy::readBytes(Address addr, uint8_t* data, size_t len, BlockID block_id) {
+    const uint64_t shared_end = static_cast<uint64_t>(SHARED_MEM_BASE) + config_.shared_mem_size;
+    const uint64_t request_end = static_cast<uint64_t>(addr) + len;
+    if (addr >= SHARED_MEM_BASE && static_cast<uint64_t>(addr) < shared_end) {
+        auto block = shared_memory_.find(block_id);
+        const uint64_t offset = static_cast<uint64_t>(addr) - SHARED_MEM_BASE;
+        if (block == shared_memory_.end() || request_end > shared_end
+            || offset + len > block->second.size()) {
+            LOG_WARNING("MemoryHierarchy: shared byte read out of range for block "
+                        + std::to_string(block_id));
+            std::fill(data, data + len, 0);
+            return;
+        }
+        std::copy(block->second.begin() + offset,
+                  block->second.begin() + offset + len, data);
+        return;
+    }
+
     for (size_t i = 0; i < len; ++i) {
         Address byte_addr = addr + static_cast<Address>(i);
         Address word_addr = byte_addr & ~static_cast<Address>(0x3);

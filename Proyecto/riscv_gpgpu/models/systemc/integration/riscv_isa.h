@@ -36,7 +36,7 @@ struct RV32Instr {
         // J-type
         JAL,
         // System
-        ECALL, EBREAK, FENCE,
+        ECALL, EBREAK, FENCE, BAR_SYNC,
         // ── F-extension (RV32F) ──────────────────────────────────────────────
         // FP load/store
         FLW, FSW,
@@ -217,6 +217,13 @@ inline RV32Instr decodeRV32(uint32_t instr) {
 
     case 0x0F:  // FENCE
         d.op = Op::FENCE;
+        break;
+
+    case 0x0B:
+        if (funct3 == 0 && d.rd == 0 && d.rs1 == 0) {
+            d.op = Op::BAR_SYNC;
+            d.imm = static_cast<int32_t>((instr >> 20) & 0xFFFu);
+        }
         break;
 
     // ── F-extension: LOAD-FP ──────────────────────────────────────────────────
