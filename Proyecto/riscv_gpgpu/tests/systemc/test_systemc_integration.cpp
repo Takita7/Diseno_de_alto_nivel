@@ -299,14 +299,16 @@ TEST(SystemCIntegration, CudaMultiUnitSimtEndToEnd) {
                 f << ".text\n"
                     << ".globl cuda_multi_unit_simt\n"
                     << "cuda_multi_unit_simt:\n"
-                    << "    slli t0, a4, 3\n"
-                    << "    add t0, t0, a5\n"
-                    << "    andi t1, a5, 1\n"
-                    << "    slli t0, t0, 2\n"
+                    << "    lw t0, 12(gp)\n"    // t0 = ctaid.x (block_id)
+                    << "    slli t0, t0, 3\n"   // t0 = block_id * 8
+                    << "    lw t1, 0(gp)\n"     // t1 = tid.x (thread index)
+                    << "    andi t6, t1, 1\n"   // t6 = tid.x & 1  (odd/even flag)
+                    << "    add t0, t0, t1\n"   // t0 = global_idx
+                    << "    slli t0, t0, 2\n"   // t0 = global_idx * 4
                     << "    add t2, a2, t0\n"
                     << "    add t3, a0, t0\n"
                     << "    add t4, a1, t0\n"
-                    << "    bne t1, zero, 1f\n"
+                    << "    bne t6, zero, 1f\n"
                     << "0:\n"
                     << "    lw t5, 0(t3)\n"
                     << "    lw t6, 0(t4)\n"

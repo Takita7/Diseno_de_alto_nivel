@@ -78,3 +78,42 @@ TEST(RuntimeApiTest, WaitKernelCompletion) {
     fs::remove(binary_file);
     fs::remove(manifest_file);
 }
+
+// ── T068: ThreadContext mapping verification ──────────────────────────────────
+
+TEST(RuntimeApiTest, ThreadContextMapping1D) {
+    // grid=(4,1,1), block=(8,1,1) → 32 threads
+    auto ctxs = computeThreadContexts(4, 1, 1, 8, 1, 1);
+    ASSERT_EQ(ctxs.size(), 32u);
+    for (uint32_t t = 0; t < 32u; ++t) {
+        const auto& c = ctxs[t];
+        EXPECT_EQ(c.global_id, t);
+        EXPECT_EQ(c.ntid_x, 8u);
+        // Reconstruct global_id from tid/ctaid
+        uint32_t recomputed = c.ctaid_x * c.ntid_x + c.tid_x;
+        EXPECT_EQ(recomputed, t)
+            << "Thread " << t << ": ctaid_x=" << c.ctaid_x << " tid_x=" << c.tid_x;
+    }
+}
+
+TEST(RuntimeApiTest, ThreadContextMapping2D) {
+    // grid=(2,2,1), block=(4,4,1) → 64 threads
+    auto ctxs = computeThreadContexts(2, 2, 1, 4, 4, 1);
+    ASSERT_EQ(ctxs.size(), 64u);
+    for (uint32_t t = 0; t < 64u; ++t) {
+        const auto& c = ctxs[t];
+        EXPECT_EQ(c.global_id, t);
+        EXPECT_EQ(c.ntid_x, 4u);
+        uint32_t blk = c.ctaid_y * 2u + c.ctaid_x;
+        uint32_t thd = c.tid_y * 4u + c.tid_x;
+        EXPECT_EQ(blk * 16u + thd, t) << "Thread " << t;
+    }
+}
+
+TEST(RuntimeApiTest, ThreadContextSingleThread) {
+    auto ctxs = computeThreadContexts(1, 1, 1, 1, 1, 1);
+    ASSERT_EQ(ctxs.size(), 1u);
+    EXPECT_EQ(ctxs[0].global_id, 0u);
+    EXPECT_EQ(ctxs[0].tid_x, 0u);
+    EXPECT_EQ(ctxs[0].ctaid_x, 0u);
+}

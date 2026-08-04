@@ -123,7 +123,15 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // x3 (gp) = THREAD_CTX_BASE — each thread gets its own slot.
     // Slot for thread T is at THREAD_CTX_BASE + T * 64 bytes.
     // Layout: [0]=tid.x [4]=tid.y [8]=tid.z [12]=ctaid.x [16]=ctaid.y [20]=ctaid.z [24]=ntid.x [28]=ntid.y [32]=ntid.z
-    const uint32_t THREAD_CTX_BASE = 0x00001000u;
+    //
+    // Address constraints for THREAD_CTX_BASE:
+    //   > shared_mem_size (0xC000 = 48KB by default)     — avoids loadWord shared path
+    //   > ELF code region (~0x10000..0x12000 for lld)    — avoids THREAD_CTX overwriting instructions
+    //   < device_buffers (0x10000000)                    — driver allocations start here
+    //
+    // Safe choice: 0x00200000 (2MB). For 1024 threads × 64 bytes = 64KB → range
+    // 0x200000..0x20FFFF, well below device buffers and above ELF code.
+    const uint32_t THREAD_CTX_BASE   = 0x00200000u;
     const uint32_t THREAD_CTX_STRIDE = 64u;
 
     std::cout << "[bridge] Initial registers: "
@@ -177,11 +185,6 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         worker.cu->setSIMTController(worker.simt.get());
         worker.cu->setEntryPoint(entry_pc);
         auto worker_regs  = regs;
-        // a4 (x14) = block index, a5 (x15) = thread index within block.
-        // This mirrors what the FPGA hardware dispatcher writes into
-        // the register file before asserting the kernel start signal.
-        worker_regs[14] = block_id;
-        worker_regs[15] = thread_id;
         // x3 (gp) = per-thread THREAD_CTX slot
         const uint32_t ctx_base = THREAD_CTX_BASE + global_thread_id * THREAD_CTX_STRIDE;
         worker_regs[3] = ctx_base;
