@@ -233,6 +233,8 @@ static warp_status_t executeOneWarp(cu_id_t cu_id, const warp_dispatch_t& d,
     // unconditionally here too, not just on a "first call" path.
     simt.initializeWarp(d.active_mask_init);
 
+    ap_uint<32> instr_count = 0;  // T077: instructions retired in this dispatch
+
 EXECUTE_ONE_WARP_DECODE_LOOP:
     for (uint32_t i = d.resume_pc; i < program_len; ++i) {
 #pragma HLS LOOP_TRIPCOUNT max=MAX_PROGRAM_LEN
@@ -246,6 +248,8 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
             break;  // golden: `++total_instructions_; break;` (compute_unit.cpp:83-86) - see file header note 4 on stats
         }
 
+        ++instr_count;  // T077: count every non-HALT instruction that retires
+
         if (op == Opcode::BARRIER) {
             // Golden: records arrival (simt_ctrl_->threadHitBarrier), advances
             // pc past BARRIER, sets STALLED, returns (compute_unit.cpp:88-105).
@@ -254,9 +258,10 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
             // contract) - compute_pipeline's job is still just to report the
             // stall and stop where it is, same as before.
             warp_status_t st;
-            st.code       = WarpStatusCode::STALLED_AT_BARRIER;
-            st.barrier_id = barrier_id_t(instr.imm);
-            st.resume_pc  = ap_uint<16>(i + 1);   // golden: `++ctx.pc` before returning
+            st.code        = WarpStatusCode::STALLED_AT_BARRIER;
+            st.barrier_id  = barrier_id_t(instr.imm);
+            st.resume_pc   = ap_uint<16>(i + 1);   // golden: `++ctx.pc` before returning
+            st.instr_count = instr_count;
             return st;
         }
 
@@ -269,8 +274,9 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
     }
 
     warp_status_t st;
-    st.code       = WarpStatusCode::COMPLETE;
-    st.barrier_id = 0;
+    st.code        = WarpStatusCode::COMPLETE;
+    st.barrier_id  = 0;
+    st.instr_count = instr_count;
     return st;
 }
 

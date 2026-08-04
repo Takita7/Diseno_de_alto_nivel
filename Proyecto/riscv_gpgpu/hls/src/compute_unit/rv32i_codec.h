@@ -36,6 +36,7 @@ constexpr uint8_t JAL_OP    = 0x6F;
 constexpr uint8_t JALR_OP   = 0x67;
 constexpr uint8_t CUSTOM0   = 0x0B;  // vector-lane + scalar-float ops (SS13.5)
 constexpr uint8_t CUSTOM1   = 0x2B;  // VBRANCH/VJOIN/BARRIER/HALT (SS13.6)
+constexpr uint8_t OP_FP     = 0x53;  // RV32F standard: FADD.S/FMUL.S (parity §19)
 }  // namespace rv32i_opcode
 
 // ── encodeInstruction (SS13.8) ───────────────────────────────────────────────
@@ -258,6 +259,14 @@ inline Instruction decodeInstruction(raw_instr_t word) {
         case JALR_OP: {
             instr.opcode = Opcode::JALR;
             instr.rd = rd5; instr.rs1 = rs15; instr.rs2 = 0; instr.imm = iimm;
+            break;
+        }
+        case OP_FP: {
+            // RV32F standard encoding; map to Virtual-ISA FP ops (§19).
+            instr.rs1 = rs15; instr.rs2 = rs25; instr.rd = rd5; instr.imm = 0;
+            if      (f7 == 0b0000000) instr.opcode = Opcode::FADD;   // FADD.S
+            else if (f7 == 0b0001000) instr.opcode = Opcode::FMUL;   // FMUL.S
+            else                       instr.opcode = Opcode::HALT;   // FDIV/FSQRT/etc. unsupported
             break;
         }
         case CUSTOM0: {

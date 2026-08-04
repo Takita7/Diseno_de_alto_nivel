@@ -25,6 +25,7 @@ void gpgpu_scheduler(
 
     uint32_t      program_len,
     warp_id_t     total_warps,
+    warp_id_t     warp_id_offset,
     bool          start,
     bool&         busy,
     bool&         done,
@@ -54,12 +55,13 @@ void gpgpu_scheduler(
     bundle=gmem2 \
     max_widen_bitwidth=RISCV_GPGPU_MAXI_MAX_WIDEN_BITWIDTH
 
-#pragma HLS INTERFACE s_axilite port=program_len bundle=control
-#pragma HLS INTERFACE s_axilite port=total_warps bundle=control
-#pragma HLS INTERFACE s_axilite port=start       bundle=control
-#pragma HLS INTERFACE s_axilite port=busy        bundle=control
-#pragma HLS INTERFACE s_axilite port=done        bundle=control
-#pragma HLS INTERFACE s_axilite port=fault       bundle=control
+#pragma HLS INTERFACE s_axilite port=program_len    bundle=control
+#pragma HLS INTERFACE s_axilite port=total_warps    bundle=control
+#pragma HLS INTERFACE s_axilite port=warp_id_offset bundle=control
+#pragma HLS INTERFACE s_axilite port=start          bundle=control
+#pragma HLS INTERFACE s_axilite port=busy           bundle=control
+#pragma HLS INTERFACE s_axilite port=done           bundle=control
+#pragma HLS INTERFACE s_axilite port=fault          bundle=control
 
 #pragma HLS INTERFACE axis port=mem_req_out
 #pragma HLS INTERFACE axis port=mem_resp_in
@@ -153,7 +155,8 @@ void gpgpu_scheduler(
         dispatch_out0,
         status_in0,
         barrier_events[0],
-        barrier_signal[0]
+        barrier_signal[0],
+        warp_id_offset
     );
 
     schedulerCore(
@@ -165,7 +168,8 @@ void gpgpu_scheduler(
         dispatch_out1,
         status_in1,
         barrier_events[1],
-        barrier_signal[1]
+        barrier_signal[1],
+        warp_id_offset
     );
 
     // ------------------------------------------------------------------

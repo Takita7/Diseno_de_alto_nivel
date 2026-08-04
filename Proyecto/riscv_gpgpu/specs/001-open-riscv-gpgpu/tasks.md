@@ -99,26 +99,26 @@
 
 **Purpose**: Close the remaining functional parity gaps between the current `models/systemc/src/` behavior and the HLS path in this branch.
 
-- [ ] T074 [US2] Create an explicit SystemC↔HLS parity matrix in `docs/hls/interfaces.md`
+- [x] T074 [US2] Create an explicit SystemC↔HLS parity matrix in `docs/hls/interfaces.md`
 	- Required: table mapping latest SystemC modules (`compute_unit`, `memory`, `scheduler`, `simt_controller`, `top`, `system_top`, integration expectations) to HLS implementations (`hls/src/**`) with one of: `Aligned`, `Partially aligned`, `Missing`.
 	- Verification: each `Partially aligned`/`Missing` entry must reference a concrete follow-up task ID (T075+).
 
-- [ ] T075 [US2] Add binary-execution parity plan/task for `ComputeUnit::step()` semantics into `hls/src/compute_unit/`
+- [x] T075 [US2] Add binary-execution parity plan/task for `ComputeUnit::step()` semantics into `hls/src/compute_unit/`
 	- Gap addressed: latest SystemC executes decoded RV32I/M/F binaries via `riscv_isa.h` + PC-driven fetch/execute, while current HLS path is Virtual-ISA centric.
 	- Required: implement (or stage behind compile-time flag) an HLS binary decode/execute path that can consume instruction words and preserve the same completion semantics (`HALT`/return-sentinel behavior, block/thread context registers).
 	- Verification: add dedicated tests in `tests/hls/` that replay at least one binary-style kernel trace and compare register/memory end state against SystemC golden behavior.
 
-- [ ] T076 [US2] Align top-level orchestration semantics with latest `GPGPUTop`/`SystemTop` behavior in `hls/src/scheduler/gpgpu_top.*`
+- [x] T076 [US2] Align top-level orchestration semantics with latest `GPGPUTop`/`SystemTop` behavior in `hls/src/scheduler/gpgpu_top.*`
 	- Gap addressed: latest SystemC includes explicit multi-CU fan-out and multi-GPU distribution (`system_top/`), while HLS currently focuses on single-device scheduler orchestration.
 	- Required: either implement equivalent multi-instance orchestration hooks or document/enforce a strict single-device scope contract with adapter points for host-side multi-instance composition.
 	- Verification: add `tests/hls/` scenarios covering multi-CU progress and barrier release with more than one resident warp group; include expected dispatch/release traces.
 
-- [ ] T077 [US2] Add observability/counter parity hooks for HLS path in `hls/src/**` and `docs/hls/interfaces.md`
+- [x] T077 [US2] Add observability/counter parity hooks for HLS path in `hls/src/**` and `docs/hls/interfaces.md`
 	- Gap addressed: SystemC exposes run-level observability (`instructions`, divergence, cache behavior, effective progress metrics) used by benchmark analysis, while HLS path lacks a stable counter contract.
 	- Required: define minimal counter interface (at least instructions retired, barrier stalls, memory transactions/L1-L2 observable events) and integrate it in the HLS top-level interface contract.
 	- Verification: add tests proving counters are monotonic and consistent with known kernels (`intSaxpy`, `parallelReduction`, `conv2d3x3`) under fixed launch configs.
 
-- [ ] T078 [US2] Add end-to-end parity regression linking latest model kernels to HLS execution path in `tests/hls/test_model_parity.cpp`
+- [x] T078 [US2] Add end-to-end parity regression linking latest model kernels to HLS execution path in `tests/hls/test_model_parity.cpp`
 	- Required: for a selected subset of kernels in `models/systemc/src/common/kernel_programs.h` (including at least one divergent + one barrier-heavy + one FP case), compare final register/memory outputs between SystemC and HLS paths under the same launch geometry.
 	- Compatibility note: if exact parity is intentionally not achievable for a kernel class, document the reason and expected delta in `docs/hls/interfaces.md` and mark it as an accepted deviation.
 	- Verification: regression must fail on parity mismatch and emit kernel-level diff summaries.

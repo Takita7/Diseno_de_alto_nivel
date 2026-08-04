@@ -120,7 +120,8 @@ inline void schedulerCore(
     hls::stream<warp_dispatch_t>& dispatch_out,
     hls::stream<warp_status_t>&   status_in,
     hls::stream<WarpStatusCode>&   barrier_events_out,
-    hls::stream<barrier_signal_t>& barrier_signal_in
+    hls::stream<barrier_signal_t>& barrier_signal_in,
+    warp_id_t       warp_id_offset = 0
 ) {
     WarpSlot      slots[MAX_WARPS_PER_CU];
     bool          busy_cu_scheduler = false;   // this CU's own IDLE/RUNNING
@@ -142,7 +143,7 @@ inline void schedulerCore(
             // dispatch warps barrierCore itself refused to accept.
             if (total_warps > warp_id_t(NUM_CUS * MAX_WARPS_PER_CU)) continue;
 
-            launchSlots(slots, cu_id, total_warps);
+            launchSlots(slots, cu_id, total_warps, warp_id_offset);
             busy_cu = false;
 
             busy_cu_scheduler = true;
@@ -182,6 +183,23 @@ inline void schedulerCore(
 // nothing calls it). `set_top` needs a real, always-emitted symbol, same
 // reason compute_pipeline/memory_pipeline have always been declared in a
 // .h and defined in a .cpp rather than header-only.
+//
+// ── T076 Multi-device support via warp_id_offset ─────────────────────────────
+// `gpgpu_scheduler` is a SINGLE-DEVICE HLS IP. It orchestrates up to
+// NUM_CUS compute units within one FPGA device (KV260 target). The
+// `warp_id_offset` s_axilite parameter enables host-side multi-device
+// composition: device d is configured with warp_id_offset = sum of warps
+// assigned to devices 0..d-1, so global warp IDs are non-overlapping
+// across devices. `total_warps` is device-local (warps assigned to THIS
+// device only). See hls/src/system_top/system_top.h for SystemTopHLS,
+// the C++ coordinator that implements the warp split algorithm and
+// mirrors models/systemc/src/system_top/system_top.h API.
+//
+// `initial_regs_ptr` is still global-warp-id-indexed (SS16): the host
+// allocates a single buffer covering all global warps; each device reads
+// only its own subset (identified by warp_id including offset).
+// See docs/hls/interfaces.md §17.1 for the complete scope contract.
+// ─────────────────────────────────────────────────────────────────────────────
 void gpgpu_scheduler(
     instr_word_t* program_ptr,
 
@@ -190,6 +208,7 @@ void gpgpu_scheduler(
 
     uint32_t      program_len,
     warp_id_t     total_warps,
+    warp_id_t     warp_id_offset,
     bool          start,
     bool&         busy,
     bool&         done,
