@@ -77,6 +77,13 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         return false;
     }
 
+    SymbolEntry cuda_thread_ctx_sym;
+    const bool has_cuda_thread_ctx = elf.findSymbol("__gpgpu_thread_context", cuda_thread_ctx_sym);
+    if (has_cuda_thread_ctx) {
+        std::cout << "[bridge] CUDA compat thread context symbol at 0x"
+                  << std::hex << cuda_thread_ctx_sym.address << std::dec << "\n";
+    }
+
     // ── 3. Copy device buffers into SystemC global memory ────────────────────
     for (uint64_t dev_ptr : device_ptrs) {
         std::vector<uint8_t> content;
@@ -159,6 +166,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         uint32_t block_id  = 0;
         uint32_t thread_id = 0;
         bool     active    = false;
+        std::array<uint32_t, 12> cuda_thread_ctx{};
     };
 
     // global_thread_id encodes both block and thread: maps (block_id, thread_id)
@@ -203,14 +211,25 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         const uint32_t ctaid_x = blk_id % std::max<uint32_t>(1u, effective_grid_x);
         const uint32_t ctaid_y = (blk_id / std::max<uint32_t>(1u, effective_grid_x)) % std::max<uint32_t>(1u, effective_grid_y);
         const uint32_t ctaid_z = blk_id / (std::max<uint32_t>(1u, effective_grid_x) * std::max<uint32_t>(1u, effective_grid_y));
-        const uint32_t thread_ctx[9] = {
+        const std::array<uint32_t, 9> thread_ctx = {
             tid_x, tid_y, tid_z,
             ctaid_x, ctaid_y, ctaid_z,
             std::max<uint32_t>(1u, effective_block_x),
             std::max<uint32_t>(1u, effective_block_y),
             std::max<uint32_t>(1u, effective_block_z)
         };
-        mem.writeBytes(ctx_base, reinterpret_cast<const uint8_t*>(thread_ctx), 9 * 4);
+        mem.writeBytes(ctx_base, reinterpret_cast<const uint8_t*>(thread_ctx.data()), thread_ctx.size() * sizeof(uint32_t));
+
+        worker.cuda_thread_ctx = {
+            tid_x, tid_y, tid_z,
+            ctaid_x, ctaid_y, ctaid_z,
+            std::max<uint32_t>(1u, effective_block_x),
+            std::max<uint32_t>(1u, effective_block_y),
+            std::max<uint32_t>(1u, effective_block_z),
+            std::max<uint32_t>(1u, effective_grid_x),
+            std::max<uint32_t>(1u, effective_grid_y),
+            std::max<uint32_t>(1u, effective_grid_z)
+        };
         worker.cu->setReturnSentinel(RETURN_SENTINEL);
         worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
 
@@ -273,8 +292,14 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
                 // Step all non-complete threads in this warp simultaneously.
                 for (auto& w : wg.threads)
-                    if (w.active && w.cu && !w.cu->isComplete())
+                    if (w.active && w.cu && !w.cu->isComplete()) {
+                        if (has_cuda_thread_ctx) {
+                            mem.writeBytes(cuda_thread_ctx_sym.address,
+                                reinterpret_cast<const uint8_t*>(w.cuda_thread_ctx.data()),
+                                w.cuda_thread_ctx.size() * sizeof(uint32_t));
+                        }
                         w.cu->step();
+                    }
                 ++cycle;
 
                 if (cycle % 100000 == 0)
@@ -340,6 +365,11 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
             for (auto& worker : workers) {
                 if (!worker.active || !worker.cu) continue;
                 any_active = true;
+                if (has_cuda_thread_ctx) {
+                    mem.writeBytes(cuda_thread_ctx_sym.address,
+                        reinterpret_cast<const uint8_t*>(worker.cuda_thread_ctx.data()),
+                        worker.cuda_thread_ctx.size() * sizeof(uint32_t));
+                }
                 worker.cu->step();
                 ++cycle;
 

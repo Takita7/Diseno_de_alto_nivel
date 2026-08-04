@@ -39,6 +39,17 @@ Standard GPU benchmark suite adapted for RISC-V GPGPU:
 - Gaussian Elimination
 - LavaMD (Molecular dynamics)
 
+The repository also supports an optional local Rodinia checkout via CMake
+(`RODINIA_ROOT` + `RODINIA_KERNELS`) so compatible kernels can be enabled one
+by one as toolchain support grows. If a checkout uses a different layout, each
+kernel can also be pointed at an explicit source path with
+`RODINIA_<KERNEL>_SOURCE`.
+
+The first upstream Rodinia kernel pair wired through the real benchmark path is
+BFS (`cuda/bfs/kernel.cu` + `cuda/bfs/kernel2.cu`). It uses a small CUDA
+compatibility wrapper so the upstream device code can run through our current
+RISC-V/SystemC execution path.
+
 ### Custom Microbenchmarks
 Targeted benchmarks for architecture evaluation:
 - Thread divergence effectiveness
@@ -73,3 +84,7 @@ Configurations to evaluate:
 - Configuration templates created
 - Benchmark harness framework established
 - Detailed workloads to be implemented in Phase 5
+- Optional selective Rodinia integration supported when a local checkout is
+  provided
+- First upstream Rodinia kernel pair wired through the real benchmark path:
+  BFS `Kernel` + `Kernel2`

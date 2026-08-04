@@ -130,10 +130,25 @@ if [ -f "$PROJECT_ROOT/scripts/setup-tools.sh" ]; then
     . "$PROJECT_ROOT/scripts/setup-tools.sh"
 fi
 
+# ── Optional: Rodinia benchmark suite ───────────────────────────────────────
+RODINIA_DIR="$PROJECT_ROOT/external/rodinia"
+if [ ! -d "$RODINIA_DIR" ]; then
+    echo ""
+    echo "Optional: Rodinia benchmark suite not found at external/rodinia"
+    echo "  To enable upstream Rodinia kernels, clone it once:"
+    echo "    git clone --depth 1 https://github.com/yuhc/gpu-rodinia.git $RODINIA_DIR"
+    echo "  Then configure with:"
+    echo "    cmake .. -DRODINIA_ROOT=$RODINIA_DIR"
+else
+    echo "Rodinia checkout detected at $RODINIA_DIR"
+    echo "  Configure with: cmake .. -DRODINIA_ROOT=$RODINIA_DIR"
+fi
+
+echo ""
 echo "Environment setup complete"
 echo ""
 echo "Next steps:"
 echo "  cd $PROJECT_ROOT/build"
-echo "  cmake .."
+echo "  cmake ..  # add -DRODINIA_ROOT=$RODINIA_DIR if Rodinia is present"
 echo "  make"
 echo ""

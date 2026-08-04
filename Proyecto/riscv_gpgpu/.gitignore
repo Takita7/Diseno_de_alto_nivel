@@ -15,6 +15,9 @@ Thumbs.db
 .github/*
 .opencode/*
 
+# External dependencies (cloned locally, not tracked)
+external/
+
 # C++ Build Artifacts
 build/
 build_*/
