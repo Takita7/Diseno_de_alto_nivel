@@ -25,9 +25,11 @@
 #include "../../../driver/src/loader.h"
 #include "../../../software/kernel_loader/kernel_loader.h"
 #include "../../../software/host_api/host_api.h"
+#include "../../../runtime/src/host_runtime.h"
 
 // Hardware simulation
 #include "../../models/systemc/integration/kernel_bridge.h"
+#include "../../models/systemc/integration/systemc_host_backend.h"
 #include "../../models/systemc/integration/elf_loader.h"
 #include "../../models/systemc/src/memory/memory_hierarchy.h"
 #include "../../models/systemc/src/compute_unit/compute_unit.h"
@@ -85,6 +87,51 @@ static bool compileAssemblyKernel(const std::string& src, const std::string& elf
                        " -o " + elf + " " + obj + " 2>&1";
     r = std::system(link.c_str());
     return (r == 0) && fs::exists(elf);
+}
+
+TEST(SystemCIntegration, PtxLaunchThroughHostApi) {
+    const std::string ptx = R"ptx(
+.version 7.0
+.target sm_20
+.address_size 32
+.visible .entry t063_store(
+    .param .u32 output
+)
+{
+    .reg .u32 %r<3>;
+    ld.param.u32 %r0, [output];
+    mov.u32 %r1, 42;
+    st.global.u32 [%r0], %r1;
+    ret;
+}
+)ptx";
+
+    const fs::path temp_dir = fs::temp_directory_path() / "riscv_gpgpu_t063_bundle";
+    fs::create_directories(temp_dir);
+    const fs::path ptx_path = temp_dir / "t063_store.ptx";
+    const fs::path manifest_path = temp_dir / "t063_store.json";
+    { std::ofstream file(ptx_path); file << ptx; }
+
+    installSystemCKernelExecutionBackend();
+    ASSERT_TRUE(packPtxKernelBundle("t063_store", ptx_path.string(), manifest_path.string()));
+    ASSERT_TRUE(uploadKernelBundle(manifest_path.string()));
+
+    uint64_t output_ptr = 0;
+    ASSERT_TRUE(gpgpuMalloc(output_ptr, sizeof(uint32_t)));
+    uint32_t output = 0;
+    ASSERT_TRUE(gpgpuMemcpyH2D(output_ptr, &output, sizeof(output)));
+
+    KernelLaunchInfo launch;
+    launch.name = "t063_store";
+    launch.args = {output_ptr};
+    ASSERT_TRUE(launchKernel(launch));
+    ASSERT_TRUE(waitKernelCompletion());
+    ASSERT_TRUE(gpgpuMemcpyD2H(&output, output_ptr, sizeof(output)));
+    EXPECT_EQ(output, 42u);
+
+    EXPECT_TRUE(gpgpuFree(output_ptr));
+    EXPECT_TRUE(unloadKernelBundle());
+    fs::remove_all(temp_dir);
 }
 
 // ─── Test 1: ELF loader can read and store binary ─────────────────────────────

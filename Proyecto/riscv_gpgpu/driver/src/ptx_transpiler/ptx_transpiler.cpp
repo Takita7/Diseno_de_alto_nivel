@@ -5,11 +5,13 @@
 #include "rv_emitter.h"
 
 #include <array>
-#include <atomic>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <system_error>
+#include <unistd.h>
 
 namespace riscv_gpgpu {
 namespace ptx {
@@ -71,25 +73,40 @@ RiscvElf PtxTranspiler::compile(const std::string& ptx_text) {
         return result;
     }
 
-    // ── 3. Write assembly to /tmp ─────────────────────────────────────────────
-    static std::atomic<int> seq{0};
-    int id = seq.fetch_add(1);
-    std::string asm_path = "/tmp/ptx_rv32_" + std::to_string(id) + ".s";
-    std::string elf_path = "/tmp/ptx_rv32_" + std::to_string(id) + ".elf";
-
-    {
-        std::ofstream f(asm_path);
-        if (!f) { result.error = "Cannot write " + asm_path; return result; }
-        f << result.asm_text;
+    char temp_path[] = "/tmp/ptx_rv32_XXXXXX";
+    char* created_path = mkdtemp(temp_path);
+    if (created_path == nullptr) {
+        result.error = "Cannot create temporary compilation directory";
+        return result;
     }
 
-    // ── 4. Assemble + link with clang+lld ─────────────────────────────────────
+    const std::filesystem::path temp_dir(created_path);
+    struct TempDirectoryGuard {
+        std::filesystem::path path;
+        ~TempDirectoryGuard() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } guard{temp_dir};
+
+    const std::filesystem::path asm_path = temp_dir / "kernel.s";
+    const std::filesystem::path elf_path = temp_dir / "kernel.elf";
+
+    {
+        std::ofstream file(asm_path);
+        if (!file) {
+            result.error = "Cannot write temporary RISC-V assembly";
+            return result;
+        }
+        file << result.asm_text;
+    }
+
     std::string cmd = clang_
         + " --target=riscv32-unknown-elf"
         + " -march=rv32imf -mabi=ilp32f"
         + " -fuse-ld=lld -nostdlib"
-        + " " + asm_path
-        + " -o " + elf_path;
+        + " \"" + asm_path.string() + "\""
+        + " -o \"" + elf_path.string() + "\"";
 
     std::string cmd_out;
     int rc = runCmd(cmd, cmd_out);
@@ -98,12 +115,15 @@ RiscvElf PtxTranspiler::compile(const std::string& ptx_text) {
         return result;
     }
 
-    // ── 5. Read ELF bytes ─────────────────────────────────────────────────────
-    std::ifstream elf_f(elf_path, std::ios::binary);
-    if (!elf_f) { result.error = "Cannot read ELF: " + elf_path; return result; }
-    result.bytes.assign(std::istreambuf_iterator<char>(elf_f),
+    std::ifstream elf_file(elf_path, std::ios::binary);
+    if (!elf_file) {
+        result.error = "Cannot read temporary ELF";
+        return result;
+    }
+    result.bytes.assign(std::istreambuf_iterator<char>(elf_file),
                         std::istreambuf_iterator<char>());
-    result.ok = true;
+    result.ok = !result.bytes.empty();
+    if (!result.ok) result.error = "Assembler produced an empty ELF image";
     return result;
 }
 

@@ -33,10 +33,10 @@ option(BUILD_BENCHMARKS "Build benchmark utilities" ON)
 option(BUILD_DOCUMENTATION "Build documentation" OFF)
 
 # Find required packages
-if(BUILD_SYSTEMC_MODELS)
+if(BUILD_SYSTEMC_MODELS OR BUILD_SYSTEMC_INTEGRATION)
     find_package(SystemC REQUIRED)
 else()
-    message(STATUS "BUILD_SYSTEMC_MODELS is OFF; skipping SystemC detection")
+    message(STATUS "SystemC models and integration are OFF; skipping SystemC detection")
 endif()
 
 # Optional packages
@@ -56,7 +56,7 @@ add_subdirectory(driver)
 add_subdirectory(software)
 add_subdirectory(runtime)
 
-if(BUILD_SYSTEMC_MODELS OR SystemC_FOUND)
+if(SystemC_FOUND)
     add_subdirectory(models)
 endif()
 

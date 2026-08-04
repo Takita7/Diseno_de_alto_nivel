@@ -127,16 +127,30 @@ bool configureLaunch(const KernelLaunchArgs& la) {
     return true;
 }
 
-bool startKernel() {
-    if (!g_launch_configured) {
-        std::cerr << "[driver] startKernel called without configureLaunch\n";
+bool beginKernelExecution() {
+    if (!g_launch_configured || g_exec_state != ExecState::CONFIGURED) {
+        std::cerr << "[driver] beginKernelExecution called without a configured launch\n";
+        g_exec_state = ExecState::FAILED;
         return false;
     }
     g_exec_state = ExecState::RUNNING;
     std::cout << "[driver] Kernel started: " << g_launch_args.kernel_name << "\n";
-    // Simulation: mark complete immediately (real HW would do this asynchronously).
-    g_exec_state = ExecState::COMPLETED;
     return true;
+}
+
+bool finishKernelExecution(bool success) {
+    if (g_exec_state != ExecState::RUNNING && g_exec_state != ExecState::CONFIGURED) {
+        std::cerr << "[driver] finishKernelExecution called in an invalid state\n";
+        g_exec_state = ExecState::FAILED;
+        return false;
+    }
+    g_exec_state = success ? ExecState::COMPLETED : ExecState::FAILED;
+    return success;
+}
+
+bool startKernel() {
+    if (!beginKernelExecution()) return false;
+    return finishKernelExecution(true);
 }
 
 bool queryKernelStatus(std::string& status) {
@@ -183,6 +197,13 @@ bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data) 
 size_t getDeviceBufferSize(uint64_t dev_ptr) {
     auto it = g_device_buffers.find(dev_ptr);
     return (it != g_device_buffers.end()) ? it->second.size() : 0;
+}
+
+std::vector<uint64_t> getAllocatedDeviceBufferAddresses() {
+    std::vector<uint64_t> addresses;
+    addresses.reserve(g_device_buffers.size());
+    for (const auto& buffer : g_device_buffers) addresses.push_back(buffer.first);
+    return addresses;
 }
 
 bool getCurrentLaunchArgs(KernelLaunchArgs& out_args) {

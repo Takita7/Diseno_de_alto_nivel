@@ -20,3 +20,14 @@ target_include_directories(systemc_integration PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../software/kernel_loader
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../software/host_api
 )
+
+add_library(systemc_host_backend STATIC
+    systemc_host_backend.cpp
+)
+target_link_libraries(systemc_host_backend PUBLIC
+    host_api_lib
+    systemc_integration
+)
+target_include_directories(systemc_host_backend PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
