@@ -502,7 +502,8 @@ Resultados via DMA → gpgpuMemcpyD2H() → host
 
 **Purpose**: Improve completeness, reproducibility, and maintainability across all implementation workstreams.
 
-- [ ] T036 [P] Refresh architecture and software documentation in `docs/`
+- [x] T036 [P] Refresh architecture and software documentation in `docs/`
+	- Completed in Phase 6 polish: refreshed root/component READMEs to remove cross-folder duplication and enforce scope ownership (`README.md`, `benchmarks/README.md`, `software/README.md`, `models/systemc/README.md`, `hls/README.md`, `docs/architecture/README.md`, `docs/traceability/README.md`, `docs/reproducibility/README.md`).
 - [ ] T037 Refactor shared code and configuration paths to reduce duplication across `models/`, `hls/`, `runtime/`, and `software/`
 - [ ] T038 Run end-to-end benchmark comparison and capture results in `docs/verification/benchmark_results.md`
 - [ ] T039 [P] Add release checklist and reproducibility package contents in `docs/reproducibility/` and `REPRODUCIBILITY.md`
