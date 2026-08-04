@@ -1,6 +1,7 @@
 if(BUILD_TESTS)
     if(GTest_FOUND)
         add_subdirectory(llvm)
+        add_subdirectory(ptx)
     else()
         message(WARNING "GTest not found. Skipping compiler tests.")
     endif()

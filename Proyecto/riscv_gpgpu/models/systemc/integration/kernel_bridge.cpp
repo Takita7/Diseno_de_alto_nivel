@@ -120,6 +120,11 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // x1 (ra) = return sentinel
     const uint32_t RETURN_SENTINEL = 0x00000001u;
     regs[1] = RETURN_SENTINEL;
+    // x3 (gp) = THREAD_CTX_BASE — each thread gets its own slot.
+    // Slot for thread T is at THREAD_CTX_BASE + T * 64 bytes.
+    // Layout: [0]=tid.x [4]=tid.y [8]=tid.z [12]=ctaid.x [16]=ctaid.y [20]=ctaid.z [24]=ntid.x [28]=ntid.y [32]=ntid.z
+    const uint32_t THREAD_CTX_BASE = 0x00001000u;
+    const uint32_t THREAD_CTX_STRIDE = 64u;
 
     std::cout << "[bridge] Initial registers: "
               << "sp=0x" << std::hex << regs[2]
@@ -177,7 +182,32 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         // the register file before asserting the kernel start signal.
         worker_regs[14] = block_id;
         worker_regs[15] = thread_id;
+        // x3 (gp) = per-thread THREAD_CTX slot
+        const uint32_t ctx_base = THREAD_CTX_BASE + global_thread_id * THREAD_CTX_STRIDE;
+        worker_regs[3] = ctx_base;
         worker.cu->setInitialRegisters(worker_regs);
+
+        // Inject thread context into simulation memory
+        // Compute tid and ctaid from global_thread_id, effective_block_x/y/z
+        const uint32_t threads_per_block_xyz = std::max<uint32_t>(1u,
+            effective_block_x * std::max<uint32_t>(1u, effective_block_y)
+                              * std::max<uint32_t>(1u, effective_block_z));
+        const uint32_t blk_id    = global_thread_id / threads_per_block_xyz;
+        const uint32_t thd_id    = global_thread_id % threads_per_block_xyz;
+        const uint32_t tid_x   = thd_id % std::max<uint32_t>(1u, effective_block_x);
+        const uint32_t tid_y   = (thd_id / std::max<uint32_t>(1u, effective_block_x)) % std::max<uint32_t>(1u, effective_block_y);
+        const uint32_t tid_z   = thd_id / (std::max<uint32_t>(1u, effective_block_x) * std::max<uint32_t>(1u, effective_block_y));
+        const uint32_t ctaid_x = blk_id % std::max<uint32_t>(1u, effective_grid_x);
+        const uint32_t ctaid_y = (blk_id / std::max<uint32_t>(1u, effective_grid_x)) % std::max<uint32_t>(1u, effective_grid_y);
+        const uint32_t ctaid_z = blk_id / (std::max<uint32_t>(1u, effective_grid_x) * std::max<uint32_t>(1u, effective_grid_y));
+        const uint32_t thread_ctx[9] = {
+            tid_x, tid_y, tid_z,
+            ctaid_x, ctaid_y, ctaid_z,
+            std::max<uint32_t>(1u, effective_block_x),
+            std::max<uint32_t>(1u, effective_block_y),
+            std::max<uint32_t>(1u, effective_block_z)
+        };
+        mem.writeBytes(ctx_base, reinterpret_cast<const uint8_t*>(thread_ctx), 9 * 4);
         worker.cu->setReturnSentinel(RETURN_SENTINEL);
         worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
 
