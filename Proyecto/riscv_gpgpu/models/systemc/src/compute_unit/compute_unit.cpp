@@ -78,6 +78,10 @@ uint32_t ComputeUnit::getRegister(uint32_t /*warp_id*/, uint32_t reg_id) const {
     return binary_regs_[reg_id];
 }
 
+uint32_t ComputeUnit::getCurrentPC() const {
+    return binary_mode_ ? binary_pc_ : 0u;
+}
+
 uint32_t ComputeUnit::getDivergenceEvents() const {
     return simt_ctrl_ ? simt_ctrl_->getTotalDivergenceEvents() : 0;
 }
