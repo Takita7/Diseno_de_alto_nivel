@@ -1,7 +1,10 @@
 add_library(host_api_lib STATIC host_api.cpp)
 
 target_include_directories(host_api_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(host_api_lib PUBLIC driver_lib)
+target_link_libraries(host_api_lib
+    PUBLIC driver_lib
+    PRIVATE ptx_transpiler_lib
+)
 
 if(BUILD_TESTS AND GTest_FOUND)
     add_executable(test_host_api test_host_api.cpp)

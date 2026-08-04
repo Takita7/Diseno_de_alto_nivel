@@ -10,6 +10,7 @@ target_include_directories(systemc_common INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common
 )
 target_link_libraries(systemc_common INTERFACE SystemC::SystemC)
+target_link_libraries(systemc_common INTERFACE riscv_gpgpu_paths)
 
 # Build all component libraries
 add_subdirectory(src/memory)

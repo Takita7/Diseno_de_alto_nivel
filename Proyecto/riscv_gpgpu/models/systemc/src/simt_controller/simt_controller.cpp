@@ -53,7 +53,8 @@ void SIMTController::initializeWarp(WarpID warp_id, uint32_t threads_per_warp) {
 //   3. taken != 0 && not_taken == 0 → all threads fall through.
 //      No masking, no stack push, just update mask.
 //
-void SIMTController::handleBranch(WarpID warp_id, bool* thread_conditions) {
+void SIMTController::handleBranch(WarpID warp_id, bool* thread_conditions,
+                                   uint32_t reconvergence_pc) {
     ensureWarpExists(warp_id);
 
     uint32_t current   = active_masks_[warp_id];
@@ -70,7 +71,7 @@ void SIMTController::handleBranch(WarpID warp_id, bool* thread_conditions) {
 
     if (taken != 0 && not_taken != 0) {
         // Case 1: real divergence
-        pushDivergenceState(warp_id, not_taken);
+        pushDivergenceState(warp_id, not_taken, reconvergence_pc);
         computeActiveMask(warp_id, thread_conditions);
         active_masks_[warp_id] = taken;
         ++divergence_events_;
@@ -81,7 +82,7 @@ void SIMTController::handleBranch(WarpID warp_id, bool* thread_conditions) {
         // Case 2: all threads jump – fall-through block runs with mask = 0.
         // Push all threads to IPDOM stack; VJOIN will restore them.
         // Not counted as divergence_events_ (no disagreement between threads).
-        pushDivergenceState(warp_id, not_taken);
+        pushDivergenceState(warp_id, not_taken, reconvergence_pc);
         active_masks_[warp_id] = 0;
         LOG_DEBUG("SIMTController: warp " + std::to_string(warp_id)
                   + " all-jump (fall-through masked)");
@@ -151,9 +152,10 @@ void SIMTController::computeActiveMask(WarpID warp_id, const bool* conditions) {
         ds.thread_masks[t] = conditions[t] ? 1u : 0u;
 }
 
-void SIMTController::pushDivergenceState(WarpID warp_id, uint32_t not_taken_mask) {
+void SIMTController::pushDivergenceState(WarpID warp_id, uint32_t not_taken_mask,
+                                          uint32_t reconvergence_pc) {
     divergence_stacks_[warp_id].mask_stack.push(not_taken_mask);
-    divergence_stacks_[warp_id].pc_stack.push(0);
+    divergence_stacks_[warp_id].pc_stack.push(reconvergence_pc);
 }
 
 void SIMTController::popDivergenceState(WarpID warp_id) {
@@ -162,6 +164,12 @@ void SIMTController::popDivergenceState(WarpID warp_id) {
         ds.mask_stack.pop();
         ds.pc_stack.pop();
     }
+}
+
+uint32_t SIMTController::getReconvergencePC(WarpID warp_id) const {
+    if (warp_id >= divergence_stacks_.size()) return 0;
+    const auto& ds = divergence_stacks_[warp_id];
+    return ds.pc_stack.empty() ? 0u : ds.pc_stack.top();
 }
 
 }  // riscv_gpgpu

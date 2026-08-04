@@ -1,0 +1,66 @@
+; saxpy_ptx.ptx – Per-thread SAXPY kernel in PTX (Single-precision A*X Plus Y)
+;
+; Each thread computes z[global_tid] = a * x[global_tid] + y[global_tid]
+; using the RV32F fmadd.s instruction (via PTX fma.rn.f32).
+;
+; Calling convention (RISC-V ABI, all params passed as integer regs a0-a4):
+;   param_0 = a   (float,        scalar multiplier — IEEE 754 bits in a0)
+;   param_1 = x   (const float*, device address)
+;   param_2 = y   (const float*, device address)
+;   param_3 = z   (float*,       device address)
+;   param_4 = n   (int,          number of elements)
+;
+; The float scalar 'a' arrives as bit-pattern in an integer register;
+; ld.param.f32 emits fmv.w.x to move it to the FP register file.
+;
+; This exercises: Phase 5d (PTX transpiler), Phase 5e (RV32F FP),
+;                 Phase 5f (THREAD_CTX grid/block/thread mapping).
+
+.version 7.0
+.target sm_20
+.address_size 32
+
+.visible .entry saxpy(
+    .param .f32 saxpy_p0,
+    .param .u32 saxpy_p1,
+    .param .u32 saxpy_p2,
+    .param .u32 saxpy_p3,
+    .param .u32 saxpy_p4
+)
+{
+    .reg .pred  %p<2>;
+    .reg .u32   %r<12>;
+    .reg .f32   %f<4>;
+
+    ld.param.f32    %f0, [saxpy_p0];
+    ld.param.u32    %r0, [saxpy_p1];
+    ld.param.u32    %r1, [saxpy_p2];
+    ld.param.u32    %r2, [saxpy_p3];
+    ld.param.u32    %r3, [saxpy_p4];
+
+    mov.u32         %r4, %tid.x;
+    mov.u32         %r5, %ctaid.x;
+    mov.u32         %r6, %ntid.x;
+
+    mul.lo.u32      %r7, %r5, %r6;
+    add.u32         %r7, %r7, %r4;
+
+    setp.ge.u32     %p0, %r7, %r3;
+    @%p0 bra        $L__saxpy_end;
+
+    mul.lo.u32      %r8, %r7, 4;
+
+    add.u32         %r9, %r0, %r8;
+    ld.global.f32   %f1, [%r9];
+
+    add.u32         %r10, %r1, %r8;
+    ld.global.f32   %f2, [%r10];
+
+    fma.rn.f32      %f3, %f0, %f1, %f2;
+
+    add.u32         %r11, %r2, %r8;
+    st.global.f32   [%r11], %f3;
+
+$L__saxpy_end:
+    ret;
+}

@@ -1,0 +1,12 @@
+#include "@RODINIA_COMPAT_HEADER@"
+
+@RODINIA_EXTRA_DEFINES@
+
+#include "@RODINIA_KERNEL_SOURCE@"
+
+RodiniaThreadContext __gpgpu_thread_context = {
+    {0, 0, 0},
+    {0, 0, 0},
+    {1, 1, 1},
+    {1, 1, 1}
+};

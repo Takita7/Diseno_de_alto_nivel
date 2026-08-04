@@ -1,30 +1,22 @@
-# Architecture
+# Architecture Docs
 
-This directory contains the architecture specification and design documentation for the RISCV GPGPU platform.
+This directory contains architecture contracts and design references.
 
-## Contents
+Scope:
+- interface definitions between software, model, and FPGA control plane
+- ISA and execution-semantics reference docs
 
-### interfaces.md
-Architecture interface contracts defining the boundaries between components:
-- Compute unit interfaces
-- Memory hierarchy interfaces
-- Scheduler and dispatch interfaces
-- Configuration and parameter interfaces
+## Files
 
-### isa.md
-RISC-V ISA extensions and execution semantics:
-- Base instruction set
-- Custom extensions for SIMT/parallel execution
-- Memory access semantics
-- Synchronization and barrier semantics
+| File | Purpose |
+|---|---|
+| `ARCHITECTURE.md` | High-level architecture narrative |
+| `interfaces.md` | Cross-component interface contracts |
+| `isa.md` | ISA and execution model notes |
+| `axi_interface.md` | AXI4-Lite register map and AXI4 DMA contract for Kria deployment |
 
-### components/
-Individual component specifications:
-- Compute Unit
-- Warp Scheduler
-- SIMT Controller
-- Memory Hierarchy
-- Synchronization and Barriers
+## Ownership Rules
 
-## Status
-- Created as placeholder - to be populated during design phase
+- Register/DMA interface changes must be mirrored in code constants
+	(`driver/src/fpga_regs.h`).
+- Detailed implementation behavior belongs in component source trees, not here.

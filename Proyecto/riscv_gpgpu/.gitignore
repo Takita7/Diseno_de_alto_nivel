@@ -15,9 +15,14 @@ Thumbs.db
 .github/*
 .opencode/*
 
+# External dependencies (cloned locally, not tracked)
+external/
+
 # C++ Build Artifacts
 build/
 build_*/
+build-*/
+build-all/
 debug/
 release/
 *.o
@@ -79,6 +84,7 @@ cmake-build-release/
 # Temporary and backup files
 *.tmp
 *.bak
+results.txt
 *.swp
 *.swo
 *~

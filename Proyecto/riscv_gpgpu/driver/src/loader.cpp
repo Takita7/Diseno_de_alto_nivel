@@ -1,5 +1,9 @@
 #include "loader.h"
 
+#ifdef FPGA_TARGET
+#include "fpga_driver.h"
+#endif
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -44,15 +48,22 @@ bool allocateDeviceBuffer(uint64_t& dev_ptr, size_t size) {
         std::cerr << "[driver] allocateDeviceBuffer: size must be > 0\n";
         return false;
     }
+#ifdef FPGA_TARGET
+    return fpga::FpgaDriver::instance().allocateBuffer(dev_ptr, size);
+#else
     dev_ptr = g_next_dev_addr;
     g_next_dev_addr += ((size + 15) / 16) * 16;  // 16-byte aligned
     g_device_buffers[dev_ptr].assign(size, 0);
     std::cout << "[driver] Allocated " << size << " bytes at device address 0x"
               << std::hex << dev_ptr << std::dec << "\n";
     return true;
+#endif
 }
 
 bool freeDeviceBuffer(uint64_t dev_ptr) {
+#ifdef FPGA_TARGET
+    return fpga::FpgaDriver::instance().freeBuffer(dev_ptr);
+#else
     auto it = g_device_buffers.find(dev_ptr);
     if (it == g_device_buffers.end()) {
         std::cerr << "[driver] freeDeviceBuffer: unknown device address 0x"
@@ -62,9 +73,13 @@ bool freeDeviceBuffer(uint64_t dev_ptr) {
     g_device_buffers.erase(it);
     std::cout << "[driver] Freed device buffer at 0x" << std::hex << dev_ptr << std::dec << "\n";
     return true;
+#endif
 }
 
 bool copyHostToDevice(uint64_t dst_dev, const void* src_host, size_t size) {
+#ifdef FPGA_TARGET
+    return fpga::FpgaDriver::instance().copyToDevice(dst_dev, src_host, size);
+#else
     auto it = g_device_buffers.find(dst_dev);
     if (it == g_device_buffers.end()) {
         std::cerr << "[driver] copyHostToDevice: unknown device address 0x"
@@ -80,9 +95,13 @@ bool copyHostToDevice(uint64_t dst_dev, const void* src_host, size_t size) {
     std::cout << "[driver] H2D copy " << size << " bytes → 0x"
               << std::hex << dst_dev << std::dec << "\n";
     return true;
+#endif
 }
 
 bool copyDeviceToHost(void* dst_host, uint64_t src_dev, size_t size) {
+#ifdef FPGA_TARGET
+    return fpga::FpgaDriver::instance().copyFromDevice(dst_host, src_dev, size);
+#else
     auto it = g_device_buffers.find(src_dev);
     if (it == g_device_buffers.end()) {
         std::cerr << "[driver] copyDeviceToHost: unknown device address 0x"
@@ -98,6 +117,7 @@ bool copyDeviceToHost(void* dst_host, uint64_t src_dev, size_t size) {
     std::cout << "[driver] D2H copy " << size << " bytes ← 0x"
               << std::hex << src_dev << std::dec << "\n";
     return true;
+#endif
 }
 
 // ─── Structured kernel launch ─────────────────────────────────────────────────
@@ -127,16 +147,30 @@ bool configureLaunch(const KernelLaunchArgs& la) {
     return true;
 }
 
-bool startKernel() {
-    if (!g_launch_configured) {
-        std::cerr << "[driver] startKernel called without configureLaunch\n";
+bool beginKernelExecution() {
+    if (!g_launch_configured || g_exec_state != ExecState::CONFIGURED) {
+        std::cerr << "[driver] beginKernelExecution called without a configured launch\n";
+        g_exec_state = ExecState::FAILED;
         return false;
     }
     g_exec_state = ExecState::RUNNING;
     std::cout << "[driver] Kernel started: " << g_launch_args.kernel_name << "\n";
-    // Simulation: mark complete immediately (real HW would do this asynchronously).
-    g_exec_state = ExecState::COMPLETED;
     return true;
+}
+
+bool finishKernelExecution(bool success) {
+    if (g_exec_state != ExecState::RUNNING && g_exec_state != ExecState::CONFIGURED) {
+        std::cerr << "[driver] finishKernelExecution called in an invalid state\n";
+        g_exec_state = ExecState::FAILED;
+        return false;
+    }
+    g_exec_state = success ? ExecState::COMPLETED : ExecState::FAILED;
+    return success;
+}
+
+bool startKernel() {
+    if (!beginKernelExecution()) return false;
+    return finishKernelExecution(true);
 }
 
 bool queryKernelStatus(std::string& status) {
@@ -183,6 +217,13 @@ bool setDeviceBufferContent(uint64_t dev_ptr, const std::vector<uint8_t>& data) 
 size_t getDeviceBufferSize(uint64_t dev_ptr) {
     auto it = g_device_buffers.find(dev_ptr);
     return (it != g_device_buffers.end()) ? it->second.size() : 0;
+}
+
+std::vector<uint64_t> getAllocatedDeviceBufferAddresses() {
+    std::vector<uint64_t> addresses;
+    addresses.reserve(g_device_buffers.size());
+    for (const auto& buffer : g_device_buffers) addresses.push_back(buffer.first);
+    return addresses;
 }
 
 bool getCurrentLaunchArgs(KernelLaunchArgs& out_args) {

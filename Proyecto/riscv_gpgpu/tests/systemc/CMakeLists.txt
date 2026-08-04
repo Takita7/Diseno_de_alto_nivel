@@ -42,6 +42,16 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_MODELS AND SystemC_FOUND)
             SystemC::SystemC
         )
         add_test(NAME simt_compute_unit_tests COMMAND test_simt_compute_unit)
+
+        add_executable(test_compute_unit_fp test_compute_unit_fp.cpp sc_gtest_main.cpp)
+        target_link_libraries(test_compute_unit_fp PRIVATE
+            GTest::GTest
+            compute_unit
+            simt_controller
+            memory_hierarchy
+            SystemC::SystemC
+        )
+        add_test(NAME compute_unit_fp_tests COMMAND test_compute_unit_fp)
     else()
         message(WARNING "GTest not found. Skipping C++ unit tests.")
     endif()
@@ -62,7 +72,8 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
         memory_hierarchy
         driver_lib
         kernel_loader_lib
-        host_api_lib
+        systemc_host_backend
+        runtime_lib
         llvm_backend_stub
         SystemC::SystemC
     )
@@ -80,6 +91,66 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
     )
     add_test(NAME systemc_integration_tests COMMAND test_systemc_integration)
     message(STATUS "SystemC integration tests configured")
+
+    # ── T070: Thread mapping integration test ─────────────────────────────────
+    add_executable(test_thread_mapping test_thread_mapping.cpp sc_gtest_main.cpp)
+    target_link_libraries(test_thread_mapping
+        PRIVATE
+        GTest::GTest
+        systemc_integration
+        compute_unit
+        memory_hierarchy
+        driver_lib
+        host_api_lib
+        ptx_transpiler_lib
+        runtime_lib
+        SystemC::SystemC
+    )
+    target_include_directories(test_thread_mapping PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/integration
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src/ptx_transpiler
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../software/host_api
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/src
+    )
+    set_target_properties(test_thread_mapping PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME thread_mapping_tests COMMAND test_thread_mapping)
+    message(STATUS "Thread mapping tests configured")
+
+    add_executable(test_shared_memory test_shared_memory.cpp sc_gtest_main.cpp)
+    target_link_libraries(test_shared_memory
+        PRIVATE
+        GTest::GTest
+        systemc_integration
+        compute_unit
+        memory_hierarchy
+        driver_lib
+        host_api_lib
+        ptx_transpiler_lib
+        runtime_lib
+        SystemC::SystemC
+    )
+    target_include_directories(test_shared_memory PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../models/systemc/integration
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/src/ptx_transpiler
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../software/host_api
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/src
+    )
+    set_target_properties(test_shared_memory PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME shared_memory_tests COMMAND test_shared_memory)
+    message(STATUS "Shared memory tests configured")
+
 elseif(BUILD_TESTS)
     message(STATUS "SystemC not found — skipping systemc_integration tests")
 endif()

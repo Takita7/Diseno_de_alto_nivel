@@ -32,11 +32,16 @@ public:
 
     // ── Divergence / reconvergence ────────────────────────────────────────────
     void     initializeWarp     (WarpID warp_id, uint32_t threads_per_warp);
-    void     handleBranch       (WarpID warp_id, bool* thread_conditions);
+    // reconvergence_pc: the IPDOM join-point PC stored on the divergence stack.
+    // Pass 0 when unknown (virtual-ISA path uses explicit VJOIN instead).
+    void     handleBranch       (WarpID warp_id, bool* thread_conditions,
+                                 uint32_t reconvergence_pc = 0);
     void     handleJoin         (WarpID warp_id);
     uint32_t getActiveMask      (WarpID warp_id) const;
     bool     isThreadActive     (WarpID warp_id, ThreadID thread_id) const;
     bool     hasPendingDivergence(WarpID warp_id) const;
+    // Returns the reconvergence PC at the top of the divergence stack (0 if empty).
+    uint32_t getReconvergencePC (WarpID warp_id) const;
 
     // ── Barrier synchronization ───────────────────────────────────────────────
     // Call when a warp reaches a BARRIER instruction.
@@ -73,7 +78,8 @@ private:
     uint32_t wasted_cycles_     = 0;
 
     void computeActiveMask   (WarpID warp_id, const bool* conditions);
-    void pushDivergenceState (WarpID warp_id, uint32_t not_taken_mask);
+    void pushDivergenceState (WarpID warp_id, uint32_t not_taken_mask,
+                              uint32_t reconvergence_pc = 0);
     void popDivergenceState  (WarpID warp_id);
     void ensureWarpExists    (WarpID warp_id);
 };

@@ -63,7 +63,15 @@ public:
     uint32_t lastBlockY()            const { return last_block_y_; }
     uint32_t lastBlockZ()            const { return last_block_z_; }
     uint32_t lastDivergenceEvents()  const { return last_divergence_events_; }
+    uint32_t lastWorkerCount()       const { return last_worker_count_; }
+    uint32_t lastActiveUnits()       const { return last_active_units_; }
+    uint64_t lastWorkerCyclesTotal() const { return last_worker_cycles_total_; }
+    double   lastWorkerCyclesMean()  const { return last_worker_cycles_mean_; }
+    uint64_t lastWorkerCyclesMax()   const { return last_worker_cycles_max_; }
+    uint64_t lastEffectiveCycles()   const { return last_effective_cycles_; }
+    double   lastParallelismFactor() const { return last_parallelism_factor_; }
     const std::string& lastEntrySymbol() const { return last_entry_symbol_; }
+    const std::string& lastError() const { return last_error_; }
 
 private:
     Config   cfg_;
@@ -78,7 +86,15 @@ private:
     uint32_t last_block_y_      = 1;
     uint32_t last_block_z_      = 1;
     uint32_t last_divergence_events_ = 0;
+    uint32_t last_worker_count_ = 0;
+    uint32_t last_active_units_ = 0;
+    uint64_t last_worker_cycles_total_ = 0;
+    double   last_worker_cycles_mean_ = 0.0;
+    uint64_t last_worker_cycles_max_ = 0;
+    uint64_t last_effective_cycles_ = 0;
+    double   last_parallelism_factor_ = 0.0;
     std::string last_entry_symbol_;
+    std::string last_error_;
 };
 
 } // namespace riscv_gpgpu

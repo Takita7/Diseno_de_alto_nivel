@@ -1,75 +1,57 @@
 # Benchmarks
 
-This directory contains benchmark configurations and harnesses for performance evaluation.
+This directory contains benchmark executables, benchmark-specific configs, and
+workload assets.
 
-## Contents
+Scope of this README:
+- what is inside `benchmarks/`
+- how benchmark binaries are built and run
+- where outputs are written
 
-### configurations/
-Benchmark configuration templates:
-- rodinia_config.yaml - Rodinia benchmark suite configuration
-- custom_micro_config.yaml - Custom microbenchmark definitions
-- design_space_config.yaml - Design-space exploration configurations
+Out of scope:
+- architecture internals (`models/systemc/`)
+- host API/runtime implementation (`software/`, `runtime/`, `driver/`)
 
-### workloads/
-Benchmark kernel workload definitions:
-- divergence_test/ - Benchmark for divergence behavior
-- memory_access_test/ - Memory bandwidth and latency tests
-- synchronization_test/ - Barrier and synchronization performance
-- scalar_workload/ - Representative scalar workloads
+## Directory Scope
 
-### scripts/
-Benchmark execution scripts:
-- run_benchmarks.sh - Main benchmark runner
-- analyze_results.py - Result analysis and plotting
-- compare_configurations.py - Configuration comparison utility
+| Path | Scope |
+|---|---|
+| `benchmarks/CMakeLists.txt` | Benchmark build targets |
+| `benchmarks/configurations/` | YAML benchmark configurations |
+| `benchmarks/workloads/` | Workload assets (Rodinia, vector_add, saxpy) |
+| `benchmarks/ptx_kernels_benchmark.cpp` | PTX kernel benchmark binary |
+| `benchmarks/rodinia_benchmark.cpp` | Rodinia benchmark entrypoint |
+| `benchmarks/rodinia_real_benchmark.cpp` | Real Rodinia wrapper benchmark |
 
-### results/
-Benchmark execution results:
-- baseline/ - Baseline configuration results
-- configurations/ - Alternative configuration results
-- analysis/ - Analyzed results and reports
+## Build
 
-## Benchmark Categories
+From repository root:
 
-### Rodinia Suite
-Standard GPU benchmark suite adapted for RISC-V GPGPU:
-- BFS (Breadth-first search)
-- Hotspot (Heat diffusion simulation)
-- Needle (Sequence alignment)
-- Gaussian Elimination
-- LavaMD (Molecular dynamics)
+```bash
+cmake -S . -B build-all -DBUILD_BENCHMARKS=ON
+cmake --build build-all --target ptx_kernels_benchmark rodinia_benchmark rodinia_real_benchmark -j$(nproc)
+```
 
-### Custom Microbenchmarks
-Targeted benchmarks for architecture evaluation:
-- Thread divergence effectiveness
-- Memory hierarchy utilization
-- Synchronization overhead
-- Warp scheduling efficiency
+## Execute
 
-### Design-Space Exploration
-Configurations to evaluate:
-- Threads per warp (16, 32, 64)
-- Warps per CU (4, 8, 16, 32)
-- Shared memory sizes (16KB, 32KB, 48KB)
-- Cache hierarchy variants
+Typical run entrypoints are in `scripts/benchmark/`:
 
-## Measurement Metrics
+```bash
+# Matrix runner for Rodinia real benchmark
+bash scripts/benchmark/run_rodinia_real_matrix.sh
 
-### Performance Metrics
-- Throughput (kernel launches/sec)
-- Latency (execution time per kernel)
-- Speedup relative to baseline
-- Efficiency under varying workloads
+# Analyze matrix logs into JSON summary
+python3 scripts/benchmark/analyze_results.py --matrix-dir results/benchmarks/rodinia_real_matrix
+```
 
-### Resource Metrics
-- LUT utilization (FPGA)
-- Register utilization
-- Memory bandwidth utilization
-- Power consumption (if available)
+## Outputs
 
-## Status
+- Matrix runs: `results/benchmarks/rodinia_real_matrix/`
+- Per-case logs: `results/benchmarks/rodinia_real_matrix/logs/`
+- Aggregates: `summary.tsv` and `summary.json`
 
-- Benchmark structure initialized
-- Configuration templates created
-- Benchmark harness framework established
-- Detailed workloads to be implemented in Phase 5
+## Notes
+
+- Optional local Rodinia checkout is supported through CMake variables
+  (`RODINIA_ROOT`, `RODINIA_KERNELS`, `RODINIA_<KERNEL>_SOURCE`).
+- Current real benchmark path includes upstream BFS (`kernel.cu` + `kernel2.cu`).

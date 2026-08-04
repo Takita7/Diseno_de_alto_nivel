@@ -1,37 +1,28 @@
 # Reproducibility
 
-This directory contains reproducibility documentation and packaging information.
+This directory defines how to recreate builds, tests, and benchmark evidence.
 
-## Contents
+Scope:
+- pinned environment assumptions
+- reproducible command sequences
+- artifact checklist for result replication
 
-### ENVIRONMENT.md
-Development environment specifications:
-- Operating system requirements
-- Tool versions and dependencies
-- Required libraries and headers
-- Build system configuration
+## What To Keep Here
 
-### BUILD.md
-Build instructions and procedures:
-- Prerequisites checklist
-- Step-by-step build instructions
-- Configuration options
-- Troubleshooting guide
+- host/toolchain prerequisites (versions and assumptions)
+- exact build/test command sets used for evidence generation
+- benchmark replay instructions and expected output locations
+- release/reproducibility checklist references
 
-### DEPENDENCIES.md
-External dependencies and versions:
-- SystemC version and location
-- LLVM/Clang requirements
-- Vitis HLS configuration
-- Python package requirements
-- Other tool dependencies
+## What Not To Keep Here
 
-### MEASUREMENT.md
-Measurement methodology:
-- Benchmark setup procedures
-- Performance measurement techniques
-- Result collection and analysis
-- Statistical analysis approach
+- architecture descriptions (`docs/architecture/`)
+- requirement mapping tables (`docs/traceability/`)
+- implementation detail walkthroughs already covered in component READMEs
 
-## Status
-- Created as placeholder - to be populated during project development
+## Related Artifacts
+
+- verification outputs: `docs/verification/` and `results/`
+- task ownership and phase status: `specs/001-open-riscv-gpgpu/tasks.md`
+- release checklist: `docs/reproducibility/release_checklist.md`
+- package manifest: `REPRODUCIBILITY.md`

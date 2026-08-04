@@ -1,0 +1,59 @@
+; vector_add_ptx.ptx – Per-thread CUDA-style vector_add kernel in PTX
+;
+; Each thread computes c[global_tid] = a[global_tid] + b[global_tid].
+; Thread identity comes from THREAD_CTX injected by KernelBridge (gp register):
+;   global_tid = ctaid.x * ntid.x + tid.x
+;
+; Calling convention (RISC-V ABI):
+;   param_0 = a   (const int*, device address)
+;   param_1 = b   (const int*, device address)
+;   param_2 = c   (int*,       device address)
+;   param_3 = n   (int,        number of elements)
+;
+; This is the reference PTX used by the ptx_kernels_benchmark.
+
+.version 7.0
+.target sm_20
+.address_size 32
+
+.visible .entry vector_add(
+    .param .u32 va_p0,
+    .param .u32 va_p1,
+    .param .u32 va_p2,
+    .param .u32 va_p3
+)
+{
+    .reg .pred  %p<2>;
+    .reg .u32   %r<16>;
+
+    ld.param.u32    %r0, [va_p0];
+    ld.param.u32    %r1, [va_p1];
+    ld.param.u32    %r2, [va_p2];
+    ld.param.u32    %r3, [va_p3];
+
+    mov.u32         %r4, %tid.x;
+    mov.u32         %r5, %ctaid.x;
+    mov.u32         %r6, %ntid.x;
+
+    mul.lo.u32      %r7, %r5, %r6;
+    add.u32         %r7, %r7, %r4;
+
+    setp.ge.u32     %p0, %r7, %r3;
+    @%p0 bra        $L__va_end;
+
+    mul.lo.u32      %r8, %r7, 4;
+
+    add.u32         %r9, %r0, %r8;
+    ld.global.u32   %r10, [%r9];
+
+    add.u32         %r11, %r1, %r8;
+    ld.global.u32   %r12, [%r11];
+
+    add.u32         %r10, %r10, %r12;
+
+    add.u32         %r13, %r2, %r8;
+    st.global.u32   [%r13], %r10;
+
+$L__va_end:
+    ret;
+}

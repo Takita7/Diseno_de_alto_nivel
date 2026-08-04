@@ -14,6 +14,14 @@
 
 namespace riscv_gpgpu {
 
+inline const char* defaultArchConfigPath() {
+#ifdef RISCV_GPGPU_ARCH_CONFIG_PATH
+    return RISCV_GPGPU_ARCH_CONFIG_PATH;
+#else
+    return "config/arch_config.yaml";
+#endif
+}
+
 class Configuration {
 public:
     // Load configuration from YAML file

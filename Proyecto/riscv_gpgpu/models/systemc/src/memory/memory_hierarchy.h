@@ -33,16 +33,21 @@ public:
     MemoryHierarchy(sc_core::sc_module_name name, const Config& config);
     ~MemoryHierarchy();
 
-    bool loadWord        (Address addr, uint32_t& data, uint32_t& latency);
-    bool storeWord       (Address addr, uint32_t  data, uint32_t& latency);
-    bool loadSharedMemory (Address addr, uint32_t& data);
-    bool storeSharedMemory(Address addr, uint32_t  data);
+    static constexpr Address SHARED_MEM_BASE = 0x00400000u;
+
+    bool loadWord        (Address addr, uint32_t& data, uint32_t& latency, BlockID block_id = 0);
+    bool storeWord       (Address addr, uint32_t  data, uint32_t& latency, BlockID block_id = 0);
+    bool loadSharedMemory (BlockID block_id, Address addr, uint32_t& data);
+    bool storeSharedMemory(BlockID block_id, Address addr, uint32_t  data);
+    bool allocateSharedMemory(BlockID block_id, uint32_t size_bytes);
+    void releaseSharedMemory(BlockID block_id);
+    bool hasSharedMemory(BlockID block_id) const;
 
     // Bulk byte-granular access — maps 1:1 to AXI DMA transfers on FPGA.
     // writeBytes: load ELF segments and H2D buffer copies into simulation memory.
     // readBytes:  D2H result copies back to the driver/host.
-    void writeBytes(Address addr, const uint8_t* data, size_t len);
-    void readBytes (Address addr, uint8_t*       data, size_t len);
+    void writeBytes(Address addr, const uint8_t* data, size_t len, BlockID block_id = 0);
+    void readBytes (Address addr, uint8_t*       data, size_t len, BlockID block_id = 0);
 
     bool cacheHit      (Address addr, CacheStatus& status);
     void invalidateCache();
@@ -55,7 +60,7 @@ public:
 private:
     Config config_;
 
-    std::vector<uint8_t>          shared_memory_;
+    std::map<BlockID, std::vector<uint8_t>> shared_memory_;
     std::map<Address, uint32_t>   global_memory_;
     std::map<Address, uint32_t>   l1_cache_;
     std::map<Address, uint32_t>   l2_cache_;

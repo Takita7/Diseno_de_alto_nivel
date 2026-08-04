@@ -1,7 +1,10 @@
 add_library(runtime_lib STATIC host_runtime.cpp)
 
 target_include_directories(runtime_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(runtime_lib PUBLIC kernel_loader_lib driver_lib)
+target_link_libraries(runtime_lib
+    PUBLIC kernel_loader_lib driver_lib riscv_gpgpu_paths
+    PRIVATE host_api_lib
+)
 
 if(BUILD_TESTS AND GTest_FOUND)
     add_executable(test_runtime_api test_runtime_api.cpp)

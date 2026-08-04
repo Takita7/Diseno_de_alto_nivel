@@ -24,6 +24,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# Shared path used by runtime/software/models for architecture defaults.
+set(RISCV_GPGPU_ARCH_CONFIG_PATH "${CMAKE_SOURCE_DIR}/config/arch_config.yaml"
+    CACHE FILEPATH "Default architecture configuration file")
+
+add_library(riscv_gpgpu_paths INTERFACE)
+target_compile_definitions(riscv_gpgpu_paths INTERFACE
+    RISCV_GPGPU_ARCH_CONFIG_PATH="${RISCV_GPGPU_ARCH_CONFIG_PATH}"
+)
+
 # Project features
 option(BUILD_SYSTEMC_MODELS "Build SystemC models" ON)
 option(BUILD_SYSTEMC_INTEGRATION "Build SystemC software integration layer" OFF)
@@ -31,12 +40,13 @@ option(BUILD_TESTS "Build test suites" ON)
 option(BUILD_HLS "Build HLS implementation (requires Vitis HLS)" OFF)
 option(BUILD_BENCHMARKS "Build benchmark utilities" ON)
 option(BUILD_DOCUMENTATION "Build documentation" OFF)
+option(FPGA_TARGET "Target real FPGA hardware (Kria) instead of the host-memory simulation driver" OFF)
 
 # Find required packages
-if(BUILD_SYSTEMC_MODELS)
+if(BUILD_SYSTEMC_MODELS OR BUILD_SYSTEMC_INTEGRATION)
     find_package(SystemC REQUIRED)
 else()
-    message(STATUS "BUILD_SYSTEMC_MODELS is OFF; skipping SystemC detection")
+    message(STATUS "SystemC models and integration are OFF; skipping SystemC detection")
 endif()
 
 # Optional packages
@@ -56,7 +66,7 @@ add_subdirectory(driver)
 add_subdirectory(software)
 add_subdirectory(runtime)
 
-if(BUILD_SYSTEMC_MODELS OR SystemC_FOUND)
+if(SystemC_FOUND)
     add_subdirectory(models)
 endif()
 
@@ -77,3 +87,5 @@ message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  HLS: ${BUILD_HLS}")
 message(STATUS "  Benchmarks: ${BUILD_BENCHMARKS}")
 message(STATUS "  Documentation: ${BUILD_DOCUMENTATION}")
+message(STATUS "  FPGA target: ${FPGA_TARGET}")
+message(STATUS "  Arch config path: ${RISCV_GPGPU_ARCH_CONFIG_PATH}")

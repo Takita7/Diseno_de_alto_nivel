@@ -1,7 +1,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
-#include "kernel_loader.cpp"
+#include "kernel_loader.h"
 #include "../llvm/backend/llvm_backend.h"
 
 using namespace riscv_gpgpu;
@@ -16,6 +16,49 @@ TEST(KernelLoaderTest, PackAndLoad) {
     EXPECT_TRUE(loadKernelBundle(manifest));
     std::remove(manifest.c_str());
     std::remove(fake_bin.c_str());
+}
+
+TEST(KernelLoaderTest, PackAndInspectPtxBundle) {
+    const fs::path temp_dir = fs::temp_directory_path() / "riscv_gpgpu_ptx_bundle";
+    fs::create_directories(temp_dir);
+    const fs::path ptx_file = temp_dir / "kernel.ptx";
+    const fs::path manifest_file = temp_dir / "kernel.json";
+    {
+        std::ofstream ptx(ptx_file);
+        ASSERT_TRUE(ptx.is_open());
+        ptx << ".address_size 32\n.visible .entry bundle_ptx() { ret; }\n";
+    }
+
+    ASSERT_TRUE(packPtxKernelBundle("bundle_ptx", ptx_file.string(), manifest_file.string(), 32, 1, 1, 128));
+    KernelBundleInfo info;
+    ASSERT_TRUE(inspectKernelBundleDetails(manifest_file.string(), info));
+    EXPECT_EQ(info.format, KernelBundleFormat::Ptx);
+    EXPECT_EQ(info.kernel_name, "bundle_ptx");
+    EXPECT_EQ(info.entry_symbol, "bundle_ptx");
+    EXPECT_EQ(info.workgroup_x, 32u);
+    EXPECT_EQ(info.shared_mem_bytes, 128u);
+    EXPECT_EQ(info.binary_path, fs::absolute(ptx_file).lexically_normal().string());
+
+    fs::remove_all(temp_dir);
+}
+
+TEST(KernelLoaderTest, RejectsUnknownBundleFormat) {
+    const fs::path temp_dir = fs::temp_directory_path() / "riscv_gpgpu_bad_bundle";
+    fs::create_directories(temp_dir);
+    const fs::path artifact = temp_dir / "kernel.bin";
+    const fs::path manifest = temp_dir / "kernel.json";
+    { std::ofstream file(artifact); file << "data"; }
+    {
+        std::ofstream file(manifest);
+        file << "{\n"
+             << "  \"kernel_name\": \"bad\",\n"
+             << "  \"binary_path\": \"kernel.bin\",\n"
+             << "  \"binary_format\": \"unknown\"\n"
+             << "}\n";
+    }
+    KernelBundleInfo info;
+    EXPECT_FALSE(inspectKernelBundleDetails(manifest.string(), info));
+    fs::remove_all(temp_dir);
 }
 
 TEST(KernelLoaderTest, EndToEndCompileAndBundle) {
