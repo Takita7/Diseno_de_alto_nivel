@@ -88,7 +88,7 @@ foreach board $boards {
             # functions there (see docs/hls/interfaces.md SS16.10). 2023.1
             # resolved the unqualified name fine, so this is a real
             # cross-version behavior difference, not a source bug.
-            set_top "riscv_gpgpu_hls::$top_fn"
+            set_top $top_fn
             open_solution -reset solution1
             source "$repo_root/hls/constraints/${board_name}.tcl"
             csynth_design

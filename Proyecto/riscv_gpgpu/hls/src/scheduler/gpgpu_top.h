@@ -79,10 +79,41 @@ namespace riscv_gpgpu_hls {
 // unaffected - schedulerCore is never itself `set_top`, only called from
 // within gpgpu_scheduler, so this is purely an internal-helper signature
 // choice).
+inline void programLoader(
+    instr_word_t* program_ptr,
+    uint32_t      program_len,
+    bool&         start,
+    instr_word_t  program0[MAX_PROGRAM_LEN],
+    instr_word_t  program1[MAX_PROGRAM_LEN]
+) {
+    bool loaded = false;
+
+    while (true) {
+#pragma HLS PIPELINE off
+
+        if (!start) {
+            loaded = false;
+            continue;
+        }
+
+        if (!loaded) {
+        LOAD_PROGRAM:
+            for (uint32_t i = 0; i < MAX_PROGRAM_LEN; ++i) {
+#pragma HLS PIPELINE II=1
+                if (i < program_len) {
+                    instr_word_t instr = program_ptr[i];
+                    program0[i] = instr;
+                    program1[i] = instr;
+                }
+            }
+
+            loaded = true;
+        }
+    }
+}
 inline void schedulerCore(
     CuDispatchUnit& cu,
     cu_id_t         cu_id,
-    instr_word_t*   program_ptr,
     uint32_t        program_len,
     warp_id_t       total_warps,
     bool&           start,
@@ -112,7 +143,6 @@ inline void schedulerCore(
             if (total_warps > warp_id_t(NUM_CUS * MAX_WARPS_PER_CU)) continue;
 
             launchSlots(slots, cu_id, total_warps);
-            cu.loadProgram(program_ptr, program_len);
             busy_cu = false;
 
             busy_cu_scheduler = true;
@@ -154,7 +184,10 @@ inline void schedulerCore(
 // .h and defined in a .cpp rather than header-only.
 void gpgpu_scheduler(
     instr_word_t* program_ptr,
-    reg_t*        initial_regs_ptr,
+
+    reg_t* initial_regs_ptr0,
+    reg_t* initial_regs_ptr1,
+
     uint32_t      program_len,
     warp_id_t     total_warps,
     bool          start,
