@@ -384,25 +384,23 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 
 **Independent Test**: Un kernel que realiza operaciones FP (`fadd.s`, `fmul.s`, `fmadd.s`) ejecuta correctamente en el `ComputeUnit` y produce resultados con precisión IEEE 754 single-precision.
 
-- [ ] T065 [US1] Extend `riscv_isa.h` with RV32F instruction decoding in `models/systemc/integration/riscv_isa.h`
-  - Add F-extension opcodes: `FLW`, `FSW`, `FADD_S`, `FSUB_S`, `FMUL_S`, `FDIV_S`, `FMADD_S`, `FMSUB_S`, `FNMADD_S`, `FNMSUB_S`, `FCVT_W_S`, `FCVT_S_W`, `FMV_X_W`, `FMV_W_X`, `FLT_S`, `FLE_S`, `FEQ_S`, `FSQRT_S`
-  - Extend `RV32Instr` struct with `float_rs1`, `float_rs2`, `float_rs3`, `float_rd` fields
+- [x] T065 [US1] Extend `riscv_isa.h` with RV32F instruction decoding in `models/systemc/integration/riscv_isa.h`
+  - Added F-extension opcodes: `FLW`, `FSW`, `FADD_S`, `FSUB_S`, `FMUL_S`, `FDIV_S`, `FSQRT_S`, `FMADD_S`, `FMSUB_S`, `FNMADD_S`, `FNMSUB_S`, `FCVT_W_S`, `FCVT_WU_S`, `FCVT_S_W`, `FCVT_S_WU`, `FMV_X_W`, `FMV_W_X`, `FLT_S`, `FLE_S`, `FEQ_S`
+  - Added `rs3` field to `RV32Instr` for R4-type FP instructions (FMADD/FMSUB/FNMADD/FNMSUB)
+  - Added decoder cases for opcodes 0x07 (LOAD-FP), 0x27 (STORE-FP), 0x43/0x47/0x4B/0x4F (R4-type), 0x53 (OP-FP)
 
-- [ ] T066 [US1] Add 32 floating-point registers (f0-f31) to `ComputeUnit` warp context in `models/systemc/src/compute_unit/compute_unit.cpp`
-  - Add `float frf[32]` to `WarpContext` struct alongside existing `int32_t rf[32]`
-  - Initialize all FP registers to 0.0f on reset
-  - Implement `FLW`/`FSW` (load/store float from/to memory hierarchy)
-  - Implement `FADD_S`, `FMUL_S`, `FMADD_S`, `FSUB_S`, `FDIV_S` using C++ `float` arithmetic (IEEE 754 compliant on host)
-  - Implement `FLT_S`, `FLE_S`, `FEQ_S` → result in integer register (0 or 1)
-  - Implement `FCVT_W_S`, `FCVT_S_W` (float↔int conversion)
+- [x] T066 [US1] Add 32 floating-point registers (f0-f31) to `ComputeUnit` warp context in `models/systemc/src/compute_unit/compute_unit.cpp`
+  - Added `std::array<float, 32> binary_fregs_` to `ComputeUnit` private state
+  - Added `setInitialFloatRegisters()` and `getFloatRegister()` public API
+  - Implemented all RV32F instructions in `executeRV32()`: FLW/FSW, FADD/FSUB/FMUL/FDIV/FSQRT, FMADD/FMSUB/FNMADD/FNMSUB, FEQ/FLT/FLE, FCVT_W_S/FCVT_WU_S/FCVT_S_W/FCVT_S_WU, FMV_X_W/FMV_W_X
+  - IEEE 754 compliant: uses C++ `float` arithmetic; bit-exact FMV via `memcpy`
+  - Also implemented previously missing M-extension: MULH, MULHSU
 
-- [ ] T067 [P] [US1] Add FP unit tests in `tests/systemc/test_compute_unit_fp.cpp`
-  - Test: `fadd.s fa0, fa1, fa2` with known values → correct IEEE 754 result
-  - Test: `fmadd.s fa0, fa1, fa2, fa3` (fused multiply-add)
-  - Test: `flt.s t0, fa0, fa1` → t0=1 if fa0 < fa1, else t0=0
-  - Test: FP load/store round-trip through MemoryHierarchy
+- [x] T067 [P] [US1] Add FP unit tests in `tests/systemc/test_compute_unit_fp.cpp`
+  - 14 test cases covering: FADD_S, FSUB_S, FMUL_S, FMADD_S, FMSUB_S, FSQRT_S, FLT_S (true/false), FEQ_S, FLW/FSW round-trip, FCVT_W_S, FCVT_S_W, FMV_X_W, FMV_W_X, SAXPY one-element end-to-end
+  - All 14 tests pass (12/12 CTest suites pass, up from 11)
 
-**Checkpoint**: `ComputeUnit` ejecuta RV32IMF completo. Kernels con operaciones FP producen resultados correctos.
+**Checkpoint**: `ComputeUnit` ejecuta RV32IMF completo. Kernels con operaciones FP producen resultados correctos. 12/12 CTest suites pass (branch: gpgpu/codesign_dmedina, 2026-07-29).
 
 ---
 

@@ -61,10 +61,14 @@ public:
     void setEntryPoint(uint32_t pc);
     // setInitialRegisters: full 32-register file snapshot for one warp.
     void setInitialRegisters(std::array<uint32_t, 32> regs);
+    // setInitialFloatRegisters: optional FP register file for RV32F kernels.
+    void setInitialFloatRegisters(std::array<float, 32> fregs);
     // setReturnSentinel: PC that signals kernel completion (ra = sentinel on entry).
     void setReturnSentinel(uint32_t sentinel_pc);
-    // getRegister: read back a register after execution (e.g. result in a0).
+    // getRegister: read back an integer register after execution.
     uint32_t getRegister(uint32_t warp_id, uint32_t reg_id) const;
+    // getFloatRegister: read back a floating-point register after execution.
+    float getFloatRegister(uint32_t reg_id) const;
     // getCurrentPC: returns the current fetch PC in binary mode (0 in virtual ISA mode).
     // Used by KernelBridge for per-warp PC-divergence detection.
     uint32_t getCurrentPC() const;
@@ -120,6 +124,7 @@ private:
     uint32_t                  binary_return_sentinel_  = 0;
     bool                      binary_halted_           = false;
     std::array<uint32_t, 32>  binary_regs_             = {};
+    std::array<float, 32>     binary_fregs_            = {};  // RV32F float registers (f0-f31)
 };
 
 }  // namespace riscv_gpgpu

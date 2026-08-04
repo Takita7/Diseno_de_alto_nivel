@@ -13,6 +13,11 @@
 #include <string>
 #include <systemc>
 
+// Undefine DEBUG before enum to avoid collision with -DDEBUG=1 build flag
+#ifdef DEBUG
+#undef DEBUG
+#endif
+
 namespace riscv_gpgpu {
 
 enum class LogLevel {
