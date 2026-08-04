@@ -24,3 +24,5 @@ Scope:
 
 - verification outputs: `docs/verification/` and `results/`
 - task ownership and phase status: `specs/001-open-riscv-gpgpu/tasks.md`
+- release checklist: `docs/reproducibility/release_checklist.md`
+- package manifest: `REPRODUCIBILITY.md`

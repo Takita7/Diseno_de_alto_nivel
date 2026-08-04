@@ -24,6 +24,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# Shared path used by runtime/software/models for architecture defaults.
+set(RISCV_GPGPU_ARCH_CONFIG_PATH "${CMAKE_SOURCE_DIR}/config/arch_config.yaml"
+    CACHE FILEPATH "Default architecture configuration file")
+
+add_library(riscv_gpgpu_paths INTERFACE)
+target_compile_definitions(riscv_gpgpu_paths INTERFACE
+    RISCV_GPGPU_ARCH_CONFIG_PATH="${RISCV_GPGPU_ARCH_CONFIG_PATH}"
+)
+
 # Project features
 option(BUILD_SYSTEMC_MODELS "Build SystemC models" ON)
 option(BUILD_SYSTEMC_INTEGRATION "Build SystemC software integration layer" OFF)
@@ -79,3 +88,4 @@ message(STATUS "  HLS: ${BUILD_HLS}")
 message(STATUS "  Benchmarks: ${BUILD_BENCHMARKS}")
 message(STATUS "  Documentation: ${BUILD_DOCUMENTATION}")
 message(STATUS "  FPGA target: ${FPGA_TARGET}")
+message(STATUS "  Arch config path: ${RISCV_GPGPU_ARCH_CONFIG_PATH}")

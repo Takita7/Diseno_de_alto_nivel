@@ -1,58 +1,31 @@
 # Traceability Matrix
 
-Detailed traceability mapping requirements to implementation and verification artifacts.
+Validated requirements-to-evidence chain for major artifacts.
 
-## System Requirements
+## Requirements to Implementation and Evidence
 
-| Req ID | Category | Requirement | Component | Implementation File | Test File | Status |
-|--------|----------|-------------|-----------|-------------------|----------|--------|
-| REQ-EXE-001 | Execution | Support up to 32 threads per warp | Compute Unit | models/systemc/compute_unit.cpp | tests/systemc/test_compute_unit.cpp | Planned |
-| REQ-EXE-002 | Execution | Support configurable warps per CU | Warp Scheduler | models/systemc/warp_scheduler.cpp | tests/systemc/test_scheduler.cpp | Planned |
-| REQ-SIMT-001 | SIMT | Implement SIMT divergence handling | SIMT Controller | models/systemc/simt_controller.cpp | tests/systemc/test_simt.cpp | Planned |
-| REQ-SIMT-002 | SIMT | Support immediate/deferred reconvergence | SIMT Controller | models/systemc/simt_controller.cpp | tests/systemc/test_simt.cpp | Planned |
-| REQ-MEM-001 | Memory | Implement shared memory per block | Memory Hierarchy | models/systemc/src/memory/memory_hierarchy.cpp | tests/systemc/test_shared_memory.cpp | Implemented |
-| REQ-MEM-002 | Memory | Support L1/L2 cache hierarchy | Memory Hierarchy | models/systemc/memory_hierarchy.cpp | tests/systemc/test_memory.cpp | Planned |
-| REQ-SYNC-001 | Synchronization | Implement per-block barrier synchronization | Kernel Bridge / Compute Unit | models/systemc/integration/kernel_bridge.cpp | tests/systemc/test_shared_memory.cpp | Implemented |
-| REQ-SYNC-002 | Synchronization | Support atomic operations | Synchronization | models/systemc/synchronization.cpp | tests/systemc/test_sync.cpp | Planned |
+| Req ID | Requirement | Major implementation artifacts | Verification artifacts | Status |
+|---|---|---|---|---|
+| REQ-EXE-001 | RV32 kernel execution through SystemC integration | `models/systemc/src/compute_unit/`, `models/systemc/integration/kernel_bridge.cpp`, `models/systemc/integration/elf_loader.cpp` | `tests/systemc/test_systemc_integration.cpp`, CTest systemc suites | Implemented |
+| REQ-SIMT-001 | SIMT divergence and reconvergence behavior | `models/systemc/src/simt_controller/`, `models/systemc/integration/kernel_bridge.cpp` | `tests/systemc/test_simt_controller.cpp`, integration divergence checks | Implemented |
+| REQ-SCHED-001 | Multi-CU warp scheduling behavior | `models/systemc/src/scheduler/warp_scheduler.cpp`, `models/systemc/src/top/top.cpp` | `tests/systemc/test_scheduler.cpp` | Implemented |
+| REQ-MEM-001 | Shared/global memory behavior and barrier synchronization | `models/systemc/src/memory/memory_hierarchy.cpp`, `models/systemc/src/compute_unit/compute_unit.cpp` | `tests/systemc/test_shared_memory.cpp` | Implemented |
+| REQ-COMP-001 | PTX to RISC-V compilation path | `driver/src/ptx_transpiler/` | `tests/compiler/ptx/test_ptx_parser.cpp`, `tests/compiler/ptx/test_rv_emitter.cpp`, `tests/compiler/ptx/test_ptx_transpiler.cpp` | Implemented |
+| REQ-BENCH-001 | End-to-end benchmark execution and metric capture | `benchmarks/rodinia_real_benchmark.cpp`, `scripts/benchmark/run_rodinia_real_matrix.sh`, `scripts/benchmark/analyze_results.py` | `results/benchmarks/rodinia_real_matrix/summary.tsv`, `results/benchmarks/rodinia_real_matrix/summary.json`, `docs/verification/benchmark_results.md` | Implemented |
+| REQ-FPGA-001 | ARM host to FPGA control plane for Kria deployment | `driver/src/fpga_driver.cpp`, `driver/src/fpga_elf_loader.cpp`, `driver/src/fpga_regs.h`, `software/host_api/host_api.cpp`, `scripts/deploy_kria.sh` | `tests/fpga/test_fpga_driver.cpp`, `docs/architecture/axi_interface.md`, `docs/verification/kria_results.md` | Code complete, hardware evidence pending |
 
-## Design Decisions
+## Evidence Chain Status
 
-| Decision ID | Area | Decision | Rationale | Impact |
-|-------------|------|----------|-----------|--------|
-| DEC-001 | Architecture | Use configurable parameter schema | Enable design-space exploration | All components |
-| DEC-002 | Scheduler | Implement round-robin as default policy | Balance simple implementation with effectiveness | Warp Scheduler |
-| DEC-003 | SIMT | Use stack-based reconvergence | Support arbitrary control flow | SIMT Controller |
-| DEC-004 | Memory | Model realistic cache latencies | Enable performance prediction | Memory Hierarchy |
+| Chain stage | Artifact location | Validation state |
+|---|---|---|
+| Requirement and task intent | `specs/001-open-riscv-gpgpu/tasks.md` | Updated through Phase 7 + Phase 6 documentation tasks |
+| Architecture and interface contracts | `docs/architecture/` | Updated (includes AXI contract) |
+| Implementation | `models/`, `driver/`, `runtime/`, `software/`, `benchmarks/` | Present and buildable |
+| Automated verification | `tests/`, CTest suites | Passing in local run baseline |
+| Benchmark evidence | `results/benchmarks/`, `docs/verification/benchmark_results.md` | Captured |
+| FPGA hardware evidence | `docs/verification/kria_results.md` | Pending physical board run |
 
-## Verification Plan
+## Gaps
 
-| Test ID | Component | Test Type | Expected Result | Acceptance Criteria |
-|---------|-----------|-----------|-----------------|-------------------|
-| TEST-001 | Scheduler | Unit | Warps dispatch in correct order | Dispatch order matches policy |
-| TEST-002 | SIMT | Unit | Divergence paths tracked | Active mask correct after divergence |
-| TEST-003 | Memory | Unit | Cache hits/misses recorded | Latency matches model |
-| TEST-004 | Integration | Integration | Kernel runs to completion | All threads reach barrier |
-
-## Artifact Locations
-
-- **Architecture Specification**: `docs/architecture/`
-- **Implementation**: `models/systemc/`, `hls/src/`, `rtl/`
-- **Tests**: `tests/`
-- **Documentation**: `docs/`
-- **Configuration**: `config/`
-- **Benchmarks**: `benchmarks/`
-
-## Verification Evidence
-
-Evidence is collected in the following directories:
-
-- **Unit Test Results**: `results/unit_tests/`
-- **Integration Test Results**: `results/integration_tests/`
-- **FPGA Test Results**: `results/fpga/`
-- **Benchmark Results**: `results/benchmarks/`
-- **Documentation**: `docs/verification/`
-
-## Status
-
-- Traceability matrix initialized
-- To be updated as implementation progresses
+- Hardware execution evidence on Kria board is pending and tracked explicitly in
+	`docs/verification/kria_results.md`.

@@ -14,7 +14,7 @@ BIN_DIR="$BUILD_DIR/bin"
 SIM_DIR="$SCRIPT_DIR/scenarios"
 
 # Default configuration
-CONFIG="${PROJECT_ROOT}/config/arch_config.yaml"
+CONFIG="${RISCV_GPGPU_ARCH_CONFIG_PATH:-${PROJECT_ROOT}/config/arch_config.yaml}"
 SCENARIO="baseline"
 
 # Parse command line arguments

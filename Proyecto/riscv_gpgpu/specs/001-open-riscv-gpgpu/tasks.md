@@ -504,10 +504,14 @@ Resultados via DMA → gpgpuMemcpyD2H() → host
 
 - [x] T036 [P] Refresh architecture and software documentation in `docs/`
 	- Completed in Phase 6 polish: refreshed root/component READMEs to remove cross-folder duplication and enforce scope ownership (`README.md`, `benchmarks/README.md`, `software/README.md`, `models/systemc/README.md`, `hls/README.md`, `docs/architecture/README.md`, `docs/traceability/README.md`, `docs/reproducibility/README.md`).
-- [ ] T037 Refactor shared code and configuration paths to reduce duplication across `models/`, `hls/`, `runtime/`, and `software/`
-- [ ] T038 Run end-to-end benchmark comparison and capture results in `docs/verification/benchmark_results.md`
-- [ ] T039 [P] Add release checklist and reproducibility package contents in `docs/reproducibility/` and `REPRODUCIBILITY.md`
-- [ ] T040 Validate the full traceability chain from requirements to evidence for all major artifacts
+- [x] T037 Refactor shared code and configuration paths to reduce duplication across `models/`, `hls/`, `runtime/`, and `software/`
+	- Added shared CMake path contract `RISCV_GPGPU_ARCH_CONFIG_PATH` in root `CMakeLists.txt` and propagated via `riscv_gpgpu_paths` interface target to `software/common`, `runtime/src`, and `models/systemc`; added `defaultArchConfigPath()` helper in `software/common/config.h`; aligned `scripts/run_systemc_sim.sh` default config with the shared path.
+- [x] T038 Run end-to-end benchmark comparison and capture results in `docs/verification/benchmark_results.md`
+	- Captured current Rodinia real matrix evidence from `results/benchmarks/rodinia_real_matrix/summary.tsv` and `summary.json` in `docs/verification/benchmark_results.md`, including per-case and aggregate metrics.
+- [x] T039 [P] Add release checklist and reproducibility package contents in `docs/reproducibility/` and `REPRODUCIBILITY.md`
+	- Added reproducibility package manifest in `REPRODUCIBILITY.md` and release checklist in `docs/reproducibility/release_checklist.md`; linked both from `docs/reproducibility/README.md`.
+- [x] T040 Validate the full traceability chain from requirements to evidence for all major artifacts
+	- Replaced placeholder matrix in `docs/traceability/traceability_matrix.md` with validated requirement→implementation→test→evidence chains, including explicit hardware-evidence pending status.
 
 ---
 
