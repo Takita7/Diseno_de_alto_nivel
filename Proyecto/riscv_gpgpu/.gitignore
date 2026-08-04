@@ -21,6 +21,8 @@ external/
 # C++ Build Artifacts
 build/
 build_*/
+build-*/
+build-all/
 debug/
 release/
 *.o
@@ -82,6 +84,7 @@ cmake-build-release/
 # Temporary and backup files
 *.tmp
 *.bak
+results.txt
 *.swp
 *.swo
 *~

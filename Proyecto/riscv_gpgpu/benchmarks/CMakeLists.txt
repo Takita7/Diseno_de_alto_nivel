@@ -121,7 +121,22 @@ if(RODINIA_ROOT)
         elseif(kernel_key STREQUAL "needle")
             message(STATUS "Benchmarks: Rodinia Needle not yet wired for real upstream integration; keeping synthetic benchmark")
         elseif(kernel_key STREQUAL "gaussian")
-            message(STATUS "Benchmarks: Rodinia Gaussian not yet wired for real upstream integration; keeping synthetic benchmark")
+            set(RODINIA_GAUSSIAN_SOURCE "${CMAKE_CURRENT_LIST_DIR}/rodinia_gaussian_kernels.cpp")
+            if(EXISTS "${RODINIA_GAUSSIAN_SOURCE}")
+                add_riscv_kernel(rodinia_gaussian_fan1
+                    SOURCE "${RODINIA_GAUSSIAN_SOURCE}"
+                    ENTRY Fan1
+                )
+                add_riscv_kernel(rodinia_gaussian_fan2
+                    SOURCE "${RODINIA_GAUSSIAN_SOURCE}"
+                    ENTRY Fan2
+                )
+                set(RODINIA_REAL_GAUSSIAN_AVAILABLE TRUE)
+                message(STATUS "Benchmarks: Rodinia Gaussian integrated from ${RODINIA_GAUSSIAN_SOURCE}")
+            else()
+                message(WARNING
+                    "Benchmarks: Rodinia Gaussian skipped because source was not found: ${RODINIA_GAUSSIAN_SOURCE}")
+            endif()
         elseif(kernel_key STREQUAL "lavamd")
             message(STATUS "Benchmarks: Rodinia LavaMD not yet wired for real upstream integration; keeping synthetic benchmark")
         else()
@@ -174,10 +189,6 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
     add_gpgpu_benchmark(ptx_kernels_benchmark ptx_kernels_benchmark.cpp)
     message(STATUS "Benchmarks: ptx_kernels_benchmark configured (Phases 5d+5e+5f)")
 
-    # Rodinia-style benchmarks (matmul naive + hotspot 1D)
-    add_gpgpu_benchmark(rodinia_benchmark rodinia_benchmark.cpp)
-    message(STATUS "Benchmarks: rodinia_benchmark configured (matmul_naive + hotspot1d)")
-
     if(RODINIA_REAL_BFS_AVAILABLE)
         add_gpgpu_benchmark(rodinia_real_benchmark rodinia_real_benchmark.cpp)
         add_dependencies(rodinia_real_benchmark rodinia_bfs_kernel_kernel rodinia_bfs_kernel2_kernel)
@@ -186,6 +197,18 @@ if(BUILD_TESTS AND BUILD_SYSTEMC_INTEGRATION AND GTest_FOUND AND SystemC_FOUND)
             RODINIA_BFS_KERNEL2_ELF="${rodinia_bfs_kernel2_ELF}"
         )
         message(STATUS "Benchmarks: rodinia_real_benchmark configured (upstream BFS Kernel + Kernel2)")
+    endif()
+
+    if(RODINIA_REAL_GAUSSIAN_AVAILABLE)
+        if(NOT TARGET rodinia_real_benchmark)
+            add_gpgpu_benchmark(rodinia_real_benchmark rodinia_real_benchmark.cpp)
+        endif()
+        add_dependencies(rodinia_real_benchmark rodinia_gaussian_fan1_kernel rodinia_gaussian_fan2_kernel)
+        target_compile_definitions(rodinia_real_benchmark PRIVATE
+            RODINIA_GAUSSIAN_FAN1_ELF="${rodinia_gaussian_fan1_ELF}"
+            RODINIA_GAUSSIAN_FAN2_ELF="${rodinia_gaussian_fan2_ELF}"
+        )
+        message(STATUS "Benchmarks: rodinia_real_benchmark configured with upstream Gaussian Fan1 + Fan2")
     endif()
 
 else()

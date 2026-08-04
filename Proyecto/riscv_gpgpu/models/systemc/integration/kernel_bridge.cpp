@@ -28,9 +28,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <systemc>
 
@@ -42,6 +44,11 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                                   const std::string& binary_path,
                                   const std::vector<uint64_t>& kernel_args,
                                   const std::vector<uint64_t>& device_ptrs) {
+    const bool bridge_debug = []() {
+        const char* value = std::getenv("KERNEL_BRIDGE_DEBUG");
+        return value && std::string(value) == "1";
+    }();
+
     last_error_.clear();
     auto fail = [this](const std::string& error) {
         last_error_ = error;
@@ -53,11 +60,27 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint64_t run_id = run_sequence.fetch_add(1, std::memory_order_relaxed);
     const std::string run_prefix = "bridge_run_" + std::to_string(run_id);
 
+    auto parseEnvU64 = [](const char* name, uint64_t fallback) {
+        const char* value = std::getenv(name);
+        if (!value) return fallback;
+        char* end = nullptr;
+        unsigned long long parsed = std::strtoull(value, &end, 10);
+        if (end != value && *end == '\0') {
+            return static_cast<uint64_t>(parsed);
+        }
+        return fallback;
+    };
+
+    const uint64_t trace_interval = bridge_debug
+        ? parseEnvU64("KERNEL_BRIDGE_TRACE_INTERVAL", 250000)
+        : 0;
+
     std::cout << "[bridge] Starting hardware simulation for kernel '" << kernel_name << "'\n";
     std::cout << "[bridge] ELF binary: " << binary_path << "\n";
 
     KernelLaunchArgs launch_args;
     const bool have_launch_args = getCurrentLaunchArgs(launch_args);
+    const bool use_launch_args = have_launch_args && (launch_args.kernel_name == kernel_name);
     if (have_launch_args) {
         std::cout << "[bridge] Driver launch available: "
                   << launch_args.kernel_name
@@ -65,6 +88,10 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                   << " grid=" << launch_args.grid_x << "x" << launch_args.grid_y << "x" << launch_args.grid_z
                   << " block=" << launch_args.block_x << "x" << launch_args.block_y << "x" << launch_args.block_z
                   << " shared_mem=" << launch_args.shared_mem_bytes << "\n";
+        if (!use_launch_args) {
+            std::cout << "[bridge] Driver launch metadata does not match kernel '"
+                      << kernel_name << "'; using direct kernel arguments\n";
+        }
     }
 
     // ── 1. Build SystemC MemoryHierarchy independently (no sc_start) ──────────
@@ -89,6 +116,26 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                   << std::hex << cuda_thread_ctx_sym.address << std::dec << "\n";
     }
 
+    struct BufferWatch {
+        std::string label;
+        uint32_t addr = 0;
+        uint32_t len = 0;
+    };
+    std::vector<BufferWatch> watches;
+    if (bridge_debug) {
+        if (kernel_name == "Kernel" && kernel_args.size() >= 7) {
+            watches.push_back(BufferWatch{"mask",     static_cast<uint32_t>(kernel_args[2]), 5});
+            watches.push_back(BufferWatch{"updating", static_cast<uint32_t>(kernel_args[3]), 5});
+            watches.push_back(BufferWatch{"visited",  static_cast<uint32_t>(kernel_args[4]), 5});
+            watches.push_back(BufferWatch{"cost",     static_cast<uint32_t>(kernel_args[5]), 20});
+        } else if (kernel_name == "Kernel2" && kernel_args.size() >= 4) {
+            watches.push_back(BufferWatch{"mask",     static_cast<uint32_t>(kernel_args[0]), 5});
+            watches.push_back(BufferWatch{"updating", static_cast<uint32_t>(kernel_args[1]), 5});
+            watches.push_back(BufferWatch{"visited",  static_cast<uint32_t>(kernel_args[2]), 5});
+            watches.push_back(BufferWatch{"over",     static_cast<uint32_t>(kernel_args[3]), 1});
+        }
+    }
+
     // ── 3. Copy device buffers into SystemC global memory ────────────────────
     for (uint64_t dev_ptr : device_ptrs) {
         std::vector<uint8_t> content;
@@ -102,7 +149,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // ── 4. Resolve entry point ────────────────────────────────────────────────
     uint32_t entry_pc = 0;
     SymbolEntry sym;
-    const std::string& entry_name = (have_launch_args && !launch_args.entry_symbol.empty())
+    const std::string& entry_name = (use_launch_args && !launch_args.entry_symbol.empty())
         ? launch_args.entry_symbol
         : kernel_name;
 
@@ -146,6 +193,10 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     // 0x200000..0x20FFFF, well below device buffers and above ELF code.
     const uint32_t THREAD_CTX_BASE   = 0x00200000u;
     const uint32_t THREAD_CTX_STRIDE = 64u;
+    // Each worker needs its own stack region because the bridge interleaves
+    // instructions from multiple workers in a single shared memory space.
+    const uint32_t STACK_BASE        = 0x30000000u;
+    const uint32_t STACK_STRIDE      = 0x00010000u;  // 64 KiB per worker
 
     std::cout << "[bridge] Initial registers: "
               << "sp=0x" << std::hex << regs[2]
@@ -155,12 +206,12 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     std::cout << "\n";
 
     // ── 6. Create and run functional compute units ────────────────────────────
-    const uint32_t effective_grid_x = have_launch_args ? launch_args.grid_x : 1;
-    const uint32_t effective_grid_y = have_launch_args ? launch_args.grid_y : 1;
-    const uint32_t effective_grid_z = have_launch_args ? launch_args.grid_z : 1;
-    const uint32_t effective_block_x = have_launch_args ? launch_args.block_x : 1;
-    const uint32_t effective_block_y = have_launch_args ? launch_args.block_y : 1;
-    const uint32_t effective_block_z = have_launch_args ? launch_args.block_z : 1;
+    const uint32_t effective_grid_x = use_launch_args ? launch_args.grid_x : 1;
+    const uint32_t effective_grid_y = use_launch_args ? launch_args.grid_y : 1;
+    const uint32_t effective_grid_z = use_launch_args ? launch_args.grid_z : 1;
+    const uint32_t effective_block_x = use_launch_args ? launch_args.block_x : 1;
+    const uint32_t effective_block_y = use_launch_args ? launch_args.block_y : 1;
+    const uint32_t effective_block_z = use_launch_args ? launch_args.block_z : 1;
     const uint32_t total_blocks = std::max<uint32_t>(1u,
         effective_grid_x * std::max<uint32_t>(1u, effective_grid_y) * std::max<uint32_t>(1u, effective_grid_z));
     // Threads per block: for single-thread kernels this is 1; for SIMT kernels
@@ -168,7 +219,15 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     const uint32_t threads_per_block = std::max<uint32_t>(1u,
         effective_block_x * std::max<uint32_t>(1u, effective_block_y) * std::max<uint32_t>(1u, effective_block_z));
     const uint32_t total_threads = total_blocks * threads_per_block;
-    const uint32_t shared_mem_bytes = have_launch_args
+    if (bridge_debug) {
+        std::cout << "[bridge-debug] requested_cus=" << cfg_.num_compute_units
+                  << " total_blocks=" << total_blocks
+                  << " threads_per_block=" << threads_per_block
+                  << " total_threads=" << total_threads
+                  << " threads_per_warp=" << cfg_.threads_per_warp
+                  << "\n";
+    }
+    const uint32_t shared_mem_bytes = use_launch_args
         ? launch_args.shared_mem_bytes
         : cfg_.shared_mem_size;
     if (shared_mem_bytes > cfg_.shared_mem_size)
@@ -183,6 +242,9 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         uint32_t block_id  = 0;
         uint32_t thread_id = 0;
         bool     active    = false;
+        uint64_t stalled_pc_steps = 0;
+        uint64_t blocked_steps = 0;
+        uint32_t last_pc = 0;
         std::array<uint32_t, 12> cuda_thread_ctx{};
     };
 
@@ -213,6 +275,8 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         // x3 (gp) = per-thread THREAD_CTX slot
         const uint32_t ctx_base = THREAD_CTX_BASE + global_thread_id * THREAD_CTX_STRIDE;
         worker_regs[3] = ctx_base;
+        // x2 (sp) = private per-thread stack top to avoid stack-frame aliasing.
+        worker_regs[2] = STACK_BASE + global_thread_id * STACK_STRIDE + (STACK_STRIDE - 16u);
         worker.cu->setInitialRegisters(worker_regs);
 
         // Inject thread context into simulation memory
@@ -250,6 +314,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         worker.cu->setReturnSentinel(RETURN_SENTINEL);
         worker.cu->setBlockID(block_id);
         worker.cu->launchKernel(block_id, effective_grid_x, effective_grid_y);
+        worker.last_pc = entry_pc;
 
         worker.block_id  = block_id;
         worker.thread_id = thread_id;
@@ -260,6 +325,13 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
     last_cycles_            = 0;
     last_instructions_      = 0;
     last_divergence_events_ = 0;
+    last_worker_count_      = total_threads;
+    last_active_units_      = 1;
+    last_worker_cycles_total_ = 0;
+    last_worker_cycles_mean_  = 0.0;
+    last_worker_cycles_max_    = 0;
+    last_effective_cycles_     = 0;
+    last_parallelism_factor_   = 0.0;
 
     // ── Choose execution strategy ─────────────────────────────────────────────
     // When threads_per_warp > 1, run all threads in each warp in lockstep.
@@ -284,6 +356,7 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
         const uint32_t warps_per_block = (threads_per_block + warp_size - 1) / warp_size;
         const uint32_t total_warps = total_blocks * warps_per_block;
+        last_active_units_ = warp_size;
 
         auto makeWarpGroup = [&](uint32_t warp_idx) {
             WarpGroup wg;
@@ -366,8 +439,11 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                     if (!w.active || !w.cu) continue;
                     if (w.cu->isComplete()) {
                         if (w.active) {
+                            const uint64_t worker_cycles = w.cu->getTotalCycles();
                             last_cycles_       += w.cu->getTotalCycles();
                             last_instructions_ += w.cu->getTotalInstructions();
+                            last_worker_cycles_total_ += worker_cycles;
+                            last_worker_cycles_max_ = std::max(last_worker_cycles_max_, worker_cycles);
                             w.active = false;
                         }
                     } else {
@@ -389,15 +465,34 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
         for (uint32_t thread = 0; thread < total_threads; ++thread)
             workers.emplace_back(makeWorker(thread));
 
+        const uint32_t active_units = std::max<uint32_t>(1u,
+            std::min(cfg_.num_compute_units, static_cast<uint32_t>(workers.size())));
+        last_active_units_ = active_units;
+        if (bridge_debug) {
+            std::cout << "[bridge-debug] scalar scheduler active_units=" << active_units
+                      << " of total_workers=" << workers.size() << "\n";
+        }
+
         uint64_t cycle = 0;
+        size_t worker_cursor = 0;
         while (true) {
             bool any_active = false;
             bool made_progress = false;
-            for (auto& worker : workers) {
+            const size_t total_workers = workers.size();
+            size_t selected = 0;
+            for (size_t scanned = 0; scanned < total_workers && selected < active_units; ++scanned) {
+                const size_t worker_index = (worker_cursor + scanned) % total_workers;
+                auto& worker = workers[worker_index];
                 if (!worker.active || !worker.cu) continue;
                 any_active = true;
-                if (worker.cu->isBlocked()) continue;
+                if (worker.cu->isBlocked()) {
+                    ++worker.blocked_steps;
+                    continue;
+                }
+
+                ++selected;
                 made_progress = true;
+                const uint32_t pc_before = worker.cu->getCurrentPC();
                 if (has_cuda_thread_ctx) {
                     mem.writeBytes(cuda_thread_ctx_sym.address,
                         reinterpret_cast<const uint8_t*>(worker.cuda_thread_ctx.data()),
@@ -405,6 +500,12 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 }
                 worker.cu->step();
                 ++cycle;
+                const uint32_t pc_after = worker.cu->getCurrentPC();
+                if (!worker.cu->isComplete()) {
+                    if (pc_after == pc_before) ++worker.stalled_pc_steps;
+                    else worker.stalled_pc_steps = 0;
+                }
+                worker.last_pc = pc_after;
 
                 if (worker.cu->isBlocked()) {
                     const uint32_t barrier_id = worker.cu->getBlockedBarrierID();
@@ -423,12 +524,57 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 if (cycle % 100000 == 0)
                     std::cout << "[bridge]   ... " << cycle << " functional steps\n";
 
+                if (bridge_debug && trace_interval > 0 && (cycle % trace_interval == 0)) {
+                    std::cout << "[bridge-debug] cycle=" << cycle << " worker-snapshot\n";
+                    for (const auto& w : workers) {
+                        if (!w.cu) continue;
+                        std::cout << "[bridge-debug]   tid=" << w.thread_id
+                                  << " block=" << w.block_id
+                                  << " active=" << w.active
+                                  << " blocked=" << w.cu->isBlocked()
+                                  << " complete=" << w.cu->isComplete()
+                                  << " pc=0x" << std::hex << w.last_pc << std::dec
+                                  << " total_cycles=" << w.cu->getTotalCycles()
+                                  << " stalled_pc_steps=" << w.stalled_pc_steps
+                                  << " blocked_steps=" << w.blocked_steps
+                                  << "\n";
+                    }
+
+                    for (const auto& watch : watches) {
+                        std::vector<uint8_t> bytes(watch.len, 0);
+                        mem.readBytes(watch.addr, bytes.data(), bytes.size());
+                        std::ostringstream oss;
+                        oss << "[bridge-debug]   watch " << watch.label
+                            << " @0x" << std::hex << watch.addr << std::dec << " =";
+                        if (watch.label == "cost" && watch.len % 4 == 0) {
+                            for (size_t i = 0; i < watch.len / 4; ++i) {
+                                int32_t value = static_cast<int32_t>(
+                                    static_cast<uint32_t>(bytes[i * 4])
+                                    | (static_cast<uint32_t>(bytes[i * 4 + 1]) << 8)
+                                    | (static_cast<uint32_t>(bytes[i * 4 + 2]) << 16)
+                                    | (static_cast<uint32_t>(bytes[i * 4 + 3]) << 24));
+                                oss << " " << value;
+                            }
+                        } else {
+                            for (uint8_t b : bytes) {
+                                oss << " " << static_cast<uint32_t>(b);
+                            }
+                        }
+                        std::cout << oss.str() << "\n";
+                    }
+                }
+
                 if (worker.cu->isComplete()) {
+                    const uint64_t worker_cycles = worker.cu->getTotalCycles();
                     last_cycles_       += worker.cu->getTotalCycles();
                     last_instructions_ += worker.cu->getTotalInstructions();
+                    last_worker_cycles_total_ += worker_cycles;
+                    last_worker_cycles_max_ = std::max(last_worker_cycles_max_, worker_cycles);
                     worker.active = false;
                 }
             }
+            if (total_workers > 0)
+                worker_cursor = (worker_cursor + active_units) % total_workers;
             if (!any_active) break;
             if (!made_progress)
                 return fail("Barrier deadlock in scalar scheduler");
@@ -439,9 +585,33 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
                 last_divergence_events_ += worker.simt->getTotalDivergenceEvents();
     }
 
+    if (last_worker_count_ > 0)
+        last_worker_cycles_mean_ = static_cast<double>(last_worker_cycles_total_)
+                                 / static_cast<double>(last_worker_count_);
+    if (last_active_units_ == 0)
+        last_active_units_ = 1;
+    if (last_active_units_ > 0) {
+        last_effective_cycles_ = (last_worker_cycles_total_ + last_active_units_ - 1)
+                               / last_active_units_;
+    }
+    if (last_worker_cycles_max_ > 0)
+        last_parallelism_factor_ = static_cast<double>(last_worker_cycles_total_)
+                                 / static_cast<double>(last_worker_cycles_max_);
+
     std::cout << "[bridge] Execution complete: "
               << last_cycles_ << " cycles, "
               << last_instructions_ << " instructions\n";
+
+    std::cout << "[bridge] Workload metrics: scheduler="
+              << (warp_size > 1 ? "warp" : "scalar")
+              << " workers=" << last_worker_count_
+              << " active_units=" << last_active_units_
+              << " worker_cycles_total=" << last_worker_cycles_total_
+              << " worker_cycles_mean=" << last_worker_cycles_mean_
+              << " worker_cycles_max=" << last_worker_cycles_max_
+              << " effective_cycles=" << last_effective_cycles_
+              << " parallelism_factor=" << last_parallelism_factor_
+              << "\n";
 
     last_l1_hits_   = static_cast<uint32_t>(mem.getL1CacheHits());
     last_l1_misses_ = static_cast<uint32_t>(mem.getL1CacheMisses());

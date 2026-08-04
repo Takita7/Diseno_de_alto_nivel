@@ -499,8 +499,14 @@ void ComputeUnit::step() {
         if (!ext_memory_) { binary_halted_ = true; return; }
 
         // ── Fetch ─────────────────────────────────────────────────────────────
-        uint32_t raw = 0, lat = 0;
-        ext_memory_->loadWord(binary_pc_, raw, lat, binary_block_id_);
+        // Read from the exact PC. loadWord() is 4-byte aligned and would fetch
+        // the wrong halfword for compressed instructions at PC%4==2.
+        uint8_t instr_bytes[4] = {};
+        ext_memory_->readBytes(binary_pc_, instr_bytes, sizeof(instr_bytes), binary_block_id_);
+        uint32_t raw = static_cast<uint32_t>(instr_bytes[0])
+                 | (static_cast<uint32_t>(instr_bytes[1]) << 8)
+                 | (static_cast<uint32_t>(instr_bytes[2]) << 16)
+                 | (static_cast<uint32_t>(instr_bytes[3]) << 24);
 
         // ── Decode (handle 16-bit compressed instructions) ────────────────────
         RV32Instr instr;

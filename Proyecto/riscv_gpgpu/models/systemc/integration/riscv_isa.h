@@ -333,7 +333,7 @@ inline uint32_t expandRVC(uint16_t cinstr, uint32_t pc) {
                    ((uimm & 0x800) << 9)     |
                    ((uimm & 0xFF000))        | 0x6F;  // JAL x0, imm
         }
-        if (funct3 == 0x4) {  // C.LI / C.ADDI16SP / others
+        if (funct3 == 0x2) {  // C.LI
             uint8_t rd = (cinstr >> 7) & 0x1F;
             int32_t imm = (int32_t)(((cinstr >> 12) & 1) ? 0xFFFFFFC0 : 0) |
                           ((cinstr >> 2) & 0x1F);
@@ -363,6 +363,18 @@ inline uint32_t expandRVC(uint16_t cinstr, uint32_t pc) {
         }
     }
     if (op == 0x2) {  // Quadrant 2
+        if (funct3 == 0x0) {  // C.SLLI
+            uint8_t rd = (cinstr >> 7) & 0x1F;
+            uint32_t shamt = (((cinstr >> 12) & 0x1) << 5) | ((cinstr >> 2) & 0x1F);
+            if (rd != 0) {
+                // SLLI rd, rd, shamt
+                return (shamt << 20) |
+                       (static_cast<uint32_t>(rd) << 15) |
+                       (0x1u << 12) |
+                       (static_cast<uint32_t>(rd) << 7) |
+                       0x13;
+            }
+        }
         if (funct3 == 0x4) {  // C.MV / C.ADD / C.JR / C.JALR
             uint8_t rd  = (cinstr >> 7) & 0x1F;
             uint8_t rs2 = (cinstr >> 2) & 0x1F;
