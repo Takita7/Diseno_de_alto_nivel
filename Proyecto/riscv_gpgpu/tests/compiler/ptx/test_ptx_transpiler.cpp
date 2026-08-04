@@ -120,6 +120,30 @@ $L__saxpy_end:
 }
 )";
 
+static const char* kPtx64CopyPtx = R"(
+.version 7.0
+.target sm_52
+.address_size 64
+.visible .entry copy_word(
+    .param .u64 .ptr .global src,
+    .param .u64 .ptr .global dst,
+    .param .u32 index
+) {
+    .reg .u32 %r<2>;
+    .reg .b64 %rd<7>;
+    ld.param.u64 %rd0, [src];
+    ld.param.u64 %rd1, [dst];
+    ld.param.u32 %r0, [index];
+    cvta.to.global.u64 %rd2, %rd0;
+    cvta.to.global.u64 %rd3, %rd1;
+    mul.wide.u32 %rd4, %r0, 4;
+    add.s64 %rd5, %rd2, %rd4;
+    add.s64 %rd6, %rd3, %rd4;
+    ld.global.u32 %r1, [%rd5];
+    st.global.u32 [%rd6], %r1;
+    ret;
+})";
+
 // ── Helper: check if clang riscv32 target is available ────────────────────────
 
 static bool clangAvailable() {
@@ -150,6 +174,31 @@ TEST(PtxTranspiler, ToAssemblySaxpy) {
     EXPECT_NE(asm_text.find("fmadd.s"), std::string::npos) << asm_text;
 }
 
+TEST(PtxTranspiler, ToAssemblyPtx64PointerLowering) {
+    PtxTranspiler transpiler;
+    std::string kernel_name;
+    std::string asm_text = transpiler.toAssembly(kPtx64CopyPtx, kernel_name);
+    EXPECT_EQ(kernel_name, "copy_word");
+    EXPECT_NE(asm_text.find("slli"), std::string::npos) << asm_text;
+    EXPECT_NE(asm_text.find("lw"), std::string::npos) << asm_text;
+    EXPECT_NE(asm_text.find("sw"), std::string::npos) << asm_text;
+}
+
+TEST(PtxTranspiler, RejectsUnsupportedPtx64DataOperation) {
+    const char* ptx = R"(
+.address_size 64
+.entry k(.param .u64 p0) {
+    .reg .b64 %rd<2>;
+    ld.param.u64 %rd0, [p0];
+    ld.global.u64 %rd1, [%rd0];
+    ret;
+})";
+    PtxTranspiler transpiler;
+    auto result = transpiler.compile(ptx);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("64-bit memory"), std::string::npos);
+}
+
 TEST(PtxTranspiler, CompileVectorAddToElf) {
     if (!clangAvailable()) {
         GTEST_SKIP() << "clang riscv32 target not available";
@@ -170,6 +219,19 @@ TEST(PtxTranspiler, CompileVectorAddToElf) {
     // ELF class: 32-bit (1)
     EXPECT_EQ(result.bytes[4], 1);
     // Machine: RISC-V (0xF3)
+    EXPECT_EQ(result.bytes[18], 0xF3);
+}
+
+TEST(PtxTranspiler, CompilePtx64PointerLoweringToElf) {
+    if (!clangAvailable()) {
+        GTEST_SKIP() << "clang riscv32 target not available";
+    }
+
+    PtxTranspiler transpiler;
+    auto result = transpiler.compile(kPtx64CopyPtx);
+    EXPECT_TRUE(result.ok) << result.error;
+    ASSERT_GT(result.bytes.size(), 52u);
+    EXPECT_EQ(result.bytes[4], 1);
     EXPECT_EQ(result.bytes[18], 0xF3);
 }
 

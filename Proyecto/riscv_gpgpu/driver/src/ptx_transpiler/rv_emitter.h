@@ -18,6 +18,7 @@
 #include "ptx_parser.h"
 #include <string>
 #include <map>
+#include <set>
 
 namespace riscv_gpgpu {
 namespace ptx {
@@ -36,13 +37,19 @@ private:
     // Register allocator state
     std::map<std::string, std::string> ireg_map_;   // ptx_reg_name → rv_ireg
     std::map<std::string, std::string> freg_map_;   // ptx_reg_name → rv_freg
+    std::set<std::string> wide_regs_;
     size_t next_ireg_ = 0;
     size_t next_freg_ = 0;
+    uint32_t address_size_ = 32;
 
     // Param info
     std::vector<PtxParam> params_;
 
     void buildRegMaps(const PtxKernel& k);
+    void reject(const std::string& message);
+    bool validateKernel(const PtxKernel& kernel);
+    bool validateInstruction(const PtxInstr& instr);
+    bool isWideRegister(const std::string& name) const;
 
     // Map a PTX register name (without %) to a hardware register name.
     // Allocates on first use.
@@ -72,7 +79,8 @@ private:
 
     // Check if string starts with prefix
     static bool startsWith(const std::string& s, const std::string& p) {
-        return s.size() >= p.size() && s.substr(0, p.size()) == p;
+        return s == p || (s.size() > p.size() && s.compare(0, p.size(), p) == 0
+                          && s[p.size()] == '.');
     }
 };
 

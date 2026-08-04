@@ -65,9 +65,18 @@ static int specialRegOffset(const std::string& name) {
 void RvEmitter::buildRegMaps(const PtxKernel& k) {
     ireg_map_.clear();
     freg_map_.clear();
+    wide_regs_.clear();
     next_ireg_ = 0;
     next_freg_ = 0;
+    address_size_ = k.address_size;
     params_ = k.params;
+    for (const auto& decl : k.reg_decls) {
+        if (decl.type != "b64") continue;
+        std::string prefix = decl.prefix;
+        if (!prefix.empty() && prefix[0] == '%') prefix.erase(0, 1);
+        for (uint32_t index = 0; index < decl.count; ++index)
+            wide_regs_.insert(prefix + std::to_string(index));
+    }
 
     // Pre-assign parameter registers: %rN / %rdN that are first loaded from params
     // will be mapped lazily on first ireg()/freg() call, but we scan the body to
@@ -126,11 +135,57 @@ std::string RvEmitter::resolveImm(const PtxOperand& op) {
     return "0";
 }
 
+void RvEmitter::reject(const std::string& message) {
+    if (error_.empty()) error_ = message;
+}
+
+bool RvEmitter::isWideRegister(const std::string& name) const {
+    return wide_regs_.count(name) != 0;
+}
+
+bool RvEmitter::validateInstruction(const PtxInstr& instr) {
+    if (!instr.pred.empty() && instr.op != "bra") {
+        reject("predication is only supported for bra: " + instr.op);
+        return false;
+    }
+    const std::string& op = instr.op;
+    const bool wide_memory = op.find(".u64") != std::string::npos
+                          || op.find(".s64") != std::string::npos
+                          || op.find(".b64") != std::string::npos
+                          || op.find(".f64") != std::string::npos;
+    if ((startsWith(op, "ld.global") || startsWith(op, "st.global")
+         || startsWith(op, "ld.shared") || startsWith(op, "st.shared"))
+        && wide_memory) {
+        reject("64-bit memory elements are not supported on RV32: " + op);
+        return false;
+    }
+    if (startsWith(op, "mad.wide") || startsWith(op, "mul.lo.u64")
+        || startsWith(op, "mul.lo.s64") || startsWith(op, "div.u64")
+        || startsWith(op, "div.s64") || startsWith(op, "rem.u64")
+        || startsWith(op, "rem.s64")) {
+        reject("general 64-bit arithmetic is not supported on RV32: " + op);
+        return false;
+    }
+    return true;
+}
+
+bool RvEmitter::validateKernel(const PtxKernel& kernel) {
+    if (kernel.address_size != 32 && kernel.address_size != 64) {
+        reject("unsupported PTX address size");
+        return false;
+    }
+    for (const auto& instr : kernel.body)
+        if (!instr.label.empty() || instr.op.empty()) continue;
+        else if (!validateInstruction(instr)) return false;
+    return true;
+}
+
 // ── Main emit ─────────────────────────────────────────────────────────────────
 
 std::string RvEmitter::emit(const PtxKernel& kernel) {
     error_.clear();
     buildRegMaps(kernel);
+    if (!validateKernel(kernel)) return "";
 
     std::ostringstream out;
 
@@ -149,10 +204,11 @@ std::string RvEmitter::emit(const PtxKernel& kernel) {
         }
         if (instr.op.empty()) continue;
         emitInstr(instr, out);
+        if (!error_.empty()) return "";
     }
 
     out << "    .size " << kernel.name << ", . - " << kernel.name << "\n";
-    return out.str();
+    return error_.empty() ? out.str() : "";
 }
 
 // ── Instruction dispatch ──────────────────────────────────────────────────────
@@ -178,20 +234,40 @@ void RvEmitter::emitInstr(const PtxInstr& instr, std::ostringstream& out) {
 // ── ld.param ──────────────────────────────────────────────────────────────────
 
 void RvEmitter::emitLdParam(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::Reg
+        || instr.operands[1].kind != PtxOperand::Kind::MemRef) {
+        reject("ld.param requires a register and a parameter reference");
+        return;
+    }
     const auto& dst  = instr.operands[0];
-    const auto& src  = instr.operands[1];  // MemRef
+    const auto& src  = instr.operands[1];
 
-    // Find the param index by name match
     int param_idx = -1;
-    if (src.kind == PtxOperand::Kind::MemRef && !src.param_name.empty()) {
-        for (const auto& p : params_) {
-            if (p.name == src.param_name) { param_idx = static_cast<int>(p.index); break; }
+    const PtxParam* param = nullptr;
+    if (!src.param_name.empty()) {
+        for (const auto& candidate : params_) {
+            if (candidate.name == src.param_name) {
+                param_idx = static_cast<int>(candidate.index);
+                param = &candidate;
+                break;
+            }
         }
     }
-    if (param_idx < 0 || param_idx >= 8) {
-        out << "    # WARNING: ld.param with unknown param '" << src.param_name << "'\n";
+    if (param_idx < 0 || param_idx >= 8 || param == nullptr) {
+        reject("ld.param references an unknown or unsupported parameter: " + src.param_name);
         return;
+    }
+    if (src.mem_offset != 0) {
+        reject("ld.param offsets are not supported by the RV32 argument ABI");
+        return;
+    }
+    if (instr.op.find(".u64") != std::string::npos
+        || instr.op.find(".b64") != std::string::npos) {
+        if (address_size_ != 64 || !isWideRegister(dst.name)
+            || (param->space != ".u64" && param->space != ".b64")) {
+            reject("ld.param.u64 requires PTX64 pointer lowering into a declared wide register");
+            return;
+        }
     }
 
     const char* param_rv = kParamRegs[param_idx];
@@ -225,9 +301,14 @@ void RvEmitter::emitLdParam(const PtxInstr& instr, std::ostringstream& out) {
 // ── ld.global / ld.shared ─────────────────────────────────────────────────────
 
 void RvEmitter::emitLdGlobal(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::Reg
+        || instr.operands[1].kind != PtxOperand::Kind::MemRef
+        || instr.operands[1].mem_base.empty()) {
+        reject("ld.global requires a destination register and register-based address");
+        return;
+    }
     const auto& dst = instr.operands[0];
-    const auto& src = instr.operands[1];  // MemRef
+    const auto& src = instr.operands[1];
 
     std::string base_rv;
     std::string offset_str = "0";
@@ -249,9 +330,14 @@ void RvEmitter::emitLdGlobal(const PtxInstr& instr, std::ostringstream& out) {
 // ── st.global / st.shared ─────────────────────────────────────────────────────
 
 void RvEmitter::emitStGlobal(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2) return;
-    const auto& addr_op = instr.operands[0];  // MemRef [%r0]
-    const auto& val_op  = instr.operands[1];  // register
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::MemRef
+        || instr.operands[0].mem_base.empty()
+        || instr.operands[1].kind != PtxOperand::Kind::Reg) {
+        reject("st.global requires a register-based address and source register");
+        return;
+    }
+    const auto& addr_op = instr.operands[0];
+    const auto& val_op  = instr.operands[1];
 
     std::string base_rv;
     std::string offset_str = "0";
@@ -271,7 +357,11 @@ void RvEmitter::emitStGlobal(const PtxInstr& instr, std::ostringstream& out) {
 }
 
 void RvEmitter::emitLdShared(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2 || instr.operands[1].kind != PtxOperand::Kind::MemRef) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::Reg
+        || instr.operands[1].kind != PtxOperand::Kind::MemRef) {
+        reject("ld.shared requires a destination register and shared-memory reference");
+        return;
+    }
     const auto& dst = instr.operands[0];
     const auto& src = instr.operands[1];
     std::string base = "t6";
@@ -288,7 +378,11 @@ void RvEmitter::emitLdShared(const PtxInstr& instr, std::ostringstream& out) {
 }
 
 void RvEmitter::emitStShared(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2 || instr.operands[0].kind != PtxOperand::Kind::MemRef) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::MemRef
+        || instr.operands[1].kind != PtxOperand::Kind::Reg) {
+        reject("st.shared requires a shared-memory reference and source register");
+        return;
+    }
     const auto& dst = instr.operands[0];
     const auto& src = instr.operands[1];
     std::string base = "t6";
@@ -307,7 +401,10 @@ void RvEmitter::emitStShared(const PtxInstr& instr, std::ostringstream& out) {
 // ── mov ───────────────────────────────────────────────────────────────────────
 
 void RvEmitter::emitMov(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::Reg) {
+        reject("mov requires a destination register and one source operand");
+        return;
+    }
     const auto& dst = instr.operands[0];
     const auto& src = instr.operands[1];
 
@@ -343,12 +440,17 @@ void RvEmitter::emitMov(const PtxInstr& instr, std::ostringstream& out) {
             << "  # " << instr.op << "\n";
         return;
     }
+    reject("unsupported mov operand: " + instr.op);
 }
 
 // ── cvta / cvt ────────────────────────────────────────────────────────────────
 
 void RvEmitter::emitCvt(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 2) return;
+    if (instr.operands.size() != 2 || instr.operands[0].kind != PtxOperand::Kind::Reg
+        || instr.operands[1].kind != PtxOperand::Kind::Reg) {
+        reject("cvt/cvta requires two register operands");
+        return;
+    }
     const auto& dst = instr.operands[0];
     const auto& src = instr.operands[1];
 
@@ -359,6 +461,31 @@ void RvEmitter::emitCvt(const PtxInstr& instr, std::ostringstream& out) {
     // cvt.f32.s32 %f, %r → fcvt.s.w
 
     const std::string& op = instr.op;
+    if (startsWith(op, "cvta")) {
+        if (address_size_ != 64 || !isWideRegister(dst.name) || !isWideRegister(src.name)) {
+            reject("cvta.u64 requires PTX64 declared wide registers");
+            return;
+        }
+        std::string dreg = ireg(dst.name);
+        std::string sreg = ireg(src.name);
+        if (dreg != sreg) out << "    mv " << dreg << ", " << sreg << "  # " << op << " narrowed\n";
+        return;
+    }
+    if (op == "cvt.u64.u32" || op == "cvt.s64.s32" || op == "cvt.u32.u64") {
+        if (address_size_ != 64) {
+            reject("64-bit conversion requires PTX64 narrowing mode");
+            return;
+        }
+        std::string dreg = ireg(dst.name);
+        std::string sreg = ireg(src.name);
+        if (dreg != sreg) out << "    mv " << dreg << ", " << sreg << "  # " << op << " narrowed\n";
+        return;
+    }
+    if (op.find(".u64") != std::string::npos || op.find(".s64") != std::string::npos
+        || op.find(".b64") != std::string::npos || op.find(".f64") != std::string::npos) {
+        reject("unsupported 64-bit conversion: " + op);
+        return;
+    }
     if (op.find("f32") != std::string::npos && op.find("s32") != std::string::npos) {
         // float↔int
         bool dst_float = (dst.name[0] == 'f');
@@ -397,7 +524,11 @@ void RvEmitter::emitCvt(const PtxInstr& instr, std::ostringstream& out) {
 // PTX setp.CMP.TYPE  %p, A, B   → RV comparison into integer pred register
 
 void RvEmitter::emitSetp(const PtxInstr& instr, std::ostringstream& out) {
-    if (instr.operands.size() < 3) return;
+    if (instr.operands.size() != 3 || instr.operands[0].kind != PtxOperand::Kind::Reg
+        || instr.operands[1].kind != PtxOperand::Kind::Reg) {
+        reject("setp requires a predicate destination and two comparable operands");
+        return;
+    }
     const auto& dst = instr.operands[0];  // predicate %p
     const auto& a   = instr.operands[1];
     const auto& b   = instr.operands[2];
@@ -476,7 +607,7 @@ void RvEmitter::emitSetp(const PtxInstr& instr, std::ostringstream& out) {
             out << "    snez  " << preg << ", " << preg << "  # " << op << "\n";
         }
     } else {
-        out << "    # Unhandled setp: " << op << "\n";
+        reject("unsupported setp opcode: " + op);
     }
 }
 
@@ -493,7 +624,7 @@ void RvEmitter::emitBra(const PtxInstr& instr, std::ostringstream& out) {
         if (!instr.operands.empty() && instr.operands[0].kind == PtxOperand::Kind::Label) {
             out << "    j " << instr.operands[0].name << "\n";
         } else {
-            out << "    # Unconditional branch to unknown target\n";
+            reject("bra requires a label target");
         }
         return;
     }
@@ -530,7 +661,7 @@ void RvEmitter::emitBarSync(const PtxInstr& instr, std::ostringstream& out) {
 void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
     const std::string& op = instr.op;
     if (instr.operands.empty()) {
-        out << "    # Unrecognised: " << op << "\n";
+        reject("unsupported opcode: " + op);
         return;
     }
 
@@ -578,7 +709,7 @@ void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
             out << "    fsqrt.s " << fd
                 << ", " << freg(instr.operands[1].name) << "\n";
         } else {
-            out << "    # Unhandled FP op: " << op << "\n";
+            reject("unsupported FP opcode: " + op);
         }
         return;
     }
@@ -609,13 +740,24 @@ void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
     bool is_signed = (op.find(".s32") != std::string::npos);
 
     if (startsWith(op, "add")) {
-        if (instr.operands.size() >= 3 && is_imm(2))
-            out << "    addi " << rd << ", " << rarg(1) << ", " << immarg(2) << "  # " << op << "\n";
-        else if (instr.operands.size() >= 3)
+        if (instr.operands.size() >= 3 && is_imm(2)) {
+            if (immarg(2) < -2048 || immarg(2) > 2047) {
+                out << "    li t6, " << immarg(2) << "\n";
+                out << "    add " << rd << ", " << rarg(1) << ", t6  # " << op << "\n";
+            } else {
+                out << "    addi " << rd << ", " << rarg(1) << ", " << immarg(2) << "  # " << op << "\n";
+            }
+        } else if (instr.operands.size() >= 3)
             out << "    add " << rd << ", " << rarg(1) << ", " << rarg(2) << "  # " << op << "\n";
     } else if (startsWith(op, "sub")) {
         if (instr.operands.size() >= 3 && is_imm(2)) {
-            out << "    addi " << rd << ", " << rarg(1) << ", " << (-immarg(2)) << "  # " << op << "\n";
+            const int64_t immediate = -immarg(2);
+            if (immediate < -2048 || immediate > 2047) {
+                out << "    li t6, " << immediate << "\n";
+                out << "    add " << rd << ", " << rarg(1) << ", t6  # " << op << "\n";
+            } else {
+                out << "    addi " << rd << ", " << rarg(1) << ", " << immediate << "  # " << op << "\n";
+            }
         } else if (instr.operands.size() >= 3) {
             out << "    sub " << rd << ", " << rarg(1) << ", " << rarg(2) << "  # " << op << "\n";
         }
@@ -663,14 +805,26 @@ void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
         else if (instr.operands.size() >= 3)
             out << "    " << (arith ? "sra " : "srl ") << rd << ", " << rarg(1) << ", " << rarg(2) << "\n";
     } else if (startsWith(op, "and")) {
-        if (instr.operands.size() >= 3)
+        if (instr.operands.size() >= 3 && is_imm(2)) {
+            out << "    li t6, " << immarg(2) << "\n";
+            out << "    and " << rd << ", " << rarg(1) << ", t6  # " << op << "\n";
+        } else if (instr.operands.size() >= 3) {
             out << "    and " << rd << ", " << rarg(1) << ", " << rarg(2) << "  # " << op << "\n";
+        }
     } else if (startsWith(op, "or")) {
-        if (instr.operands.size() >= 3)
+        if (instr.operands.size() >= 3 && is_imm(2)) {
+            out << "    li t6, " << immarg(2) << "\n";
+            out << "    or " << rd << ", " << rarg(1) << ", t6  # " << op << "\n";
+        } else if (instr.operands.size() >= 3) {
             out << "    or " << rd << ", " << rarg(1) << ", " << rarg(2) << "  # " << op << "\n";
+        }
     } else if (startsWith(op, "xor")) {
-        if (instr.operands.size() >= 3)
+        if (instr.operands.size() >= 3 && is_imm(2)) {
+            out << "    li t6, " << immarg(2) << "\n";
+            out << "    xor " << rd << ", " << rarg(1) << ", t6  # " << op << "\n";
+        } else if (instr.operands.size() >= 3) {
             out << "    xor " << rd << ", " << rarg(1) << ", " << rarg(2) << "  # " << op << "\n";
+        }
     } else if (startsWith(op, "not")) {
         if (instr.operands.size() >= 2)
             out << "    not " << rd << ", " << rarg(1) << "  # " << op << "\n";
@@ -680,10 +834,7 @@ void RvEmitter::emitArith(const PtxInstr& instr, std::ostringstream& out) {
     } else if (op == "membar.gl" || op == "membar.cta") {
         out << "    fence  # " << op << "\n";
     } else {
-        out << "    # Unhandled op: " << op;
-        for (const auto& operand : instr.operands)
-            out << " " << operand.name;
-        out << "\n";
+        reject("unsupported opcode: " + op);
     }
 }
 

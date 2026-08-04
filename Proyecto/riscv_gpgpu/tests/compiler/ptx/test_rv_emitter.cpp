@@ -23,6 +23,69 @@ static bool contains(const std::string& haystack, const std::string& needle) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+TEST(RvEmitter, LowersPtx64PointerAddressesToRv32) {
+    const char* ptx = R"(
+.version 7.0
+.target sm_52
+.address_size 64
+.visible .entry copy_word(
+    .param .u64 .ptr .global src,
+    .param .u64 .ptr .global dst,
+    .param .u32 index
+) {
+    .reg .u32 %r<2>;
+    .reg .b64 %rd<7>;
+    ld.param.u64 %rd0, [src];
+    ld.param.u64 %rd1, [dst];
+    ld.param.u32 %r0, [index];
+    cvta.to.global.u64 %rd2, %rd0;
+    cvta.to.global.u64 %rd3, %rd1;
+    mul.wide.u32 %rd4, %r0, 4;
+    add.s64 %rd5, %rd2, %rd4;
+    add.s64 %rd6, %rd3, %rd4;
+    ld.global.u32 %r1, [%rd5];
+    st.global.u32 [%rd6], %r1;
+    ret;
+})";
+    std::string asm_out = emitForPtx(ptx);
+    EXPECT_FALSE(asm_out.empty()) << asm_out;
+    EXPECT_TRUE(contains(asm_out, "slli")) << asm_out;
+    EXPECT_TRUE(contains(asm_out, "lw")) << asm_out;
+    EXPECT_TRUE(contains(asm_out, "sw")) << asm_out;
+}
+
+TEST(RvEmitter, RejectsPtx64DataLoad) {
+    const char* ptx = R"(
+.address_size 64
+.entry k(.param .u64 p0) {
+    .reg .b64 %rd<2>;
+    ld.param.u64 %rd0, [p0];
+    ld.global.u64 %rd1, [%rd0];
+    ret;
+})";
+    PtxParser parser;
+    auto kernel = parser.parse(ptx);
+    ASSERT_FALSE(kernel.name.empty()) << parser.lastError();
+    RvEmitter emitter;
+    EXPECT_TRUE(emitter.emit(kernel).empty());
+    EXPECT_NE(emitter.lastError().find("64-bit memory"), std::string::npos);
+}
+
+TEST(RvEmitter, RejectsUnsupportedOpcode) {
+    const char* ptx = R"(
+.address_size 64
+.entry k() {
+    unsupported.u32 %r0, %r1;
+    ret;
+})";
+    PtxParser parser;
+    auto kernel = parser.parse(ptx);
+    ASSERT_FALSE(kernel.name.empty()) << parser.lastError();
+    RvEmitter emitter;
+    EXPECT_TRUE(emitter.emit(kernel).empty());
+    EXPECT_FALSE(emitter.lastError().empty());
+}
+
 TEST(RvEmitter, EmitsKernelLabel) {
     const char* ptx = R"(
 .visible .entry my_kernel(.param .u32 p0) {

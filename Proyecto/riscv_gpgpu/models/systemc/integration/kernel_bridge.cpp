@@ -117,8 +117,16 @@ bool KernelBridge::runOnHardware(const std::string& kernel_name,
 
     // ── 5. Set up initial register file (RISC-V calling convention) ───────────
     // a0..a7 = x10..x17, n-th kernel_arg maps to a_n.
+    if (kernel_args.size() > 8) {
+        std::cerr << "[bridge] RV32 ABI supports at most 8 kernel arguments\n";
+        return false;
+    }
     std::array<uint32_t, 32> regs{};
-    for (size_t i = 0; i < kernel_args.size() && i < 8; ++i) {
+    for (size_t i = 0; i < kernel_args.size(); ++i) {
+        if ((kernel_args[i] >> 32) != 0) {
+            std::cerr << "[bridge] Kernel argument " << i << " does not fit RV32\n";
+            return false;
+        }
         regs[10 + i] = static_cast<uint32_t>(kernel_args[i]);
     }
     // x2 (sp) = stack area; use a scratch region well above device buffers.
