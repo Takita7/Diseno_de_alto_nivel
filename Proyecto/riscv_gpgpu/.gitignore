@@ -97,7 +97,6 @@ docs/html/
 docs/latex/
 docs/pdf/
 
-# Generated results — exclude build artifacts but track cu_sweep reports+bitstreams
-results/
-!results/cu_sweep/
-!results/cu_sweep/**
+# Exclude generated results except cu_sweep reports/bitstreams
+results/*
+!results/cu_sweep
