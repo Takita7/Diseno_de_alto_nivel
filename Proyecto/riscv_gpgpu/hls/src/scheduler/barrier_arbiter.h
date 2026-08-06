@@ -136,14 +136,21 @@ struct barrier_signal_t {
 // faulted launch never causes a CU to dispatch warps that barrierCore
 // itself refused to accept - a pure, stateless check every caller derives
 // the same way, not a value that needs relaying.
-inline void barrierCore(
+//
+// NUM_CUS <= 8: flat DATAFLOW - one stream per CU (N = NUM_CUS).
+// NUM_CUS >  8: hierarchical DATAFLOW - one stream per cluster (N = NUM_CLUSTERS).
+// In the hierarchical case clusterBarrierRelay (cu_cluster.h) multiplexes
+// all per-CU events onto the single cluster stream; barrierCore's counting
+// logic is identical regardless of N.
+template<int N>
+inline void barrierCoreN(
     warp_id_t total_warps,
     bool&     start,
     bool&     busy,
     bool&     done,
     bool&     fault,
-    hls::stream<WarpStatusCode>   (&events_in)[NUM_CUS],
-    hls::stream<barrier_signal_t> (&signal_out)[NUM_CUS]
+    hls::stream<WarpStatusCode>   (&events_in)[N],
+    hls::stream<barrier_signal_t> (&signal_out)[N]
 ) {
     BarrierState barrier;
     busy = false; done = false; fault = false;
@@ -159,7 +166,7 @@ inline void barrierCore(
             busy = true;
         } else {
         POLL_CU_EVENTS:
-            for (int c = 0; c < NUM_CUS; ++c) {
+            for (int c = 0; c < N; ++c) {
 #pragma HLS UNROLL
                 if (!events_in[c].empty()) {
                     WarpStatusCode code = events_in[c].read();
@@ -170,7 +177,7 @@ inline void barrierCore(
             if (barrierReleaseReady(barrier)) {
                 barrierAcknowledgeRelease(barrier);
             SIGNAL_RELEASE:
-                for (int c = 0; c < NUM_CUS; ++c) {
+                for (int c = 0; c < N; ++c) {
 #pragma HLS UNROLL
                     barrier_signal_t sig;
                     sig.release     = true;
@@ -183,7 +190,7 @@ inline void barrierCore(
                 busy = false;
                 done = true;
             SIGNAL_DONE:
-                for (int c = 0; c < NUM_CUS; ++c) {
+                for (int c = 0; c < N; ++c) {
 #pragma HLS UNROLL
                     barrier_signal_t sig;
                     sig.release     = false;
@@ -193,6 +200,19 @@ inline void barrierCore(
             }
         }
     }
+}
+
+// Convenience wrapper: existing flat call sites compile unchanged.
+// In the hierarchical path (NUM_CUS > 8) gpgpu_top.cpp calls
+// barrierCoreN<NUM_CLUSTERS>(...) directly with the cluster-level streams.
+inline void barrierCore(
+    warp_id_t total_warps,
+    bool& start, bool& busy, bool& done, bool& fault,
+    hls::stream<WarpStatusCode>   (&events_in)[NUM_CUS],
+    hls::stream<barrier_signal_t> (&signal_out)[NUM_CUS]
+) {
+    barrierCoreN<NUM_CUS>(total_warps, start, busy, done, fault,
+                          events_in, signal_out);
 }
 
 }  // namespace riscv_gpgpu_hls

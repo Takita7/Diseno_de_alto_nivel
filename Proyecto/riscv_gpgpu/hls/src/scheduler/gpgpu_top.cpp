@@ -4,6 +4,10 @@
 
 #include "gpgpu_top.h"
 
+#if RISCV_GPGPU_NUM_CUS > 8
+#include "cu_cluster.h"   // cuCluster, superMemArbiter, clusterBarrierRelay
+#endif
+
 // T024-style per-board tuning (see memory_pipeline.cpp's identical pattern):
 // a macro, not constexpr, so it substitutes textually into the #pragma HLS
 // INTERFACE m_axi line below. Falls back to 0 (widening disabled - prior
@@ -68,18 +72,79 @@ void gpgpu_scheduler(
 
 #pragma HLS DATAFLOW
 
+#if RISCV_GPGPU_NUM_CUS > 8
     // ------------------------------------------------------------------
-    // Per-CU state
+    // Hierarchical DATAFLOW path (NUM_CUS > 8)
+    //
+    // Flat DATAFLOW with NUM_CUS > 8 hits the Vitis HLS ~40-backwards-
+    // channel limit: 3 backwards arrays × NUM_CUS = 3×16=48 > 40.
+    // The tool silently omits cu_mem_resp_8..15 causing "Illegal connection"
+    // in RTL generation.
+    //
+    // Solution: split into NUM_CLUSTERS=2 cuCluster instances each
+    // managing CLUSTER_SIZE=NUM_CUS/2 CUs.  Each cluster's internal
+    // DATAFLOW has 3*CLUSTER_SIZE=24 backwards channels (well < 40).
+    // The top-level DATAFLOW has only 4 backwards channels (2 cluster_events
+    // + 2 cluster_signal from cuCluster→barrierCore and
+    // superMemArbiter→cuCluster).
     // ------------------------------------------------------------------
 
-    CuDispatchUnit cu0;
-    CuDispatchUnit cu1;
+    CuDispatchUnit cu_a[CLUSTER_SIZE];
+    CuDispatchUnit cu_b[CLUSTER_SIZE];
 
-    hls::stream<warp_dispatch_t> dispatch_out0;
-    hls::stream<warp_dispatch_t> dispatch_out1;
+    hls::stream<WarpStatusCode>   cluster_events[NUM_CLUSTERS];
+    hls::stream<barrier_signal_t> cluster_signal[NUM_CLUSTERS];
+    hls::stream<mem_req_t>        cluster_req[NUM_CLUSTERS];
+    hls::stream<mem_resp_t>       cluster_resp[NUM_CLUSTERS];
 
-    hls::stream<warp_status_t> status_in0;
-    hls::stream<warp_status_t> status_in1;
+#pragma HLS STREAM variable=cluster_events  depth=MAX_WARPS_PER_CU dim=1
+#pragma HLS STREAM variable=cluster_signal  depth=2                dim=1
+#pragma HLS STREAM variable=cluster_req     depth=2                dim=1
+#pragma HLS STREAM variable=cluster_resp    depth=2                dim=1
+
+    // Barrier controller sees NUM_CLUSTERS (=2) streams instead of NUM_CUS.
+    barrierCoreN<NUM_CLUSTERS>(
+        total_warps, start, busy, done, fault,
+        cluster_events, cluster_signal
+    );
+
+    // Program loader writes to both cluster arrays.
+    programLoaderHier(
+        program_ptr, program_len, start, cu_a, cu_b
+    );
+
+    // Cluster A: CU 0 .. CLUSTER_SIZE-1
+    // Cluster A owns gmem1, cluster B owns gmem2 — no shared AXI bundles.
+    cuCluster(
+        cu_a, cu_id_t(0), total_warps, start, program_len, warp_id_offset,
+        initial_regs_ptr0,
+        cluster_events[0], cluster_signal[0],
+        cluster_req[0], cluster_resp[0]
+    );
+
+    cuCluster(
+        cu_b, cu_id_t(CLUSTER_SIZE), total_warps, start, program_len, warp_id_offset,
+        initial_regs_ptr1,
+        cluster_events[1], cluster_signal[1],
+        cluster_req[1], cluster_resp[1]
+    );
+
+    // 2-cluster memory router.
+    superMemArbiter(
+        cluster_req, cluster_resp,
+        mem_req_out, mem_resp_in
+    );
+
+#else
+    // ------------------------------------------------------------------
+    // Flat DATAFLOW path (NUM_CUS <= 8)
+    // 3 * NUM_CUS <= 24 backwards channels — within the ~40 tool limit.
+    // ------------------------------------------------------------------
+
+    CuDispatchUnit cu[NUM_CUS];
+
+    hls::stream<warp_dispatch_t> dispatch_out[NUM_CUS];
+    hls::stream<warp_status_t>   status_in[NUM_CUS];
 
     hls::stream<mem_req_t>  cu_mem_req[NUM_CUS];
     hls::stream<mem_resp_t> cu_mem_resp[NUM_CUS];
@@ -87,31 +152,12 @@ void gpgpu_scheduler(
     hls::stream<WarpStatusCode>   barrier_events[NUM_CUS];
     hls::stream<barrier_signal_t> barrier_signal[NUM_CUS];
 
-    // ------------------------------------------------------------------
-    // References to storage owned by each CuDispatchUnit
-    // ------------------------------------------------------------------
-
-    instr_word_t (&program0)[MAX_PROGRAM_LEN] =
-        cu0.programArray();
-
-    instr_word_t (&program1)[MAX_PROGRAM_LEN] =
-        cu1.programArray();
-
-    reg_t (&regs0)
-        [MAX_WARPS_PER_CU]
-        [MAX_THREADS_PER_WARP]
-        [NUM_REGS_PER_THREAD] =
-            cu0.regsArray();
-
-    reg_t (&regs1)
-        [MAX_WARPS_PER_CU]
-        [MAX_THREADS_PER_WARP]
-        [NUM_REGS_PER_THREAD] =
-            cu1.regsArray();
-
-    // Plain variables are required as DATAFLOW process-call arguments.
-    cu_id_t cu_id0 = 0;
-    cu_id_t cu_id1 = 1;
+#pragma HLS STREAM variable=dispatch_out   depth=2              dim=1
+#pragma HLS STREAM variable=status_in      depth=2              dim=1
+#pragma HLS STREAM variable=cu_mem_req     depth=2              dim=1
+#pragma HLS STREAM variable=cu_mem_resp    depth=2              dim=1
+#pragma HLS STREAM variable=barrier_events depth=MAX_WARPS_PER_CU dim=1
+#pragma HLS STREAM variable=barrier_signal depth=2              dim=1
 
     // ------------------------------------------------------------------
     // Kernel-wide barrier controller
@@ -138,39 +184,29 @@ void gpgpu_scheduler(
         program_ptr,
         program_len,
         start,
-        program0,
-        program1
+        cu
     );
 
     // ------------------------------------------------------------------
     // CU schedulers
     // ------------------------------------------------------------------
 
-    schedulerCore(
-        cu0,
-        cu_id0,
-        program_len,
-        total_warps,
-        start,
-        dispatch_out0,
-        status_in0,
-        barrier_events[0],
-        barrier_signal[0],
-        warp_id_offset
-    );
-
-    schedulerCore(
-        cu1,
-        cu_id1,
-        program_len,
-        total_warps,
-        start,
-        dispatch_out1,
-        status_in1,
-        barrier_events[1],
-        barrier_signal[1],
-        warp_id_offset
-    );
+    for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+        cu_id_t cu_id = cu_id_t(c);
+        schedulerCore(
+            cu[c],
+            cu_id,
+            program_len,
+            total_warps,
+            start,
+            dispatch_out[c],
+            status_in[c],
+            barrier_events[c],
+            barrier_signal[c],
+            warp_id_offset
+        );
+    }
 
     // ------------------------------------------------------------------
     // Compute pipelines
@@ -192,29 +228,29 @@ void gpgpu_scheduler(
     // Both pointers may point to the SAME physical DDR address at runtime.
     // ------------------------------------------------------------------
 
-    compute_pipeline(
-        cu_id0,
-        dispatch_out0,
-        program0,
-        program_len,
-        regs0,
-        initial_regs_ptr0,
-        cu_mem_req[0],
-        cu_mem_resp[0],
-        status_in0
-    );
+    for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+        cu_id_t cu_id = cu_id_t(c);
+        reg_t* initial_regs_ptr = (c % 2 == 0) ? initial_regs_ptr0 : initial_regs_ptr1;
+        instr_word_t (&program_c)[MAX_PROGRAM_LEN] = cu[c].programArray();
+        reg_t (&regs_c)
+            [MAX_WARPS_PER_CU]
+            [MAX_THREADS_PER_WARP]
+            [NUM_REGS_PER_THREAD] =
+                cu[c].regsArray();
 
-    compute_pipeline(
-        cu_id1,
-        dispatch_out1,
-        program1,
-        program_len,
-        regs1,
-        initial_regs_ptr1,
-        cu_mem_req[1],
-        cu_mem_resp[1],
-        status_in1
-    );
+        compute_pipeline(
+            cu_id,
+            dispatch_out[c],
+            program_c,
+            program_len,
+            regs_c,
+            initial_regs_ptr,
+            cu_mem_req[c],
+            cu_mem_resp[c],
+            status_in[c]
+        );
+    }
 
     // ------------------------------------------------------------------
     // N:1 memory arbitration
@@ -226,6 +262,8 @@ void gpgpu_scheduler(
         mem_req_out,
         mem_resp_in
     );
+
+#endif  // RISCV_GPGPU_NUM_CUS > 8
 }
 
 }  // namespace riscv_gpgpu_hls

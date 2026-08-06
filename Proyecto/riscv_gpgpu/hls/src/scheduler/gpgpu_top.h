@@ -83,8 +83,7 @@ inline void programLoader(
     instr_word_t* program_ptr,
     uint32_t      program_len,
     bool&         start,
-    instr_word_t  program0[MAX_PROGRAM_LEN],
-    instr_word_t  program1[MAX_PROGRAM_LEN]
+    CuDispatchUnit (&cus)[NUM_CUS]
 ) {
     bool     loaded   = false;
     uint32_t load_idx = 0;
@@ -102,8 +101,12 @@ inline void programLoader(
             if (load_idx < MAX_PROGRAM_LEN) {
                 if (load_idx < program_len) {
                     instr_word_t instr = program_ptr[load_idx];
-                    program0[load_idx] = instr;
-                    program1[load_idx] = instr;
+LOAD_PROGRAM_WORDS:
+                    for (int c = 0; c < NUM_CUS; ++c) {
+#pragma HLS UNROLL
+                        instr_word_t (&program_c)[MAX_PROGRAM_LEN] = cus[c].programArray();
+                        program_c[load_idx] = instr;
+                    }
                 }
                 ++load_idx;
             } else {
@@ -112,6 +115,47 @@ inline void programLoader(
         }
     }
 }
+
+#if RISCV_GPGPU_NUM_CUS > 8
+// Hierarchical variant: loads program into two equal-size cluster arrays.
+inline void programLoaderHier(
+    instr_word_t* program_ptr,
+    uint32_t      program_len,
+    bool&         start,
+    CuDispatchUnit (&cu_a)[CLUSTER_SIZE],
+    CuDispatchUnit (&cu_b)[CLUSTER_SIZE]
+) {
+    bool     loaded   = false;
+    uint32_t load_idx = 0;
+
+    while (true) {
+#pragma HLS PIPELINE off
+
+        if (!start) {
+            loaded   = false;
+            load_idx = 0;
+            continue;
+        }
+
+        if (!loaded) {
+            if (load_idx < MAX_PROGRAM_LEN) {
+                if (load_idx < program_len) {
+                    instr_word_t instr = program_ptr[load_idx];
+LOAD_WORDS_HIER:
+                    for (int c = 0; c < CLUSTER_SIZE; ++c) {
+#pragma HLS UNROLL
+                        cu_a[c].programArray()[load_idx] = instr;
+                        cu_b[c].programArray()[load_idx] = instr;
+                    }
+                }
+                ++load_idx;
+            } else {
+                loaded = true;
+            }
+        }
+    }
+}
+#endif  // RISCV_GPGPU_NUM_CUS > 8
 inline void schedulerCore(
     CuDispatchUnit& cu,
     cu_id_t         cu_id,

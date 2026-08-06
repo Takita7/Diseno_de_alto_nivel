@@ -19,7 +19,7 @@
 using namespace riscv_gpgpu_hls;
 
 TEST(MemArbiter, ArbitrateOnceIsANoOpWhenNothingIsPending) {
-    MemArbiter arb;
+    MemArbiterFlat arb;
     hls::stream<mem_req_t> req_in[NUM_CUS];
     hls::stream<mem_req_t> mem_req_out;
 
@@ -29,7 +29,7 @@ TEST(MemArbiter, ArbitrateOnceIsANoOpWhenNothingIsPending) {
 }
 
 TEST(MemArbiter, RouteResponseIsANoOpWhenNothingIsPending) {
-    MemArbiter arb;
+    MemArbiterFlat arb;
     hls::stream<mem_resp_t> mem_resp_in;
     hls::stream<mem_resp_t> resp_out[NUM_CUS];
 
@@ -37,7 +37,7 @@ TEST(MemArbiter, RouteResponseIsANoOpWhenNothingIsPending) {
 }
 
 TEST(MemArbiter, RequestForwardedUntouched) {
-    MemArbiter arb;
+    MemArbiterFlat arb;
     hls::stream<mem_req_t> req_in[NUM_CUS];
     hls::stream<mem_req_t> mem_req_out;
 
@@ -60,7 +60,7 @@ TEST(MemArbiter, RequestForwardedUntouched) {
 }
 
 TEST(MemArbiter, ResponseRoutedByCuId) {
-    MemArbiter arb;
+    MemArbiterFlat arb;
     hls::stream<mem_resp_t> mem_resp_in;
     hls::stream<mem_resp_t> resp_out[NUM_CUS];
 

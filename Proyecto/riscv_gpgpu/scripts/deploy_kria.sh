@@ -7,7 +7,10 @@
 #
 # Usage:
 #   scripts/deploy_kria.sh --bitstream <file.bit.bin> --kernel <kernel.elf> --test <test_binary> \
-#       [--host <user@kria-ip>] [--report <path>] [--skip-build]
+#       [--host <user@kria-ip>] [--report <path>] [--skip-build] [--sudo-pass <password>]
+#
+# The --sudo-pass option (or KRIA_SUDO_PASS env var) is forwarded to sudo -S
+# on the board to allow non-interactive bitstream loading with fpgautil.
 #
 # Requirements on the build host: aarch64-linux-gnu-g++ toolchain, cmake, ssh/scp.
 # Requirements on the Kria board:  fpgautil, an accessible SSH account (default: ubuntu@kria).
@@ -24,6 +27,7 @@ REPORT="${REPO_ROOT}/docs/verification/kria_results.md"
 SKIP_BUILD=0
 BUILD_DIR="${REPO_ROOT}/build-kria-aarch64"
 REMOTE_DIR="/home/${KRIA_HOST%%@*}/riscv_gpgpu_deploy"
+KRIA_SUDO_PASS="${KRIA_SUDO_PASS:-}"
 
 usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
@@ -35,6 +39,7 @@ while [[ $# -gt 0 ]]; do
         --host)      KRIA_HOST="$2"; shift 2 ;;
         --report)    REPORT="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        --sudo-pass) KRIA_SUDO_PASS="$2"; shift 2 ;;
         -h|--help)   usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
@@ -80,13 +85,19 @@ log "Loading bitstream and running ${TEST_NAME} on the board"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/kria_run.XXXXXX.log")"
 STATUS=PASS
 if ! ssh "$KRIA_HOST" bash -s -- \
-        "$REMOTE_DIR" "$BITSTREAM_NAME" "$KERNEL_NAME" "$TEST_NAME" <<'REMOTE' >"$RUN_LOG" 2>&1
+        "$REMOTE_DIR" "$BITSTREAM_NAME" "$KERNEL_NAME" "$TEST_NAME" "$KRIA_SUDO_PASS" <<'REMOTE' >"$RUN_LOG" 2>&1
 set -euo pipefail
-REMOTE_DIR="$1"; BITSTREAM="$2"; KERNEL="$3"; TEST="$4"
+REMOTE_DIR="$1"; BITSTREAM="$2"; KERNEL="$3"; TEST="$4"; SUDO_PASS="$5"
 cd "$REMOTE_DIR"
-sudo fpgautil -b "$BITSTREAM"
+if [[ -n "$SUDO_PASS" ]]; then
+    echo "$SUDO_PASS" | sudo -S fpgautil -b "$BITSTREAM"
+else
+    sudo fpgautil -b "$BITSTREAM"
+fi
+# Allow time for the PLL to lock and proc_sys_reset to release ap_rst_n.
+sleep 2
 chmod +x "$TEST"
-GPGPU_KERNEL_ELF="$REMOTE_DIR/$KERNEL" "./$TEST"
+echo "$SUDO_PASS" | sudo -S env GPGPU_KERNEL_ELF="$REMOTE_DIR/$KERNEL" "./$TEST"
 REMOTE
 then
     STATUS=FAIL

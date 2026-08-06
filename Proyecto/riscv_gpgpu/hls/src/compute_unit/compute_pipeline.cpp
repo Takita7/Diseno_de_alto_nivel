@@ -77,12 +77,6 @@ typedef reg_t RegFile[MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
 static void executeALU(RegFile regs, const Instruction& instr, thread_mask_t mask) {
     Opcode op = instr.opcode;
     // TEMP: SS16.16 scratch experiment - is the per-lane, per-opcode
-    // hardware duplication (add/sub/and/or/xor/icmp/fmul/fadd all
-    // separately instantiated per lane, per the Bind Op Report) real,
-    // fixable waste, or already-necessary/already-shared under the hood?
-    // Testing by forcing a lower instance count than the natural 32
-    // (one per lane) and observing whether the tool can actually share
-    // (LUT drops, some latency cost) or refuses (already minimal).
 #pragma HLS ALLOCATION operation instances=add limit=8
 #pragma HLS ALLOCATION operation instances=sub limit=8
 EXECUTE_ALU_LANES:
@@ -115,10 +109,12 @@ EXECUTE_ALU_LANES:
 
 // ── Vector (integer + FP) ────────────────────────────────────────────────────
 // Golden reference: ComputeUnit::executeVector() (compute_unit.cpp:151-171).
+// Gated by RISCV_GPGPU_ENABLE_VECTOR_OPS (default OFF): audit confirmed the
+// PTX transpiler never emits these opcodes, so the hardware is dead area for
+// all current PTX-based workloads.  Re-enable with -DRISCV_GPGPU_ENABLE_VECTOR_OPS=1.
 static void executeVector(RegFile regs, const Instruction& instr, thread_mask_t mask) {
+#ifdef RISCV_GPGPU_ENABLE_VECTOR_OPS
     Opcode op = instr.opcode;
-    // TEMP: SS16.16 scratch experiment - same technique as executeALU, same
-    // 8-opcode-per-lane duplication pattern (add/sub/mul/fadd/fsub/fmul).
 #pragma HLS ALLOCATION operation instances=add limit=8
 #pragma HLS ALLOCATION operation instances=sub limit=8
 #pragma HLS ALLOCATION operation instances=mul limit=8
@@ -144,6 +140,9 @@ EXECUTE_VECTOR_LANES:
             default: break;
         }
     }
+#else
+    (void)regs; (void)instr; (void)mask;
+#endif
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -269,7 +268,9 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
         if      (op == Opcode::VBRANCH) executeBranch(simt, regs, instr, mask);
         else if (op == Opcode::VJOIN)   executeJoin(simt);
         else if (instr.is_memory)       executeMemOp(cu_id, d.warp_id, regs, instr, mask, mem_req_out, mem_resp_in);
+#ifdef RISCV_GPGPU_ENABLE_VECTOR_OPS
         else if (instr.is_vector)       executeVector(regs, instr, mask);
+#endif
         else                            executeALU(regs, instr, mask);
     }
 

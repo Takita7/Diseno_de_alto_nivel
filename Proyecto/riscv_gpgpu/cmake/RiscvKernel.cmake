@@ -56,7 +56,7 @@ endif()
 function(add_riscv_kernel KERNEL_NAME)
     cmake_parse_arguments(
         ARG          # prefix
-        ""           # options (none)
+        "FPGA_LINK;OCM_LINK"  # options: DDR @ 0x60000000 or OCM @ 0xFFFC0000
         "SOURCE;ENTRY;MARCH;MABI"  # single-value keywords
         "FLAGS"      # multi-value keywords
         ${ARGN}
@@ -126,6 +126,15 @@ function(add_riscv_kernel KERNEL_NAME)
     )
 
     # ── Link step: object → ELF ───────────────────────────────────────────────
+    if(ARG_OCM_LINK)
+        set(LINK_LD "${CMAKE_SOURCE_DIR}/fpga/linker/riscv_gpgpu_ocm.ld")
+        set(LINK_EXTRA -Wl,-T,${LINK_LD})
+    elseif(ARG_FPGA_LINK)
+        set(LINK_LD "${CMAKE_SOURCE_DIR}/fpga/linker/riscv_gpgpu_fpga.ld")
+        set(LINK_EXTRA -Wl,-T,${LINK_LD})
+    else()
+        set(LINK_EXTRA -Wl,--entry,0)
+    endif()
     add_custom_command(
         OUTPUT  "${ELF}"
         COMMAND "${RISCV_CLANG}"
@@ -133,7 +142,7 @@ function(add_riscv_kernel KERNEL_NAME)
                 -march=${ARG_MARCH}
                 -mabi=${ARG_MABI}
                 -fuse-ld=lld -nostdlib
-                -Wl,--entry,0
+                ${LINK_EXTRA}
                 -o "${ELF}" "${OBJ}"
         DEPENDS "${OBJ}"
         COMMENT "Linking RISC-V kernel ELF ${KERNEL_NAME}"

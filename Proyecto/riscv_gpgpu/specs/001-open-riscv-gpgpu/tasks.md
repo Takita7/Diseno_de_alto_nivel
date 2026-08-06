@@ -407,6 +407,19 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 	- Required: execute at least one Rodinia workload already wired in `benchmarks/` (plus `vector_add` baseline) through FPGA path.
 	- Verification: results archived under `results/verification/` and traceability row for FPGA evidence updated.
 
+- [x] T090 [US2] Collect HLS resource-utilization baseline and demo profile comparison
+	- Required: compare `build/ip_export/**/riscv_gpgpu_hls_*_csynth.rpt` against a demo-tuned profile and summarize BRAM/LUT/FF/DSP/URAM plus estimated clocks.
+	- Verification: `scripts/report_hls_resources.sh` reports both profiles; baseline and demo numbers are reproducible from generated HLS reports.
+	- Done: baseline vs `demo_small_shared` profile measured. Combined totals: BRAM 224→210, LUT 96279→96126, FF 60130→59856, DSP 222→222, URAM 16→16; clocks unchanged (`sched 3.816ns`, `mem 3.650ns`).
+
+- [ ] T091 [US2] Select demo synthesis profile and run full Vivado implementation with utilization/timing reports
+	- Required: choose baseline vs demo profile (`tests/fpga/export_*_ip*.tcl`) and run `vivado -mode batch -source fpga/scripts/build_all.tcl`.
+	- Verification: post-implementation utilization and timing reports collected under `build/vivado_kv260/`; timing met or violations documented with mitigation plan.
+
+- [ ] T092 [US2] Validate selected profile on Kria and freeze demo bitstream
+	- Required: deploy chosen bitstream + kernel via `scripts/deploy_kria.sh`; run smoke + one representative workload.
+	- Verification: PASS report saved in `docs/verification/kria_results.md` and demo bitstream filename/hash recorded.
+
 **Checkpoint**: End-to-end CUDA → RISC-V ELF → ARM host → FPGA GPGPU → results verified on Kria hardware.
 
 ---

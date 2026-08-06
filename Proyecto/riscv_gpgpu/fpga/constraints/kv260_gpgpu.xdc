@@ -5,12 +5,7 @@
 # I/O pins are used: all connectivity is via AXI to the PS, so no physical
 # pin constraints are required for this block.
 
-# ── Primary clock: 100 MHz from PS pl_clk0 ──────────────────────────────────
-create_clock -period 10.000 -name pl_clk0 [get_pins -hier -filter {NAME =~ */pl_clk0}]
-
-# ── AXI4-Lite control interface (s_axi_ctrl) is synchronous to pl_clk0 ──────
-# ── AXI4 masters (m_axi_imem, m_axi_dmem) are synchronous to pl_clk0 ────────
-# No clock-domain crossings inside the GPGPU block at this configuration.
-
 # ── Reset: PS peripheral reset, treated as asynchronous assertion ───────────
+# The PLL's locked output already acts as power-on reset via proc_sys_reset.
+# pl_resetn0 is a secondary supervisor reset from the PS.
 set_false_path -from [get_pins -hier -filter {NAME =~ */pl_resetn0}]

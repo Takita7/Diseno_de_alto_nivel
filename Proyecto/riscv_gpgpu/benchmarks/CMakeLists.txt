@@ -99,6 +99,16 @@ if(RODINIA_ROOT)
                     SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel_wrapper.cpp"
                     ENTRY Kernel
                 )
+                add_riscv_kernel(rodinia_bfs_kernel_fpga
+                    SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel_wrapper.cpp"
+                    ENTRY Kernel
+                    FPGA_LINK
+                )
+                add_riscv_kernel(rodinia_bfs_kernel_ocm
+                    SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel_wrapper.cpp"
+                    ENTRY Kernel
+                    OCM_LINK
+                )
 
                 configure_rodinia_kernel_wrapper(
                     "rodinia_bfs_kernel2_wrapper"
@@ -108,6 +118,16 @@ if(RODINIA_ROOT)
                 add_riscv_kernel(rodinia_bfs_kernel2
                     SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel2_wrapper.cpp"
                     ENTRY Kernel2
+                )
+                add_riscv_kernel(rodinia_bfs_kernel2_fpga
+                    SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel2_wrapper.cpp"
+                    ENTRY Kernel2
+                    FPGA_LINK
+                )
+                add_riscv_kernel(rodinia_bfs_kernel2_ocm
+                    SOURCE "${RODINIA_GENERATED_DIR}/rodinia_bfs_kernel2_wrapper.cpp"
+                    ENTRY Kernel2
+                    OCM_LINK
                 )
 
                 set(RODINIA_REAL_BFS_AVAILABLE TRUE)
