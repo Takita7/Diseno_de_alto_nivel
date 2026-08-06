@@ -86,28 +86,29 @@ inline void programLoader(
     instr_word_t  program0[MAX_PROGRAM_LEN],
     instr_word_t  program1[MAX_PROGRAM_LEN]
 ) {
-    bool loaded = false;
+    bool     loaded   = false;
+    uint32_t load_idx = 0;
 
     while (true) {
 #pragma HLS PIPELINE off
 
         if (!start) {
-            loaded = false;
+            loaded   = false;
+            load_idx = 0;
             continue;
         }
 
         if (!loaded) {
-        LOAD_PROGRAM:
-            for (uint32_t i = 0; i < MAX_PROGRAM_LEN; ++i) {
-#pragma HLS PIPELINE II=1
-                if (i < program_len) {
-                    instr_word_t instr = program_ptr[i];
-                    program0[i] = instr;
-                    program1[i] = instr;
+            if (load_idx < MAX_PROGRAM_LEN) {
+                if (load_idx < program_len) {
+                    instr_word_t instr = program_ptr[load_idx];
+                    program0[load_idx] = instr;
+                    program1[load_idx] = instr;
                 }
+                ++load_idx;
+            } else {
+                loaded = true;
             }
-
-            loaded = true;
         }
     }
 }

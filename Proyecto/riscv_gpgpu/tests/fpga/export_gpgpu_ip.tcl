@@ -14,7 +14,7 @@ add_files "$src_dir/scheduler/gpgpu_top.cpp" \
 add_files "$src_dir/compute_unit/compute_pipeline.cpp" \
     -cflags "-I$src_dir -DRISCV_GPGPU_BOARD_KV260"
 
-set_top gpgpu_scheduler
+set_top riscv_gpgpu_hls::gpgpu_scheduler
 
 open_solution -reset solution1
 

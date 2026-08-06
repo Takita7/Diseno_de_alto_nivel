@@ -83,7 +83,7 @@ if ! command -v vitis_hls &> /dev/null && ! command -v vitis-run &> /dev/null; t
         # shellcheck disable=SC1090
         . "$XILINX_VITIS_SETTINGS"
     else
-        for _dir in /tools/Xilinx /opt/Xilinx; do
+        for _dir in /tools/Xilinx /opt/Xilinx /mnt/vivado; do
             # maxdepth 3 (not 2) so this also finds version-numbered install
             # roots, e.g. /tools/Xilinx/2026.1/Vitis/settings64.sh, not just
             # the older /tools/Xilinx/Vitis/<ver>/settings64.sh layout.
@@ -111,6 +111,10 @@ if command -v vitis_hls &> /dev/null; then
     echo "Detected Vitis HLS (standalone vitis_hls): $XILINX_HLS"
 elif command -v vitis-run &> /dev/null; then
     echo "Detected Vitis HLS (unified vitis-run --mode hls): $XILINX_HLS"
+    # Vitis 2026.1 may need these for vitis_hls Tcl startup on newer distros.
+    if [ -d "/mnt/vivado/2026.1/Vitis/lib/lnx64.o/Ubuntu/24" ]; then
+        export LD_LIBRARY_PATH="/mnt/vivado/2026.1/Vitis/lib/lnx64.o/Ubuntu/24:/mnt/vivado/2026.1/Vivado/lib/lnx64.o/Ubuntu/24:${LD_LIBRARY_PATH:-}"
+    fi
 else
     echo "WARNING: Vitis HLS not found. Set XILINX_VITIS_SETTINGS to the Vitis settings64.sh path, or install Vitis (see docs/hls/interfaces.md)"
 fi
