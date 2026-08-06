@@ -10,12 +10,12 @@
 // 3*CLUSTER_SIZE <= 24 backwards channels. The top-level DATAFLOW sees only
 // NUM_CLUSTERS process calls, contributing only 4 backwards channels total.
 //
-// Only compiled when RISCV_GPGPU_NUM_CUS > 8.
+// Only compiled when RISCV_GPGPU_NUM_CUS >= 13.
 
 #ifndef RISCV_GPGPU_HLS_CU_CLUSTER_H
 #define RISCV_GPGPU_HLS_CU_CLUSTER_H
 
-#if RISCV_GPGPU_NUM_CUS > 8
+#if RISCV_GPGPU_NUM_CUS >= 13
 
 #include <hls_stream.h>
 #include "../common/hls_config.h"
@@ -160,5 +160,5 @@ inline void superMemArbiter(
 
 }  // namespace riscv_gpgpu_hls
 
-#endif  // RISCV_GPGPU_NUM_CUS > 8
+#endif  // RISCV_GPGPU_NUM_CUS >= 13
 #endif  // RISCV_GPGPU_HLS_CU_CLUSTER_H

@@ -76,6 +76,45 @@ is_fresh_file() {
     (( mtime >= start_ts ))
 }
 
+archive_run_artifacts() {
+    local run_dir="$1"
+    local cu="$2"
+    local archive_root="$run_dir/complete_run"
+    local util_rpt="$3"
+    local timing_rpt="$4"
+    local drc_rpt="$5"
+    local bit_file="$6"
+
+    rm -rf "$archive_root"
+    mkdir -p "$archive_root/reports" "$archive_root/build"
+
+    {
+        echo "cu=$cu"
+        echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "project_root=$PROJECT_ROOT"
+    } > "$archive_root/metadata.txt"
+
+    cp "$util_rpt" "$archive_root/reports/implementation_utilization.rpt" 2>/dev/null || true
+    cp "$timing_rpt" "$archive_root/reports/implementation_timing.rpt" 2>/dev/null || true
+    cp "$drc_rpt" "$archive_root/reports/implementation_drc.rpt" 2>/dev/null || true
+    cp "$bit_file" "$archive_root/reports/${REPORT_PREFIX}_gpgpu_system_wrapper.bit" 2>/dev/null || true
+    cp "$run_dir/hls.log" "$archive_root/hls.log" 2>/dev/null || true
+    cp "$run_dir/vivado.log" "$archive_root/vivado.log" 2>/dev/null || true
+    cp "$run_dir/hls.failed" "$archive_root/hls.failed" 2>/dev/null || true
+    cp "$run_dir/vivado.failed" "$archive_root/vivado.failed" 2>/dev/null || true
+    cp "$PROJECT_ROOT/hls/src/common/hls_config.h" "$archive_root/hls_config.h" 2>/dev/null || true
+
+    if [ -d "$PROJECT_ROOT/build/vivado_kv260" ]; then
+        cp -a "$PROJECT_ROOT/build/vivado_kv260" "$archive_root/build/"
+    fi
+    if [ -d "$PROJECT_ROOT/build/ip_export" ]; then
+        cp -a "$PROJECT_ROOT/build/ip_export" "$archive_root/build/"
+    fi
+    if [ -d "$PROJECT_ROOT/build/vivado_kv260_runs" ]; then
+        cp -a "$PROJECT_ROOT/build/vivado_kv260_runs" "$archive_root/build/"
+    fi
+}
+
 for cu in $(seq "$FROM_CU" "$STEP_CU" "$TO_CU"); do
     echo "============================================================"
     echo "Running CU sweep for NUM_CUS=$cu"
@@ -86,7 +125,7 @@ for cu in $(seq "$FROM_CU" "$STEP_CU" "$TO_CU"); do
     mkdir -p "$RUN_DIR"
     rm -f "$RUN_DIR/hls.failed" "$RUN_DIR/vivado.failed"
 
-    python3 - <<'PY' "$PROJECT_ROOT/hls/src/common/hls_config.h" "$cu"
+    python3 - "$PROJECT_ROOT/hls/src/common/hls_config.h" "$cu" <<'PY'
 import sys, re
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -119,15 +158,57 @@ PY
     fi
 
     run_start_ts="$(date +%s)"
-    if ! vivado -mode batch -source "$PROJECT_ROOT/fpga/scripts/build_all.tcl" > "$RUN_DIR/vivado.log" 2>&1; then
+    if ! vivado -mode batch -source "$PROJECT_ROOT/fpga/scripts/build_all.tcl" -tclargs "$JOBS" > "$RUN_DIR/vivado.log" 2>&1; then
         echo "Vivado build failed for NUM_CUS=$cu" | tee "$RUN_DIR/vivado.failed"
         continue
     fi
 
-    UTIL_RPT="$PROJECT_ROOT/build/vivado_kv260/implementation_utilization.rpt"
-    TIMING_RPT="$PROJECT_ROOT/build/vivado_kv260/implementation_timing.rpt"
-    DRC_RPT="$PROJECT_ROOT/build/vivado_kv260/implementation_drc.rpt"
-    BIT_FILE="$PROJECT_ROOT/build/vivado_kv260/riscv_gpgpu_kv260.runs/impl_1/gpgpu_system_wrapper.bit"
+    UTIL_RPT=""
+    TIMING_RPT=""
+    DRC_RPT=""
+    BIT_FILE=""
+
+    for candidate in \
+        "$PROJECT_ROOT/build/vivado_kv260/implementation_utilization.rpt" \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/post_run_num_cus_${cu}_"*/implementation_utilization.rpt \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/pre_run_num_cus_${cu}_"*/implementation_utilization.rpt; do
+        if [ -f "$candidate" ]; then
+            UTIL_RPT="$candidate"
+            break
+        fi
+    done
+    for candidate in \
+        "$PROJECT_ROOT/build/vivado_kv260/implementation_timing.rpt" \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/post_run_num_cus_${cu}_"*/implementation_timing.rpt \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/pre_run_num_cus_${cu}_"*/implementation_timing.rpt; do
+        if [ -f "$candidate" ]; then
+            TIMING_RPT="$candidate"
+            break
+        fi
+    done
+    for candidate in \
+        "$PROJECT_ROOT/build/vivado_kv260/implementation_drc.rpt" \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/post_run_num_cus_${cu}_"*/implementation_drc.rpt \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/pre_run_num_cus_${cu}_"*/implementation_drc.rpt; do
+        if [ -f "$candidate" ]; then
+            DRC_RPT="$candidate"
+            break
+        fi
+    done
+    for candidate in \
+        "$PROJECT_ROOT/build/vivado_kv260/riscv_gpgpu_kv260.runs/impl_1/gpgpu_system_wrapper.bit" \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/post_run_num_cus_${cu}_"*/gpgpu_system_wrapper.bit \
+        "$PROJECT_ROOT/build/vivado_kv260_runs/pre_run_num_cus_${cu}_"*/gpgpu_system_wrapper.bit; do
+        if [ -f "$candidate" ]; then
+            BIT_FILE="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$UTIL_RPT" ] || [ -z "$TIMING_RPT" ] || [ -z "$DRC_RPT" ] || [ -z "$BIT_FILE" ]; then
+        echo "Vivado build failed for NUM_CUS=$cu (missing impl outputs)" | tee "$RUN_DIR/vivado.failed"
+        continue
+    fi
 
     if ! is_fresh_file "$UTIL_RPT" "$run_start_ts" || \
        ! is_fresh_file "$TIMING_RPT" "$run_start_ts" || \
@@ -141,11 +222,9 @@ PY
     cp "$TIMING_RPT" "$RUN_DIR/${REPORT_PREFIX}_implementation_timing.rpt"
     cp "$DRC_RPT" "$RUN_DIR/${REPORT_PREFIX}_implementation_drc.rpt"
     cp "$BIT_FILE" "$RUN_DIR/${REPORT_PREFIX}_gpgpu_system_wrapper.bit"
-    if [ -d "$PROJECT_ROOT/build/vivado_kv260_runs" ]; then
-        cp -R "$PROJECT_ROOT/build/vivado_kv260_runs" "$RUN_DIR/" 2>/dev/null || true
-    fi
+    archive_run_artifacts "$RUN_DIR" "$cu" "$UTIL_RPT" "$TIMING_RPT" "$DRC_RPT" "$BIT_FILE"
 
-    echo "Saved reports and bitstream to $RUN_DIR"
+    echo "Saved complete run artifacts to $RUN_DIR/complete_run"
 done
 
 echo "Sweep complete. Results under $SWEEP_ROOT"

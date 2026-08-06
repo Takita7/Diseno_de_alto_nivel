@@ -46,6 +46,13 @@
 set script_dir [file dirname [file normalize [info script]]]
 set repo_root  [file normalize "$script_dir/../.."]
 
+set tclargs [lindex $argv 0]
+if {[string is integer -strict $tclargs] && $tclargs > 0} {
+    set requested_jobs $tclargs
+} else {
+    set requested_jobs 0
+}
+
 set project_name "riscv_gpgpu_kv260"
 set project_dir  "$repo_root/build/vivado_kv260"
 
@@ -56,7 +63,7 @@ set part_name "xck26-sfvc784-2LV-c"
 set bd_name "gpgpu_system"
 
 # Parallelism knobs for Vivado runs.
-set default_jobs 8
+set default_jobs 20
 set max_jobs     32
 set host_jobs    $default_jobs
 
@@ -65,6 +72,10 @@ if {![catch {exec nproc} nproc_out]} {
     if {[string is integer -strict $detected_jobs] && $detected_jobs > 0} {
         set host_jobs $detected_jobs
     }
+}
+
+if {$requested_jobs > 0} {
+    set host_jobs $requested_jobs
 }
 
 if {$host_jobs > $max_jobs} {

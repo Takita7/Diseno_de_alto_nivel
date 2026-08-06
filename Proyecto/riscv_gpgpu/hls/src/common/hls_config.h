@@ -93,15 +93,16 @@ constexpr int L2_SETS_PER_WAY   = L2_LINES_TOTAL / L2_WAYS;              // 512
 // duplicated per-CU the way schedulerCore's own WarpSlot[] correctly is.
 // KV260 is the sole target board (SS14) - this is not a per-board decision.
 #ifndef RISCV_GPGPU_NUM_CUS
-#define RISCV_GPGPU_NUM_CUS 12
+#define RISCV_GPGPU_NUM_CUS 8
 #endif
 constexpr int NUM_CUS                    = RISCV_GPGPU_NUM_CUS;
-// When NUM_CUS > 8, a flat DATAFLOW region would exceed the HLS tool's limit of
+// When NUM_CUS >= 13, a flat DATAFLOW region would exceed the HLS tool's limit of
 // ~40 backwards channels (barrier_events + status_in + cu_mem_resp each of size
-// NUM_CUS gives 3*16=48, cutting off cu_mem_resp_8..15). Hierarchical DATAFLOW
-// splits into CLUSTER_SIZE-CU sub-regions, each well within the limit.
-constexpr int CLUSTER_SIZE               = (NUM_CUS > 8) ? (NUM_CUS / 2) : NUM_CUS;
-constexpr int NUM_CLUSTERS               = (NUM_CUS > 8) ? 2 : 1;
+// NUM_CUS gives 3*13=39 for 13 CUs, and 3*16=48 for 16 CUs, cutting off the
+// higher-index response channels). Hierarchical DATAFLOW splits into
+// CLUSTER_SIZE-CU sub-regions, each well within the limit.
+constexpr int CLUSTER_SIZE               = (NUM_CUS >= 13) ? (NUM_CUS / 2) : NUM_CUS;
+constexpr int NUM_CLUSTERS               = (NUM_CUS >= 13) ? 2 : 1;
 // 48KB -> 16KB (docs/hls/interfaces.md SS16.26) -> 32KB (SS16.35): the
 // 16KB step matched the golden model's real, live-executed default
 // (compute_unit.h:28) and freed real BRAM for the 2-CU question

@@ -116,7 +116,7 @@ LOAD_PROGRAM_WORDS:
     }
 }
 
-#if RISCV_GPGPU_NUM_CUS > 8
+#if RISCV_GPGPU_NUM_CUS >= 13
 // Hierarchical variant: loads program into two equal-size cluster arrays.
 inline void programLoaderHier(
     instr_word_t* program_ptr,
@@ -155,7 +155,7 @@ LOAD_WORDS_HIER:
         }
     }
 }
-#endif  // RISCV_GPGPU_NUM_CUS > 8
+#endif  // RISCV_GPGPU_NUM_CUS >= 13
 inline void schedulerCore(
     CuDispatchUnit& cu,
     cu_id_t         cu_id,

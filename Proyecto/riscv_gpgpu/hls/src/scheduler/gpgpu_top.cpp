@@ -4,7 +4,7 @@
 
 #include "gpgpu_top.h"
 
-#if RISCV_GPGPU_NUM_CUS > 8
+#if RISCV_GPGPU_NUM_CUS >= 13
 #include "cu_cluster.h"   // cuCluster, superMemArbiter, clusterBarrierRelay
 #endif
 
@@ -72,9 +72,9 @@ void gpgpu_scheduler(
 
 #pragma HLS DATAFLOW
 
-#if RISCV_GPGPU_NUM_CUS > 8
+#if RISCV_GPGPU_NUM_CUS >= 13
     // ------------------------------------------------------------------
-    // Hierarchical DATAFLOW path (NUM_CUS > 8)
+    // Hierarchical DATAFLOW path (NUM_CUS >= 13)
     //
     // Flat DATAFLOW with NUM_CUS > 8 hits the Vitis HLS ~40-backwards-
     // channel limit: 3 backwards arrays × NUM_CUS = 3×16=48 > 40.
@@ -263,7 +263,7 @@ void gpgpu_scheduler(
         mem_resp_in
     );
 
-#endif  // RISCV_GPGPU_NUM_CUS > 8
+#endif  // RISCV_GPGPU_NUM_CUS >= 13
 }
 
 }  // namespace riscv_gpgpu_hls
