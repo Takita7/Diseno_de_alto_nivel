@@ -382,7 +382,30 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 	- Required: cross-compile software stack for `aarch64-linux-gnu`; `scp` binary + kernel ELF to Kria; load FPGA bitstream via `fpgautil`; run test and capture output.
 	- Deliverable: `scripts/deploy_kria.sh` that takes `--bitstream`, `--kernel`, and `--test` arguments and produces a pass/fail report.
 	- Verification: `vector_add` (N=1024) produces correct results on Kria hardware; report captured in `docs/verification/kria_results.md`.
-	- Done: `scripts/deploy_kria.sh` (`--bitstream/--kernel/--test/--host/--report`) cross-compiles via `fpga/toolchain-aarch64.cmake` (+ `fpga/Makefile` wrapper), scp's artifacts, loads the bitstream with `fpgautil`, runs the test over SSH, and writes a pass/fail report to `docs/verification/kria_results.md` (template committed; hardware run pending board access).
+	- Done: `scripts/deploy_kria.sh` (`--bitstream/--kernel/--test/--host/--report`) cross-compiles via `fpga/toolchain-aarch64.cmake` (+ `fpga/Makefile` wrapper), scp's artifacts, loads the bitstream with `fpgautil`, runs the test over SSH, and writes a pass/fail report to `docs/verification/kria_results.md` (board access now available; hardware execution evidence tracked by tasks below).
+
+### Physical Bring-up (Kria Access Ready)
+
+- [x] T085 [US2] Run HLS IP export on the installed Vitis/Vivado 2026.1 toolchain and archive logs
+	- Required: run `vitis-run --mode hls --tcl tests/fpga/export_memory_ip.tcl` and `vitis-run --mode hls --tcl tests/fpga/export_gpgpu_ip.tcl` after `source scripts/setup-env.sh`.
+	- Verification: both commands exit `0`; `component.xml` exists for both IPs under `build/ip_export/**/solution1/impl/ip/`.
+	- Done: both HLS exports pass on Vitis 2026.1 after environment and `set_top` fixes; `PASS: memory_pipeline IP exported` and `PASS: gpgpu_scheduler IP exported` confirmed in logs.
+
+- [ ] T086 [US2] Build full KV260 Vivado project and bitstream from batch Tcl flow
+	- Required: run `vivado -mode batch -source fpga/scripts/build_all.tcl`.
+	- Verification: bitstream artifact generated in `build/vivado_kv260/`; no fatal errors in synthesis/implementation logs.
+
+- [ ] T087 [US2] Deploy generated bitstream + kernel ELF to Kria and execute smoke test
+	- Required: run `scripts/deploy_kria.sh --bitstream <bit.bin> --kernel <kernel.elf> --test test_host_api --host <user@kria-ip>`.
+	- Verification: deploy script exits `0` and test output reports PASS for `vector_add` (N=1024).
+
+- [ ] T088 [US2] Capture first physical-hardware evidence in `docs/verification/kria_results.md`
+	- Required: record date, board identifier, bitstream hash/name, kernel ELF name, command used, and full runtime output.
+	- Verification: `docs/verification/kria_results.md` reflects a real run (not template placeholder).
+
+- [ ] T089 [US2] Run Rodinia subset on Kria and compare against simulation baseline
+	- Required: execute at least one Rodinia workload already wired in `benchmarks/` (plus `vector_add` baseline) through FPGA path.
+	- Verification: results archived under `results/verification/` and traceability row for FPGA evidence updated.
 
 **Checkpoint**: End-to-end CUDA → RISC-V ELF → ARM host → FPGA GPGPU → results verified on Kria hardware.
 
