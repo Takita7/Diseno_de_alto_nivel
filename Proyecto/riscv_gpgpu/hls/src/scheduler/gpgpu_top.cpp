@@ -152,12 +152,17 @@ void gpgpu_scheduler(
     hls::stream<WarpStatusCode>   barrier_events[NUM_CUS];
     hls::stream<barrier_signal_t> barrier_signal[NUM_CUS];
 
+    hls::stream<reg_seed_t> reg_seed[NUM_CUS];
+    hls::stream<bool>       loaded_sig[NUM_CUS];
+
 #pragma HLS STREAM variable=dispatch_out   depth=2              dim=1
 #pragma HLS STREAM variable=status_in      depth=2              dim=1
 #pragma HLS STREAM variable=cu_mem_req     depth=2              dim=1
 #pragma HLS STREAM variable=cu_mem_resp    depth=2              dim=1
 #pragma HLS STREAM variable=barrier_events depth=MAX_WARPS_PER_CU dim=1
 #pragma HLS STREAM variable=barrier_signal depth=2              dim=1
+#pragma HLS STREAM variable=reg_seed       depth=4              dim=1
+#pragma HLS STREAM variable=loaded_sig     depth=1              dim=1
 
     // ------------------------------------------------------------------
     // Kernel-wide barrier controller
@@ -182,9 +187,15 @@ void gpgpu_scheduler(
 
     programLoader(
         program_ptr,
+        initial_regs_ptr0,
+        initial_regs_ptr1,
         program_len,
+        total_warps,
+        warp_id_offset,
         start,
-        cu
+        cu,
+        reg_seed,
+        loaded_sig
     );
 
     // ------------------------------------------------------------------
@@ -204,53 +215,92 @@ void gpgpu_scheduler(
             status_in[c],
             barrier_events[c],
             barrier_signal[c],
-            warp_id_offset
+            warp_id_offset,
+            loaded_sig[c]
         );
     }
 
     // ------------------------------------------------------------------
     // Compute pipelines
     //
-    // IMPORTANT:
-    //
-    // Previously both instances received:
-    //
-    //     initial_regs_ptr
-    //
-    // which caused:
-    //
-    // [HLS 200-1013]
-    // cannot read data in multiple processes
-    //
-    // CU0 now owns initial_regs_ptr0 / gmem1.
-    // CU1 now owns initial_regs_ptr1 / gmem2.
-    //
-    // Both pointers may point to the SAME physical DDR address at runtime.
+    // Register files are declared as explicitly named variables (cu_regs_0..11)
+    // rather than cu[c].regsArray() through a loop. HLS DATAFLOW aliasing
+    // analysis runs before UNROLL, so indexing through a loop makes every
+    // instance appear to access the same BRAM (WARNING 214-475 "Merging
+    // processes due to writes on cu_regs_0"). Separate named variables prevent
+    // any cross-instance aliasing.
     // ------------------------------------------------------------------
 
-    for (int c = 0; c < NUM_CUS; ++c) {
-#pragma HLS UNROLL
-        cu_id_t cu_id = cu_id_t(c);
-        reg_t* initial_regs_ptr = (c % 2 == 0) ? initial_regs_ptr0 : initial_regs_ptr1;
-        instr_word_t (&program_c)[MAX_PROGRAM_LEN] = cu[c].programArray();
-        reg_t (&regs_c)
-            [MAX_WARPS_PER_CU]
-            [MAX_THREADS_PER_WARP]
-            [NUM_REGS_PER_THREAD] =
-                cu[c].regsArray();
-
-        compute_pipeline(
-            cu_id,
-            dispatch_out[c],
-            program_c,
-            program_len,
-            regs_c,
-            initial_regs_ptr,
-            cu_mem_req[c],
-            cu_mem_resp[c],
-            status_in[c]
-        );
-    }
+    reg_t cu_regs_0[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_0 dim=2 complete
+    compute_pipeline(cu_id_t(0), dispatch_out[0], cu[0].programArray(), program_len,
+                     cu_regs_0, reg_seed[0], cu_mem_req[0], cu_mem_resp[0], status_in[0]);
+#if RISCV_GPGPU_NUM_CUS >= 2
+    reg_t cu_regs_1[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_1 dim=2 complete
+    compute_pipeline(cu_id_t(1), dispatch_out[1], cu[1].programArray(), program_len,
+                     cu_regs_1, reg_seed[1], cu_mem_req[1], cu_mem_resp[1], status_in[1]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 3
+    reg_t cu_regs_2[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_2 dim=2 complete
+    compute_pipeline(cu_id_t(2), dispatch_out[2], cu[2].programArray(), program_len,
+                     cu_regs_2, reg_seed[2], cu_mem_req[2], cu_mem_resp[2], status_in[2]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 4
+    reg_t cu_regs_3[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_3 dim=2 complete
+    compute_pipeline(cu_id_t(3), dispatch_out[3], cu[3].programArray(), program_len,
+                     cu_regs_3, reg_seed[3], cu_mem_req[3], cu_mem_resp[3], status_in[3]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 5
+    reg_t cu_regs_4[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_4 dim=2 complete
+    compute_pipeline(cu_id_t(4), dispatch_out[4], cu[4].programArray(), program_len,
+                     cu_regs_4, reg_seed[4], cu_mem_req[4], cu_mem_resp[4], status_in[4]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 6
+    reg_t cu_regs_5[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_5 dim=2 complete
+    compute_pipeline(cu_id_t(5), dispatch_out[5], cu[5].programArray(), program_len,
+                     cu_regs_5, reg_seed[5], cu_mem_req[5], cu_mem_resp[5], status_in[5]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 7
+    reg_t cu_regs_6[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_6 dim=2 complete
+    compute_pipeline(cu_id_t(6), dispatch_out[6], cu[6].programArray(), program_len,
+                     cu_regs_6, reg_seed[6], cu_mem_req[6], cu_mem_resp[6], status_in[6]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 8
+    reg_t cu_regs_7[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_7 dim=2 complete
+    compute_pipeline(cu_id_t(7), dispatch_out[7], cu[7].programArray(), program_len,
+                     cu_regs_7, reg_seed[7], cu_mem_req[7], cu_mem_resp[7], status_in[7]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 9
+    reg_t cu_regs_8[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_8 dim=2 complete
+    compute_pipeline(cu_id_t(8), dispatch_out[8], cu[8].programArray(), program_len,
+                     cu_regs_8, reg_seed[8], cu_mem_req[8], cu_mem_resp[8], status_in[8]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 10
+    reg_t cu_regs_9[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_9 dim=2 complete
+    compute_pipeline(cu_id_t(9), dispatch_out[9], cu[9].programArray(), program_len,
+                     cu_regs_9, reg_seed[9], cu_mem_req[9], cu_mem_resp[9], status_in[9]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 11
+    reg_t cu_regs_10[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_10 dim=2 complete
+    compute_pipeline(cu_id_t(10), dispatch_out[10], cu[10].programArray(), program_len,
+                     cu_regs_10, reg_seed[10], cu_mem_req[10], cu_mem_resp[10], status_in[10]);
+#endif
+#if RISCV_GPGPU_NUM_CUS >= 12
+    reg_t cu_regs_11[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cu_regs_11 dim=2 complete
+    compute_pipeline(cu_id_t(11), dispatch_out[11], cu[11].programArray(), program_len,
+                     cu_regs_11, reg_seed[11], cu_mem_req[11], cu_mem_resp[11], status_in[11]);
+#endif
 
     // ------------------------------------------------------------------
     // N:1 memory arbitration

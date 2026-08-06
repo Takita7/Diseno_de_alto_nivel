@@ -71,12 +71,9 @@ struct CpFixture {
     void start(reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
                uint32_t program_len, ap_uint<32>* global_mem, cu_id_t cu_id = 0) {
         compute_thread = std::thread([this, regs, program_len, cu_id]() {
-            // nullptr: same rationale as test_compute_pipeline.cpp's
-            // CpFixture - dispatchAndWait() below never sets fresh_launch,
-            // so docs/hls/interfaces.md SS16's initial_regs_ptr is never
-            // dereferenced here.
-            compute_pipeline(cu_id, dispatch_in, program, program_len, regs, nullptr,
-                              mem_req, mem_resp, status_out);
+            hls::stream<reg_seed_t> reg_seed_in;
+            compute_pipeline(cu_id, dispatch_in, program, program_len, regs,
+                              reg_seed_in, mem_req, mem_resp, status_out);
         });
         memory_thread = std::thread([this, global_mem]() {
             memory_pipeline(mem_req, mem_resp, global_mem);

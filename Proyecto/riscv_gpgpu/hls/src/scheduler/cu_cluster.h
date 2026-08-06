@@ -63,6 +63,63 @@ inline void clusterBarrierRelay(
     }
 }
 
+// Register loader for one cluster: seeds CLUSTER_SIZE CUs' register files from
+// initial_regs_ptr and signals each schedulerCore when its CU is ready.
+// Mirrors programLoader's Phase 2 but scoped to one cluster and one AXI port.
+inline void clusterRegLoader(
+    reg_t*    initial_regs_ptr,
+    cu_id_t   base_cu_id,
+    warp_id_t total_warps,
+    warp_id_t warp_id_offset,
+    bool&     start,
+    hls::stream<reg_seed_t> (&seed_out)[CLUSTER_SIZE],
+    hls::stream<bool>       (&loaded_out)[CLUSTER_SIZE]
+) {
+    bool     done      = false;
+    uint8_t  seed_c    = 0;
+    uint8_t  seed_slot = 0;
+    uint32_t seed_i    = 0;
+
+    while (true) {
+#pragma HLS PIPELINE off
+        if (!start) {
+            done      = false;
+            seed_c    = 0;
+            seed_slot = 0;
+            seed_i    = 0;
+            continue;
+        }
+        if (!done) {
+            if (seed_c < CLUSTER_SIZE) {
+                warp_id_t global_cu = warp_id_t(int(base_cu_id) + seed_c);
+                warp_id_t local_w   = global_cu + warp_id_t(seed_slot) * warp_id_t(NUM_CUS);
+                if (local_w < total_warps) {
+                    warp_id_t global_w = warp_id_offset + local_w;
+                    uint64_t  base     = uint64_t(global_w) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
+                    reg_seed_t s;
+                    s.slot_id = slot_id_t(seed_slot);
+                    s.flat_i  = ap_uint<10>(seed_i);
+                    s.value   = initial_regs_ptr[base + seed_i];
+                    seed_out[seed_c].write(s);
+                }
+                ++seed_i;
+                if (seed_i >= uint32_t(MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD)) {
+                    seed_i = 0;
+                    ++seed_slot;
+                    if (seed_slot >= uint8_t(MAX_WARPS_PER_CU)) {
+                        seed_slot = 0;
+                        loaded_out[seed_c].write(true);
+                        ++seed_c;
+                    }
+                }
+            } else {
+                done = true;
+                seed_c = 0; seed_slot = 0; seed_i = 0;
+            }
+        }
+    }
+}
+
 // Per-cluster DATAFLOW region: CLUSTER_SIZE schedulers + compute_pipelines
 // + a local memory arbiter that merges CLUSTER_SIZE req streams into one
 // cluster-level output and routes responses back.
@@ -93,6 +150,8 @@ inline void cuCluster(
     hls::stream<warp_status_t>     status_in[CLUSTER_SIZE];
     hls::stream<mem_req_t>         cu_mem_req[CLUSTER_SIZE];
     hls::stream<mem_resp_t>        cu_mem_resp[CLUSTER_SIZE];
+    hls::stream<reg_seed_t>        reg_seed[CLUSTER_SIZE];
+    hls::stream<bool>              loaded_sig[CLUSTER_SIZE];
 
 #pragma HLS STREAM variable=sched_events  depth=MAX_WARPS_PER_CU dim=1
 #pragma HLS STREAM variable=sched_signal  depth=2                dim=1
@@ -100,9 +159,14 @@ inline void cuCluster(
 #pragma HLS STREAM variable=status_in     depth=2                dim=1
 #pragma HLS STREAM variable=cu_mem_req    depth=2                dim=1
 #pragma HLS STREAM variable=cu_mem_resp   depth=2                dim=1
+#pragma HLS STREAM variable=reg_seed      depth=4                dim=1
+#pragma HLS STREAM variable=loaded_sig    depth=1                dim=1
 
     clusterBarrierRelay(start, sched_events, cluster_events_out,
                         cluster_signal_in, sched_signal);
+
+    clusterRegLoader(initial_regs_ptr, base_cu_id, total_warps, warp_id_offset,
+                     start, reg_seed, loaded_sig);
 
     for (int c = 0; c < CLUSTER_SIZE; ++c) {
 #pragma HLS UNROLL
@@ -110,18 +174,64 @@ inline void cuCluster(
         schedulerCore(cu[c], cu_id, program_len, total_warps, start,
                       dispatch_out[c], status_in[c],
                       sched_events[c], sched_signal[c],
-                      warp_id_offset);
+                      warp_id_offset, loaded_sig[c]);
     }
 
-    for (int c = 0; c < CLUSTER_SIZE; ++c) {
-#pragma HLS UNROLL
-        cu_id_t cu_id = cu_id_t(int(base_cu_id) + c);
-        // Alternate ptr0/ptr1 per CU to satisfy DATAFLOW's one-reader-per-port
-        // requirement (same pattern as the flat-DATAFLOW 2-CU original).
-        compute_pipeline(cu_id, dispatch_out[c], cu[c].programArray(), program_len,
-                         cu[c].regsArray(), initial_regs_ptr,
-                         cu_mem_req[c], cu_mem_resp[c], status_in[c]);
-    }
+    // Explicit register files per cluster-CU (same aliasing fix as gpgpu_top.cpp).
+    reg_t cl_regs_0[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_0 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+0), dispatch_out[0], cu[0].programArray(),
+                     program_len, cl_regs_0, reg_seed[0],
+                     cu_mem_req[0], cu_mem_resp[0], status_in[0]);
+#if CLUSTER_SIZE >= 2
+    reg_t cl_regs_1[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_1 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+1), dispatch_out[1], cu[1].programArray(),
+                     program_len, cl_regs_1, reg_seed[1],
+                     cu_mem_req[1], cu_mem_resp[1], status_in[1]);
+#endif
+#if CLUSTER_SIZE >= 3
+    reg_t cl_regs_2[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_2 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+2), dispatch_out[2], cu[2].programArray(),
+                     program_len, cl_regs_2, reg_seed[2],
+                     cu_mem_req[2], cu_mem_resp[2], status_in[2]);
+#endif
+#if CLUSTER_SIZE >= 4
+    reg_t cl_regs_3[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_3 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+3), dispatch_out[3], cu[3].programArray(),
+                     program_len, cl_regs_3, reg_seed[3],
+                     cu_mem_req[3], cu_mem_resp[3], status_in[3]);
+#endif
+#if CLUSTER_SIZE >= 5
+    reg_t cl_regs_4[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_4 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+4), dispatch_out[4], cu[4].programArray(),
+                     program_len, cl_regs_4, reg_seed[4],
+                     cu_mem_req[4], cu_mem_resp[4], status_in[4]);
+#endif
+#if CLUSTER_SIZE >= 6
+    reg_t cl_regs_5[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_5 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+5), dispatch_out[5], cu[5].programArray(),
+                     program_len, cl_regs_5, reg_seed[5],
+                     cu_mem_req[5], cu_mem_resp[5], status_in[5]);
+#endif
+#if CLUSTER_SIZE >= 7
+    reg_t cl_regs_6[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_6 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+6), dispatch_out[6], cu[6].programArray(),
+                     program_len, cl_regs_6, reg_seed[6],
+                     cu_mem_req[6], cu_mem_resp[6], status_in[6]);
+#endif
+#if CLUSTER_SIZE >= 8
+    reg_t cl_regs_7[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
+#pragma HLS ARRAY_PARTITION variable=cl_regs_7 dim=2 complete
+    compute_pipeline(cu_id_t(int(base_cu_id)+7), dispatch_out[7], cu[7].programArray(),
+                     program_len, cl_regs_7, reg_seed[7],
+                     cu_mem_req[7], cu_mem_resp[7], status_in[7]);
+#endif
 
     mem_arbiter_n<CLUSTER_SIZE>(cu_mem_req, cu_mem_resp,
                                 cluster_req_out, cluster_resp_in);

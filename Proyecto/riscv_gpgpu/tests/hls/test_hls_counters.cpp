@@ -59,8 +59,9 @@ struct CpFixture {
     void start(reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
                uint32_t program_len, cu_id_t cu_id = 0) {
         th = std::thread([this, regs, program_len, cu_id]() {
-            compute_pipeline(cu_id, dispatch_in, program, program_len, regs, nullptr,
-                              mem_req_out, mem_resp_in, status_out);
+            hls::stream<reg_seed_t> reg_seed_in;
+            compute_pipeline(cu_id, dispatch_in, program, program_len, regs,
+                              reg_seed_in, mem_req_out, mem_resp_in, status_out);
         });
     }
 
@@ -236,8 +237,9 @@ TEST(HlsCounters, Conv2d3x3HasMoreInstrsThanIntSaxpy) {
     mem_th.detach();
 
     std::thread conv_th([&]() {
+        hls::stream<reg_seed_t> conv_reg_seed;
         compute_pipeline(0, conv_dispatch, conv_program, static_cast<uint32_t>(n_conv),
-                          regs_conv, nullptr, conv_req, conv_resp, conv_status);
+                          regs_conv, conv_reg_seed, conv_req, conv_resp, conv_status);
     });
     conv_th.detach();
 

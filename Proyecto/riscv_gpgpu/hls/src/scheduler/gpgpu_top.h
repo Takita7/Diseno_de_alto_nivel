@@ -79,25 +79,45 @@ namespace riscv_gpgpu_hls {
 // unaffected - schedulerCore is never itself `set_top`, only called from
 // within gpgpu_scheduler, so this is purely an internal-helper signature
 // choice).
+// Loads program words from DRAM and seeds all CU register files via per-CU
+// reg_seed streams, then signals each schedulerCore once its CU is ready.
+// Owning initial_regs_ptr0/1 here (not in compute_pipeline) means exactly ONE
+// DATAFLOW process accesses each AXI port regardless of NUM_CUS, fixing the
+// multi-process port sharing that caused HLS to merge compute_pipeline instances.
 inline void programLoader(
     instr_word_t* program_ptr,
+    reg_t*        initial_regs_ptr0,
+    reg_t*        initial_regs_ptr1,
     uint32_t      program_len,
+    warp_id_t     total_warps,
+    warp_id_t     warp_id_offset,
     bool&         start,
-    CuDispatchUnit (&cus)[NUM_CUS]
+    CuDispatchUnit (&cus)[NUM_CUS],
+    hls::stream<reg_seed_t> (&seed_out)[NUM_CUS],
+    hls::stream<bool>       (&loaded_out)[NUM_CUS]
 ) {
-    bool     loaded   = false;
-    uint32_t load_idx = 0;
+    bool     loaded    = false;
+    uint32_t load_idx  = 0;
+    bool     regs_done = false;
+    uint8_t  seed_c    = 0;
+    uint8_t  seed_slot = 0;
+    uint32_t seed_i    = 0;
 
     while (true) {
 #pragma HLS PIPELINE off
 
         if (!start) {
-            loaded   = false;
-            load_idx = 0;
+            loaded    = false;
+            load_idx  = 0;
+            regs_done = false;
+            seed_c    = 0;
+            seed_slot = 0;
+            seed_i    = 0;
             continue;
         }
 
         if (!loaded) {
+            // Phase 1: broadcast program words to all CUs.
             if (load_idx < MAX_PROGRAM_LEN) {
                 if (load_idx < program_len) {
                     instr_word_t instr = program_ptr[load_idx];
@@ -112,7 +132,41 @@ LOAD_PROGRAM_WORDS:
             } else {
                 loaded = true;
             }
+        } else if (!regs_done) {
+            // Phase 2: seed register files one word per iteration.
+            // Iterates (seed_c, seed_slot, seed_i) in order; sends loaded_out[c]
+            // immediately after the last word for CU c, so schedulerCore[c] can
+            // start dispatching while later CUs are still being seeded.
+            if (seed_c < NUM_CUS) {
+                warp_id_t local_w  = warp_id_t(seed_c) + warp_id_t(seed_slot) * warp_id_t(NUM_CUS);
+                if (local_w < total_warps) {
+                    warp_id_t global_w = warp_id_offset + local_w;
+                    uint64_t  base     = uint64_t(global_w) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
+                    reg_t*    ptr      = ((global_w & 1) == 0) ? initial_regs_ptr0 : initial_regs_ptr1;
+                    reg_seed_t s;
+                    s.slot_id = slot_id_t(seed_slot);
+                    s.flat_i  = ap_uint<10>(seed_i);
+                    s.value   = ptr[base + seed_i];
+                    seed_out[seed_c].write(s);
+                }
+                // Advance state.
+                ++seed_i;
+                if (seed_i >= uint32_t(MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD)) {
+                    seed_i = 0;
+                    ++seed_slot;
+                    if (seed_slot >= uint8_t(MAX_WARPS_PER_CU)) {
+                        seed_slot = 0;
+                        // All slots for this CU seeded — unblock its schedulerCore.
+                        loaded_out[seed_c].write(true);
+                        ++seed_c;
+                    }
+                }
+            } else {
+                regs_done = true;
+                seed_c = 0; seed_slot = 0; seed_i = 0;
+            }
         }
+        // else: fully loaded until start goes low again
     }
 }
 
@@ -166,7 +220,8 @@ inline void schedulerCore(
     hls::stream<warp_status_t>&   status_in,
     hls::stream<WarpStatusCode>&   barrier_events_out,
     hls::stream<barrier_signal_t>& barrier_signal_in,
-    warp_id_t       warp_id_offset = 0
+    warp_id_t       warp_id_offset,
+    hls::stream<bool>& loaded_in   // from programLoader: consumed once per kernel launch
 ) {
     WarpSlot      slots[MAX_WARPS_PER_CU];
     bool          busy_cu_scheduler = false;   // this CU's own IDLE/RUNNING
@@ -187,6 +242,11 @@ inline void schedulerCore(
             // the same way, so a faulted launch never causes this CU to
             // dispatch warps barrierCore itself refused to accept.
             if (total_warps > warp_id_t(NUM_CUS * MAX_WARPS_PER_CU)) continue;
+            // Wait until programLoader has seeded all register files for this CU
+            // and written the loaded_in token. Guarantees reg_seed_in is fully
+            // drained in compute_pipeline before the first dispatch arrives.
+            if (loaded_in.empty()) continue;
+            loaded_in.read();
 
             launchSlots(slots, cu_id, total_warps, warp_id_offset);
             busy_cu = false;

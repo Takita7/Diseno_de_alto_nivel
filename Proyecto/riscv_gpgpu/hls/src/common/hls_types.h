@@ -210,6 +210,17 @@ struct WarpSlot {
     bool          fresh      = false;
 };
 
+// programLoader -> compute_pipeline: one register word per message.
+// programLoader is the sole reader of initial_regs_ptr (DRAM); compute_pipeline
+// is the sole writer of regs[][] (BRAM). Streams decouple them so that each
+// compute_pipeline[c] has its own exclusive AXI path via programLoader, satisfying
+// DATAFLOW's one-process-per-AXI-port rule for any NUM_CUS.
+struct reg_seed_t {
+    slot_id_t   slot_id;  // CU-local slot index
+    ap_uint<10> flat_i;   // thread*NUM_REGS_PER_THREAD + reg_idx (0..1023)
+    reg_t       value;
+};
+
 // CuDispatchUnit -> compute_pipeline (docs/hls/interfaces.md SS2.5.3).
 // Supersedes compute_pipeline's old per-invocation scalar arguments
 // (cu_id/warp_id/active_mask_init, SS2.2) with one stream-carried struct.
@@ -218,13 +229,9 @@ struct warp_dispatch_t {
     warp_id_t     warp_id           = 0;
     thread_mask_t active_mask_init  = 0;
     ap_uint<16>   resume_pc         = 0;   // 0 for a fresh warp, else past the BARRIER
-    // docs/hls/interfaces.md SS16: true exactly once per warp, on its
-    // first dispatch after launch - tells compute_pipeline to seed
-    // regs[slot_id] from initial_regs_ptr (indexed by warp_id) before
-    // executing. Needed so regs_ has exactly one writer (compute_pipeline
-    // itself) for real Vitis HLS DATAFLOW legality (SS15) - the scheduler
-    // used to load initial regs at launch time, which real csynth
-    // rejected as a second writer.
+    // Kept for backward ABI compatibility; compute_pipeline no longer reads
+    // this field — register seeding now happens via reg_seed_t streams from
+    // programLoader before the first dispatch arrives.
     bool          fresh_launch      = false;
 };
 
