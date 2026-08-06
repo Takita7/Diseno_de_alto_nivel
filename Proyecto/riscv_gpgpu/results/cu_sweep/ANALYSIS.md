@@ -92,38 +92,103 @@ Esperaríamos que al duplicar CUs se dupliquen los recursos. La tabla muestra
 que entre CU=2 y CU=4 el crecimiento es lineal (~2.5% LUTs adicionales),
 pero CU=8 invierte la tendencia:
 
-| Transición    | ΔLUT    | ΔBRAM  | Explicación |
-|---------------|---------|--------|-------------|
-| CU=2 → CU=4  | +523    | +1     | Crecimiento lineal esperado |
-| CU=4 → CU=8  | −15,507 | −35.5  | Optimización agresiva de Vivado |
+| Transición    | ΔLUT    | ΔBRAM (post-impl) | Explicación |
+|---------------|---------|-------------------|-------------|
+| CU=2 → CU=4  | +523    | +1                | Crecimiento lineal esperado |
+| CU=4 → CU=8  | −15,507 | −35.5             | Optimización agresiva de Vivado |
 
 El comportamiento de CU=8 refleja que el `memory_pipeline` con 8 cachés L1
 produce estructuras más regulares que el sintetizador explota con mayor eficiencia.
 El hecho de que no haya DSPs en CU=8 sugiere que las rutas de datos aritméticas
 quedaron mapeadas a fabric, no a primitivas dedicadas.
 
+### 5.1 BRAMs: modelo HLS vs. post-implementación
+
+Los BRAMs **sí escalan** con `NUM_CUS` en el modelo HLS porque `memory_pipeline`
+declara arrays que crecen linealmente:
+
+```cpp
+// hls/src/memory/memory_pipeline.h
+reg_t   shared_mem_[NUM_CUS][SHARED_MEM_WORDS_PER_CU];
+L1Cache l1_caches_[NUM_CUS];
+```
+
+La estimación de síntesis HLS (`csynth.rpt`) refleja ese crecimiento:
+
+| NUM_CUS | BRAM_18K estimado (HLS) | % del target (288 tiles) |
+|---------|------------------------|--------------------------|
+| 2       | 86                     | 29%                      |
+| 8       | 261                    | 90%                      |
+
+Sin embargo, la implementación Vivado post-route muestra valores mucho menores
+(44 y 9.5 tiles respectivamente). La discrepancia se debe a que Vivado elimina
+los bancos de BRAM que no tienen fanout activo en el diseño sintetizado cuando
+los puertos AXI de la IP no están conectados a tráfico real en el block design.
+
+**Conclusión:** a medida que NUM_CUS crezca hacia el límite de recursos del KV260,
+el cuello de botella será los BRAMs (crecimiento ~3× por cada 4× de CUs) y no
+las LUTs. Para NUM_CUS ≥ 10 la estimación HLS supera el 90% de BRAM disponible,
+lo que limitará la implementación antes de que se agoten las LUTs.
+
 ---
 
-## 6. Artefactos generados
+## 6. Potencia post-implementación
+
+Estimación de potencia a proceso típico, temperatura ambiente 25 °C, con el
+modelo de actividad predeterminado de Vivado (confianza: Medium).
+
+### 6.1 Resumen total
+
+| Métrica                  | CU=2      | CU=4      | CU=8      |
+|--------------------------|-----------|-----------|-----------|
+| Total On-Chip Power (W)  | **2.778** | **2.770** | **2.688** |
+| Dynamic (W)              | 2.477     | 2.469     | 2.388     |
+| Device Static (W)        | 0.301     | 0.301     | 0.300     |
+| Junction Temp (°C)       | 31.4      | 31.4      | 31.2      |
+| Max Ambient (°C)         | 78.6      | 78.6      | 78.8      |
+
+> El PS8 (Processing System) domina el consumo dinámico con ~2.215 W constante
+> en las tres configuraciones. El PL (lógica programable) representa la diferencia.
+
+### 6.2 Desglose de potencia dinámica (PL)
+
+| Componente   | CU=2 (W) | CU=4 (W) | CU=8 (W) |
+|--------------|----------|----------|----------|
+| Clocks       | 0.071    | 0.070    | 0.032    |
+| Signals      | 0.037    | 0.032    | 0.024    |
+| DSPs         | 0.005    | 0.005    | 0.000    |
+| PS8          | 2.215    | 2.215    | 2.215    |
+| Static       | 0.301    | 0.301    | 0.300    |
+
+> CU=8 consume menos potencia dinámica en PL (~0.056 W vs ~0.118 W para CU=2)
+> principalmente por tener 0 DSPs activos y menos señales conmutando, consistente
+> con la menor utilización de LUTs y registros observada en implementación.
+
+---
+
+## 7. Artefactos generados
 
 | Archivo | Descripción |
 |---------|-------------|
 | `num_cus_2/num_cus_2_implementation_utilization.rpt` | Utilización post-impl CU=2 |
 | `num_cus_2/num_cus_2_implementation_timing.rpt`      | Timing post-impl CU=2 |
 | `num_cus_2/num_cus_2_implementation_drc.rpt`         | DRC post-impl CU=2 |
+| `num_cus_2/num_cus_2_implementation_power.rpt`       | Potencia post-impl CU=2 |
 | `num_cus_2/num_cus_2_gpgpu_system_wrapper.bit`       | Bitstream CU=2 |
 | `num_cus_4/num_cus_4_implementation_utilization.rpt` | Utilización post-impl CU=4 |
 | `num_cus_4/num_cus_4_implementation_timing.rpt`      | Timing post-impl CU=4 |
 | `num_cus_4/num_cus_4_implementation_drc.rpt`         | DRC post-impl CU=4 |
+| `num_cus_4/num_cus_4_implementation_power.rpt`       | Potencia post-impl CU=4 |
 | `num_cus_4/num_cus_4_gpgpu_system_wrapper.bit`       | Bitstream CU=4 |
 | `num_cus_8/num_cus_8_implementation_utilization.rpt` | Utilización post-impl CU=8 |
 | `num_cus_8/num_cus_8_implementation_timing.rpt`      | Timing post-impl CU=8 |
 | `num_cus_8/num_cus_8_implementation_drc.rpt`         | DRC post-impl CU=8 |
+| `num_cus_8/num_cus_8_implementation_power.rpt`       | Potencia post-impl CU=8 |
 | `num_cus_8/num_cus_8_gpgpu_system_wrapper.bit`       | Bitstream CU=8 |
 
 ---
 
-## 7. Conclusiones
+## 8. Conclusiones
 
 1. **CU=2** es la configuración más conservadora: cumple timing con WNS de +0.010 ns,
    usa ~18% de LUTs y ~30% de BRAMs. Recomendada como baseline seguro.
