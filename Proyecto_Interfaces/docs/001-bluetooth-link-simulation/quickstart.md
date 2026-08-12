@@ -17,7 +17,12 @@ handoffs between stages.
   Each MUST return `1`. (Confirmed locally: toolbox files present under
   `/usr/local/MATLAB/R2026a/toolbox/{bluetooth,comm,wlan}`; license status should
   still be checked, since installed files don't guarantee an active license seat.)
-- Repository root on the MATLAB path (`addpath(genpath('src'))`).
+- Repository root on the MATLAB path (`addpath(genpath('src'))`, or run `startup.m`).
+
+**Verified on**: 2026-08-11, MATLAB R2026a (26.1.0.3251617), all three
+`license('test', ...)` calls above returned `1`. Full pipeline (Steps 1-6) run
+end-to-end via `runPipeline.m`; all 30 `matlab.unittest` tests in
+`tests/unit`, `tests/contract`, `tests/integration` passed (`runTests.m`).
 
 ## Step 1 — Validate BR/EDR waveform generation (User Story 1, Acceptance Scenario 1)
 

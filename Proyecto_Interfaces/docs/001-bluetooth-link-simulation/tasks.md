@@ -244,3 +244,28 @@ Task: "Implement src/tx/generateLEWaveform.m"
 - Every implementation task names its exact file path, per plan.md's Project Structure
 - Commit after each task or logical group
 - Stop at any checkpoint to validate a story independently before moving on
+
+---
+
+## Phase 8: Convergence
+
+**Purpose**: Assessed against the actual MATLAB implementation at
+`Diseno_de_alto_nivel/Proyecto_Interfaces/Matlab/` (`main_simulation.m` +
+MathWorks' unmodified `helperBluetoothChannelClassification.m`,
+`helperInterferingWLANNode.m`, `helperVisualizeCoexistence.m`). That code
+correctly stands up the mandatory official coexistence example (User Story 2's
+starting point) but has not yet built the customizations this feature's spec,
+plan, and tasks call for. Findings below are ordered CRITICAL/HIGH first.
+
+- [x] T041 Add automated `matlab.unittest` coverage (`tests/unit`, `tests/contract`, `tests/integration`) for the Bluetooth simulation code per Constitution II (missing, CRITICAL)
+- [x] T042 Implement standalone BR/EDR waveform generation via `bluetoothWaveformGenerator` returning an inspectable `BluetoothWaveform` struct, independent of the network-level `bluetoothNode` path currently in `main_simulation.m`, per FR-001/FR-003/US1 AC1 (missing, CRITICAL)
+- [x] T043 Implement the LE waveform generation and validation path via `bleWaveformGenerator`/`bleIdealReceiver` per FR-002/US1 AC2 and `research.md` Decision 3 (missing, CRITICAL)
+- [x] T044 Implement link-level BER measurement (compare decoded bits against known payload bits) per FR-006 — `main_simulation.m`'s own trailing comments already name this as an unfinished next step (missing, CRITICAL)
+- [x] T045 Implement an AFH-disabled-vs-AFH-enabled comparison harness that runs the coexistence scenario twice under identical conditions and computes `afhImprovementDelta`, replacing the current single fixed `enableChannelClassification = true` run, per FR-007/US3 AC2 (missing, HIGH)
+- [x] T046 Compute and record the three remaining normalized metrics — performance margin, spectral efficiency, and qualitative degradation sensitivity — per FR-008 (missing, HIGH)
+- [x] T047 Centralize the WLAN/channel parameters currently hardcoded inline in `main_simulation.m` (2.442/2.447 GHz, 20 MHz, 2 ms periodicity, 250 ms classification interval, 40% PER threshold) into a `scenarioConfig`-equivalent with a per-field `citationSource`, per FR-005 (partial, HIGH)
+- [x] T048 Create the `src/tx`, `src/channel`, `src/rx`, `src/common`, `tests/*`, `results/*` directory tree and place the implementation accordingly, per `plan.md` Project Structure / T001 (missing, HIGH)
+- [x] T049 Persist run outputs (figures as `.png`/`.fig`, metrics as `.mat`/`.csv`) under `results/figures` and `results/metrics` instead of only live console/figure display, per plan T031 and FR-008/FR-009 (missing, HIGH)
+- [x] T050 Run `checkcode` across all `.m` files, resolve warnings, and record the result, per Constitution I (missing, MEDIUM)
+- [x] T051 Add a repository-root `startup.m` (`addpath(genpath('src'))`) and record the toolbox-license verification note in `quickstart.md`, per plan T002/T003 (missing, MEDIUM)
+- [x] T052 Create `src/common/plotHelpers.m` for shared figure styling ahead of adding new BER/spectral-efficiency figures, per plan T005 and Constitution III (missing, LOW)
