@@ -65,10 +65,11 @@ constexpr int INVALID_SLOT = MAX_WARPS_PER_CU;
 // Single-slot assignment - the same round-robin arithmetic
 // WarpScheduler::generateWarps() uses (warp w belongs to CU w % NUM_CUS).
 inline void assignSlot(WarpSlot (&slots)[MAX_WARPS_PER_CU], int slot,
-                        cu_id_t cu_id, warp_id_t total_warps) {
-    warp_id_t w = warp_id_t(cu_id) + warp_id_t(slot) * warp_id_t(NUM_CUS);
-    if (w < total_warps) {
-        slots[slot].warp_id    = w;
+                        cu_id_t cu_id, warp_id_t total_warps,
+                        warp_id_t warp_id_offset = 0) {
+    warp_id_t local_w = warp_id_t(cu_id) + warp_id_t(slot) * warp_id_t(NUM_CUS);
+    if (local_w < total_warps) {
+        slots[slot].warp_id    = warp_id_offset + local_w;  // global warp_id
         slots[slot].resume_pc  = 0;
         slots[slot].barrier_id = 0;
         slots[slot].state      = WarpSlot::State::READY;
@@ -80,11 +81,12 @@ inline void assignSlot(WarpSlot (&slots)[MAX_WARPS_PER_CU], int slot,
 
 // Called once per kernel launch - assigns every resident slot for this CU.
 inline void launchSlots(WarpSlot (&slots)[MAX_WARPS_PER_CU], cu_id_t cu_id,
-                         warp_id_t total_warps) {
+                         warp_id_t total_warps,
+                         warp_id_t warp_id_offset = 0) {
 LAUNCH_SLOTS:
     for (int slot = 0; slot < MAX_WARPS_PER_CU; ++slot) {
 #pragma HLS UNROLL
-        assignSlot(slots, slot, cu_id, total_warps);
+        assignSlot(slots, slot, cu_id, total_warps, warp_id_offset);
     }
 }
 

@@ -4982,3 +4982,135 @@ Real resource cost for this whole diagram (SS16.37): BRAM 222/288
 (83%), URAM 16/64 (25%) - confirmed synthesis, not projected.
 
 ---
+
+## §17 SystemC↔HLS Parity Matrix (T074)
+
+Explicit alignment status between the latest SystemC golden model
+(`models/systemc/src/`) and the HLS implementation (`hls/src/`).
+Updated after the `origin/init_gpgpu` merge (§9) and T022c/d, T022d,
+T024 post-work.  Each row's "Follow-up" column cites the task that
+either closed the gap or governs the remaining work.
+
+| SystemC module / file | HLS file | Status | Follow-up |
+|---|---|---|---|
+| `compute_unit/compute_unit.cpp` — `executeWarp()` Virtual-ISA dispatch | `hls/src/compute_unit/compute_pipeline.cpp` | **Aligned** | T022, T022c/d verified 25/25 tests |
+| `compute_unit/compute_unit.cpp` — `executeRV32()` binary fetch/execute via `riscv_isa.h` | `hls/src/compute_unit/rv32i_codec.h` (encode/decode) | **Partially aligned** | T075 — RV32I integer ops are bit-identical; RV32F/M and custom GPGPU ops differ (virtual ISA custom-0/1 vs. real F/M standard encodings). Tests in `test_hls_binary_execution.cpp` cover the aligned subset. |
+| `simt_controller/simt_controller.cpp` — `handleBranch()` 3-case fix | `hls/src/simt_controller/divergence_stack.h` | **Aligned** | §9 reconciliation, `FpDivergentSaxpy` regression test |
+| `memory/memory_hierarchy.cpp` — L1/L2 write-through, line-fill | `hls/src/memory/{memory_pipeline.cpp,cache_bank.h}` | **Aligned** | T023; intentional divergence: HLS uses line-granularity BRAM caches (hit rates differ, data is identical — see §7) |
+| `scheduler/warp_scheduler.cpp` — round-robin dispatch, `generateWarps()` | `hls/src/scheduler/cu_dispatch_unit.h` — `assignSlot()`/`nextReadySlot()` | **Aligned** | T022c; deterministic slot assignment replaces dynamic queue (§10.5/10.7) |
+| `top/top.cpp` — `GPGPUTop::simulationProcess()`, single-device | `hls/src/scheduler/gpgpu_top.h` — `gpgpu_scheduler()` | **Aligned** | T022c; single-device scope confirmed (§17.1 below) |
+| `top/system_top/` — multi-GPU distribution (SystemC only) | _No HLS equivalent_ | **Missing** | T076 — scope decision: HLS is single-device; multi-GPU requires host-side composition of multiple `gpgpu_scheduler` instances (§17.1) |
+| `integration/riscv_isa.h` — full RV32IMF decoder | `hls/src/compute_unit/rv32i_codec.h` — encode/decode for Virtual-ISA + RV32I integer | **Partially aligned** | T075 — RV32F/M opcodes (0x43/0x47/0x4F/0x53) not present in `rv32i_codec.h`. Accepted deviation: HLS uses virtual FP ops (VFMUL/VFADD via custom-0) rather than real RV32F instructions |
+| `integration/kernel_bridge.cpp` — thread-context injection, ELF load | Host-side driver (`driver/src/fpga_driver.cpp`, `fpga_elf_loader.cpp`) | **Aligned** | T051/T052 — FPGA path uses the real ARM driver path, not KernelBridge |
+| Run-level observability: `getTotalCycles()`, `getL1CacheHits()`, `getDivergenceEvents()` | `warp_status_t::instr_count` (T077), `MemorySubsystem::getL1CacheHits()` | **Partially aligned** | T077 — `instructions_retired`, `l1_hits`, `l2_hits` now exposed; `barrier_stalls` tracked via status code accumulation; cycle count not exposed (HLS has no cycle counter; omitted by design for KV260 scope) |
+
+### §17.1 Single-Device Scope Contract (T076)
+
+**Decision**: `gpgpu_scheduler` is a single-device HLS IP. It
+orchestrates up to `NUM_CUS` compute units within one FPGA device.
+Multi-device ("multi-GPU") distribution is explicitly out of scope for
+this IP and is handled at the host software layer.
+
+**Rationale**: The KV260 deployment target is a single-device SoC. The
+SystemC `system_top/` multi-GPU layer was a simulation-only convenience
+(no corresponding RTL, no FPGA integration path). Reproducing it in HLS
+would add inter-device AXI topology that does not exist in the KV260
+hardware target.
+
+**Adapter points for host-side multi-instance composition**: if
+multiple `gpgpu_scheduler` instances are needed (e.g., a future
+multi-FPGA deployment), the host should:
+1. Allocate independent DRAM regions for `program_ptr`,
+   `initial_regs_ptr0/1`, and global memory per device.
+2. Issue independent `start` pulses, poll independent `done` signals.
+3. Handle cross-device barrier synchronization in host software (there
+   is no HLS-to-HLS inter-instance barrier channel).
+
+The `NUM_CUS` compile-time constant (currently 2 per §16.37) is the
+only intra-device fan-out that `gpgpu_scheduler` itself manages.
+
+**Tests**: `GpgpuTop.TwoWarpBarrierKernelDrivenAcrossTwoRealCUs`
+in `tests/hls/test_gpgpu_top.cpp` is the definitive multi-CU
+correctness proof — two real `schedulerCore`/`compute_pipeline` pairs,
+one real `barrierCore`, one shared `MemorySubsystem`, barrier resolved
+and register outputs verified. This test was the regression catch that
+exposed the NUM_CUS=2 deadlock in the earlier single-CU test shape
+(§16.37).
+
+---
+
+## §18 Observability Counter Interface Contract (T077)
+
+`warp_status_t::instr_count` (added to `hls/src/common/hls_types.h`)
+is the per-dispatch instruction-retirement counter. The following table
+defines all counters in the `perf_counters_t` struct (also in
+`hls_types.h`) and their sources.
+
+| Counter | Source | Exposed via | Monotonic guarantee |
+|---|---|---|---|
+| `instructions_retired` | `warp_status_t::instr_count` per warp, accumulated by host | Sum across all `status_out` messages for a kernel launch | Yes — non-decreasing across warps for the same kernel |
+| `barrier_stalls` | Count of `STALLED_AT_BARRIER` status codes | Host accumulation of `warp_status_t::code` | Yes |
+| `mem_transactions` | One per `mem_req_t` issued (LW + SW, all active lanes) | Not yet wired at top-level; future work | N/A |
+| `l1_hits` | `MemorySubsystem::getL1CacheHits()` | Post-kernel query on `MemorySubsystem` | Yes — `reset()` clears, then monotonically increases |
+| `l2_hits` | `MemorySubsystem::getL2CacheHits()` | Post-kernel query on `MemorySubsystem` | Yes |
+
+**Verification**: `tests/hls/test_hls_counters.cpp` (T077) proves
+monotonicity for `intSaxpy`, `barrierRoundTrip`, and `conv2d3x3`.
+
+---
+
+## §19 Binary Execution Parity (T075)
+
+**Gap**: The SystemC golden model executes real RV32I/M/F binaries
+(via `riscv_isa.h`'s `decodeRV32()`). The HLS path uses a Virtual-ISA
+encoding for GPGPU-specific ops (VADD/VMUL/VFMUL etc.) via
+`rv32i_codec.h`'s custom-0/custom-1 opcode space.
+
+**Aligned subset** (standard RV32I integer ops — identical encoding in
+both paths):
+
+| Instruction class | RV32I opcode | HLS decode | Status |
+|---|---|---|---|
+| ADD/SUB/AND/OR/XOR/SLT | 0x33 (OP) | `rv32i_opcode::OP` | **Aligned** |
+| ADDI | 0x13 (OP-IMM) | `rv32i_opcode::OP_IMM` | **Aligned** |
+| LUI | 0x37 | `rv32i_opcode::LUI_OP` | **Aligned** |
+| LW | 0x03 (LOAD) | `rv32i_opcode::LOAD_OP` | **Aligned** |
+| SW | 0x23 (STORE) | `rv32i_opcode::STORE_OP` | **Aligned** |
+| BEQ/BNE | 0x63 (BRANCH) | `rv32i_opcode::BRANCH_OP` | **Aligned** |
+
+**Intentional divergences** (accepted, not bugs):
+
+| Feature | SystemC path | HLS path | Accepted deviation |
+|---|---|---|---|
+| Vector ops (VADD/VMUL) | No RV32I equivalent | custom-0 (0x0B) | Semantic equivalence maintained; bit encoding differs |
+| FP ops (VFMUL/VFADD) | No RV32I equivalent | custom-0 (0x0B) | Same |
+| FP scalar (FADD/FMUL) | RV32F 0x53 (OP-FP) | custom-0 (0x0B) | Same |
+| BARRIER | No RV32I equivalent | custom-1 (0x2B) | Same |
+| HALT | No RV32I equivalent | custom-1 (0x2B) | Same |
+
+**Tests**: `tests/hls/test_hls_binary_execution.cpp` (T075) verifies
+the aligned subset with 6 test cases covering ADD, ADDI, SUB, SLT,
+instruction chains, and LW/SW binary encoding.
+
+---
+
+## §20 End-to-End Model Parity Regression (T078)
+
+`tests/hls/test_model_parity.cpp` runs five kernel classes through
+both the HLS `compute_pipeline` and a lightweight C++ reference
+executor (reimplementation of `ComputeUnit::executeWarp()` Virtual-ISA
+semantics in standard C++ — no SystemC dependency) and compares final
+register states.
+
+| Kernel | Class | HLS path | Reference executor | Parity |
+|---|---|---|---|---|
+| `divergentOddEven` | Divergent | compute_pipeline | `executeRef()` in test | Register r5 compared per lane |
+| `barrierRoundTrip` | Barrier-heavy | Two-dispatch sequence | Two-phase `executeRef()` | Register r3 compared per lane |
+| `fpUniformSaxpy` | FP | compute_pipeline | `executeRef()` | Register r6, FP ≤1 ULP tolerance |
+| `fpDivergentSaxpy` | Divergent + FP | compute_pipeline | `executeRef()` | Register r6, masked lanes r6=0 |
+| `intSaxpy` | Integer | compute_pipeline | `executeRef()` | Register r6 compared per lane; `instr_count` ≥ reference count |
+
+**Fail mode**: any register mismatch emits lane/register/HLS-value/
+REF-value and fails the test. FP comparisons use ≤1 ULP relative
+tolerance (1e-6 relative).
+

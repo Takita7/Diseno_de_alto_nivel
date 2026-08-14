@@ -1,0 +1,425 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date              : Thu Aug  6 17:51:13 2026
+| Host              : david-medina-pc running 64-bit Ubuntu 26.04 LTS
+| Command           : report_timing_summary -file /mnt/alto_nivel/Diseno_de_alto_nivel/Proyecto/riscv_gpgpu/build/vivado_kv260/implementation_timing.rpt
+| Design            : gpgpu_system_wrapper
+| Device            : xck26-sfvc784
+| Speed File        : -2LV  PRODUCTION 1.31 12-08-2025
+| Design State      : Routed
+| Temperature Grade : C
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Summary Report
+
+------------------------------------------------------------------------------------------------
+| Timer Settings
+| --------------
+------------------------------------------------------------------------------------------------
+
+  Enable Multi Corner Analysis               :  Yes
+  Enable Pessimism Removal                   :  Yes
+  Pessimism Removal Resolution               :  Nearest Common Node
+  Enable Input Delay Default Clock           :  No
+  Enable Preset / Clear Arcs                 :  No
+  Disable Flight Delays                      :  No
+  Ignore I/O Paths                           :  No
+  Timing Early Launch at Borrowing Latches   :  No
+  Borrow Time for Max Delay Exceptions       :  Yes
+  Merge Timing Exceptions                    :  Yes
+  Inter-SLR Compensation                     :  Conservative
+
+  Corner  Analyze    Analyze    
+  Name    Max Paths  Min Paths  
+  ------  ---------  ---------  
+  Slow    Yes        Yes        
+  Fast    Yes        Yes        
+
+
+------------------------------------------------------------------------------------------------
+| Report Methodology
+| ------------------
+------------------------------------------------------------------------------------------------
+
+Rule      Severity          Description                                         Violations  
+--------  ----------------  --------------------------------------------------  ----------  
+TIMING-2  Critical Warning  Invalid primary clock source pin                    1           
+TIMING-4  Critical Warning  Invalid primary clock redefinition on a clock tree  1           
+CLKC-58   Advisory          PLLE4 with global clock driver has no LOC           1           
+
+Note: This report is based on the most recent report_methodology run and may not be up-to-date. Run report_methodology on the current design for the latest report.
+
+
+
+check_timing report
+
+Table of Contents
+-----------------
+1. checking no_clock (0)
+2. checking constant_clock (0)
+3. checking pulse_width_clock (0)
+4. checking unconstrained_internal_endpoints (0)
+5. checking no_input_delay (0)
+6. checking no_output_delay (0)
+7. checking multiple_clock (0)
+8. checking generated_clocks (0)
+9. checking loops (0)
+10. checking partial_input_delay (0)
+11. checking partial_output_delay (0)
+12. checking latch_loops (0)
+
+1. checking no_clock (0)
+------------------------
+ There are 0 register/latch pins with no clock.
+
+
+2. checking constant_clock (0)
+------------------------------
+ There are 0 register/latch pins with constant_clock.
+
+
+3. checking pulse_width_clock (0)
+---------------------------------
+ There are 0 register/latch pins which need pulse_width check
+
+
+4. checking unconstrained_internal_endpoints (0)
+------------------------------------------------
+ There are 0 pins that are not constrained for maximum delay.
+
+ There are 0 pins that are not constrained for maximum delay due to constant clock.
+
+
+5. checking no_input_delay (0)
+------------------------------
+ There are 0 input ports with no input delay specified.
+
+ There are 0 input ports with no input delay but user has a false path constraint.
+
+
+6. checking no_output_delay (0)
+-------------------------------
+ There are 0 ports with no output delay specified.
+
+ There are 0 ports with no output delay but user has a false path constraint
+
+ There are 0 ports with no output delay but with a timing clock defined on it or propagating through it
+
+
+7. checking multiple_clock (0)
+------------------------------
+ There are 0 register/latch pins with multiple clocks.
+
+
+8. checking generated_clocks (0)
+--------------------------------
+ There are 0 generated clocks that are not connected to a clock source.
+
+
+9. checking loops (0)
+---------------------
+ There are 0 combinational loops in the design.
+
+
+10. checking partial_input_delay (0)
+------------------------------------
+ There are 0 input ports with partial input delay specified.
+
+
+11. checking partial_output_delay (0)
+-------------------------------------
+ There are 0 ports with partial output delay specified.
+
+
+12. checking latch_loops (0)
+----------------------------
+ There are 0 combinational latch loops in the design through latch input
+
+
+
+------------------------------------------------------------------------------------------------
+| Design Timing Summary
+| ---------------------
+------------------------------------------------------------------------------------------------
+
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+     -0.283     -145.506                   1760               160638        0.010        0.000                      0               160638        1.078        0.000                       0                 43024  
+
+
+Timing constraints are not met.
+
+
+------------------------------------------------------------------------------------------------
+| Clock Summary
+| -------------
+------------------------------------------------------------------------------------------------
+
+Clock                                  Waveform(ns)         Period(ns)      Frequency(MHz)
+-----                                  ------------         ----------      --------------
+clk_pl_0                               {0.000 5.156}        10.312          96.974          
+gpgpu_system_i/clk_wiz_0/inst/clk_in1  {0.000 5.156}        10.313          96.965          
+  clk_out1_gpgpu_system_clk_wiz_0_0    {0.000 2.578}        5.156           193.930         
+
+
+------------------------------------------------------------------------------------------------
+| Intra Clock Table
+| -----------------
+------------------------------------------------------------------------------------------------
+
+Clock                                      WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+-----                                      -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+gpgpu_system_i/clk_wiz_0/inst/clk_in1                                                                                                                                                    1.547        0.000                       0                     1  
+  clk_out1_gpgpu_system_clk_wiz_0_0         -0.283     -145.506                   1760               160638        0.010        0.000                      0               160638        1.078        0.000                       0                 43023  
+
+
+------------------------------------------------------------------------------------------------
+| Inter Clock Table
+| -----------------
+------------------------------------------------------------------------------------------------
+
+From Clock    To Clock          WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints  
+----------    --------          -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------  
+
+
+------------------------------------------------------------------------------------------------
+| Other Path Groups Table
+| -----------------------
+------------------------------------------------------------------------------------------------
+
+Path Group    From Clock    To Clock          WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints  
+----------    ----------    --------          -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------  
+
+
+------------------------------------------------------------------------------------------------
+| Timing Details
+| --------------
+------------------------------------------------------------------------------------------------
+
+
+---------------------------------------------------------------------------------------------------
+From Clock:  gpgpu_system_i/clk_wiz_0/inst/clk_in1
+  To Clock:  gpgpu_system_i/clk_wiz_0/inst/clk_in1
+
+Setup :           NA  Failing Endpoints,  Worst Slack           NA  ,  Total Violation           NA
+Hold  :           NA  Failing Endpoints,  Worst Slack           NA  ,  Total Violation           NA
+PW    :            0  Failing Endpoints,  Worst Slack        1.547ns,  Total Violation        0.000ns
+---------------------------------------------------------------------------------------------------
+
+
+Pulse Width Checks
+--------------------------------------------------------------------------------------
+Clock Name:         gpgpu_system_i/clk_wiz_0/inst/clk_in1
+Waveform(ns):       { 0.000 5.156 }
+Period(ns):         10.313
+Sources:            { gpgpu_system_i/clk_wiz_0/inst/clk_in1 }
+
+Check Type        Corner  Lib Pin          Reference Pin  Required(ns)  Actual(ns)  Slack(ns)  Location  Pin
+Min Period        n/a     PLLE4_ADV/CLKIN  n/a            1.071         10.313      9.242      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+Max Period        n/a     PLLE4_ADV/CLKIN  n/a            14.286        10.313      3.973      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+Low Pulse Width   Slow    PLLE4_ADV/CLKIN  n/a            3.610         5.156       1.547      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+High Pulse Width  Slow    PLLE4_ADV/CLKIN  n/a            3.610         5.156       1.547      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+
+
+
+---------------------------------------------------------------------------------------------------
+From Clock:  clk_out1_gpgpu_system_clk_wiz_0_0
+  To Clock:  clk_out1_gpgpu_system_clk_wiz_0_0
+
+Setup :         1760  Failing Endpoints,  Worst Slack       -0.283ns,  Total Violation     -145.506ns
+Hold  :            0  Failing Endpoints,  Worst Slack        0.010ns,  Total Violation        0.000ns
+PW    :            0  Failing Endpoints,  Worst Slack        1.078ns,  Total Violation        0.000ns
+---------------------------------------------------------------------------------------------------
+
+
+Max Delay Paths
+--------------------------------------------------------------------------------------
+Slack (VIOLATED) :        -0.283ns  (required time - arrival time)
+  Source:                 gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_CS_fsm_reg[11]_replica/C
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Destination:            gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_28_reg_2187_reg[30]/D
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Path Group:             clk_out1_gpgpu_system_clk_wiz_0_0
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            5.156ns  (clk_out1_gpgpu_system_clk_wiz_0_0 rise@5.156ns - clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns)
+  Data Path Delay:        5.377ns  (logic 1.979ns (36.808%)  route 3.398ns (63.192%))
+  Logic Levels:           15  (CARRY8=5 LUT3=1 LUT4=3 LUT5=2 LUT6=4)
+  Clock Path Skew:        -0.032ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    5.092ns = ( 10.248 - 5.156 ) 
+    Source Clock Delay      (SCD):    5.026ns
+    Clock Pessimism Removal (CPR):    -0.099ns
+  Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.131ns
+    Phase Error              (PE):    0.000ns
+  Clock Net Delay (Source):      2.738ns (routing 1.229ns, distribution 1.509ns)
+  Clock Net Delay (Destination): 2.546ns (routing 1.130ns, distribution 1.416ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.719     1.719    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.147     1.866 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.378     2.244    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.044     2.288 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y1 (CLOCK_ROOT)    net (fo=43383, routed)       2.738     5.026    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_clk
+    SLICE_X41Y130        FDRE                                         r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_CS_fsm_reg[11]_replica/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X41Y130        FDRE (Prop_FFF_SLICEM_C_Q)
+                                                      0.112     5.138 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_CS_fsm_reg[11]_replica/Q
+                         net (fo=149, routed)         0.124     5.262    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_CS_fsm_state12_repN
+    SLICE_X42Y130        LUT3 (Prop_A6LUT_SLICEL_I0_O)
+                                                      0.188     5.450 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_16_addr_3_reg_18447[7]_i_55/O
+                         net (fo=64, routed)          0.284     5.734    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/grp_fu_1415_p0157_out
+    SLICE_X43Y135        LUT6 (Prop_D6LUT_SLICEM_I4_O)
+                                                      0.056     5.790 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_45/O
+                         net (fo=1, routed)           0.374     6.164    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_45_n_3
+    SLICE_X45Y141        LUT6 (Prop_F6LUT_SLICEM_I0_O)
+                                                      0.056     6.220 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_21/O
+                         net (fo=1, routed)           0.402     6.622    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_21_n_3
+    SLICE_X43Y147        LUT5 (Prop_G6LUT_SLICEM_I4_O)
+                                                      0.152     6.774 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_5/O
+                         net (fo=2, routed)           0.311     7.085    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_5_n_3
+    SLICE_X42Y147        LUT4 (Prop_E6LUT_SLICEL_I0_O)
+                                                      0.057     7.142 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_13/O
+                         net (fo=1, routed)           0.011     7.153    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377[7]_i_13_n_3
+    SLICE_X42Y147        CARRY8 (Prop_CARRY8_SLICEL_S[4]_O[7])
+                                                      0.211     7.364 f  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/regs_12_addr_3_reg_18377_reg[7]_i_1/O[7]
+                         net (fo=13, routed)          0.320     7.684    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/grp_fu_12637_p4[6]
+    SLICE_X42Y152        LUT4 (Prop_G6LUT_SLICEL_I2_O)
+                                                      0.057     7.741 f  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/b_68_reg_17409[31]_i_3/O
+                         net (fo=2, routed)           0.061     7.801    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/b_68_reg_17409[31]_i_3_n_3
+    SLICE_X42Y152        LUT4 (Prop_E6LUT_SLICEL_I3_O)
+                                                      0.152     7.953 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[23]_i_27/O
+                         net (fo=72, routed)          0.506     8.460    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/grp_fu_12647_p2[0]
+    SLICE_X44Y157        LUT6 (Prop_G6LUT_SLICEL_I5_O)
+                                                      0.137     8.597 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_36/O
+                         net (fo=1, routed)           0.111     8.708    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_36_n_3
+    SLICE_X44Y159        LUT5 (Prop_D6LUT_SLICEL_I4_O)
+                                                      0.185     8.893 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_28/O
+                         net (fo=1, routed)           0.290     9.183    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_28_n_3
+    SLICE_X44Y167        LUT6 (Prop_F6LUT_SLICEL_I1_O)
+                                                      0.081     9.264 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_12/O
+                         net (fo=1, routed)           0.015     9.279    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728[7]_i_12_n_3
+    SLICE_X44Y167        CARRY8 (Prop_CARRY8_SLICEL_S[5]_CO[7])
+                                                      0.232     9.511 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[7]_i_1/CO[7]
+                         net (fo=1, routed)           0.030     9.541    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[7]_i_1_n_3
+    SLICE_X44Y168        CARRY8 (Prop_CARRY8_SLICEL_CI_CO[7])
+                                                      0.065     9.606 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[15]_i_1/CO[7]
+                         net (fo=1, routed)           0.030     9.636    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[15]_i_1_n_3
+    SLICE_X44Y169        CARRY8 (Prop_CARRY8_SLICEL_CI_CO[7])
+                                                      0.065     9.701 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[23]_i_1/CO[7]
+                         net (fo=1, routed)           0.030     9.731    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[23]_i_1_n_3
+    SLICE_X44Y170        CARRY8 (Prop_CARRY8_SLICEL_CI_O[6])
+                                                      0.173     9.904 r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_20_reg_1728_reg[31]_i_1/O[6]
+                         net (fo=4, routed)           0.498    10.402    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/grp_fu_2765_p24_out[30]
+    SLICE_X45Y171        FDRE                                         r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_28_reg_2187_reg[30]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      5.156     5.156 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     5.156 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.560     6.716    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.615     7.332 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.332     7.663    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.039     7.702 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y1 (CLOCK_ROOT)    net (fo=43383, routed)       2.546    10.248    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/ap_clk
+    SLICE_X45Y171        FDRE                                         r  gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_28_reg_2187_reg[30]/C
+                         clock pessimism             -0.099    10.150    <hidden>
+                         clock uncertainty           -0.074    10.076    <hidden>
+    SLICE_X45Y171        FDRE (Setup_HFF_SLICEM_C_D)
+                                                      0.044    10.120    gpgpu_system_i/gpgpu_scheduler_0/inst/Block_entry_cu_program_s_rd_proc_U0/grp_compute_pipeline_10_fu_186/grp_executeOneWarp_114_fu_725/grp_executeALU_fu_2044/sub_ln93_28_reg_2187_reg[30]
+  -------------------------------------------------------------------
+                         required time                         10.120    <hidden>
+                         arrival time                         -10.402    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 -0.283    <hidden>
+
+
+
+
+
+Min Delay Paths
+--------------------------------------------------------------------------------------
+Slack (MET) :             0.010ns  (arrival time - required time)
+  Source:                 gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/rs_req/data_p1_reg[42]/C
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Destination:            gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/start_addr_reg[42]/D
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Path Group:             clk_out1_gpgpu_system_clk_wiz_0_0
+  Path Type:              Hold (Min at Slow Process Corner)
+  Requirement:            0.000ns  (clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns - clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns)
+  Data Path Delay:        0.272ns  (logic 0.112ns (41.131%)  route 0.160ns (58.869%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.160ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    5.048ns
+    Source Clock Delay      (SCD):    5.044ns
+    Clock Pessimism Removal (CPR):    -0.156ns
+  Clock Net Delay (Source):      2.498ns (routing 1.130ns, distribution 1.368ns)
+  Clock Net Delay (Destination): 2.760ns (routing 1.229ns, distribution 1.531ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.560     1.560    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.615     2.175 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.332     2.507    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.039     2.546 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y1 (CLOCK_ROOT)    net (fo=43383, routed)       2.498     5.044    gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/rs_req/ap_clk
+    SLICE_X10Y55         FDRE                                         r  gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/rs_req/data_p1_reg[42]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X10Y55         FDRE (Prop_DFF_SLICEM_C_Q)
+                                                      0.112     5.156 r  gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/rs_req/data_p1_reg[42]/Q
+                         net (fo=2, routed)           0.160     5.316    gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/start_addr_tmp[42]
+    SLICE_X10Y60         FDRE                                         r  gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/start_addr_reg[42]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.719     1.719    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.147     1.866 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.378     2.244    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.044     2.288 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y1 (CLOCK_ROOT)    net (fo=43383, routed)       2.760     5.048    gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/ap_clk
+    SLICE_X10Y60         FDRE                                         r  gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/start_addr_reg[42]/C
+                         clock pessimism              0.156     5.204    <hidden>
+    SLICE_X10Y60         FDRE (Hold_DFF2_SLICEM_C_D)
+                                                      0.102     5.306    gpgpu_system_i/memory_pipeline_0/inst/gmem_m_axi_U/bus_read/rreq_burst_conv/burst_sequential/start_addr_reg[42]
+  -------------------------------------------------------------------
+                         required time                         -5.306    <hidden>
+                         arrival time                           5.316    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  0.010    <hidden>
+
+
+
+
+
+Pulse Width Checks
+--------------------------------------------------------------------------------------
+Clock Name:         clk_out1_gpgpu_system_clk_wiz_0_0
+Waveform(ns):       { 0.000 2.578 }
+Period(ns):         5.156
+Sources:            { gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0 }
+
+Check Type        Corner  Lib Pin          Reference Pin  Required(ns)  Actual(ns)  Slack(ns)  Location  Pin
+Min Period        n/a     PS8/MAXIGP0ACLK  n/a            3.000         5.156       2.156      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+Low Pulse Width   Slow    PS8/MAXIGP0ACLK  n/a            1.500         2.578       1.078      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+High Pulse Width  Slow    PS8/MAXIGP0ACLK  n/a            1.500         2.578       1.078      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+
+
+

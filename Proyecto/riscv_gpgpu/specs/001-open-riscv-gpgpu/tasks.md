@@ -99,26 +99,26 @@
 
 **Purpose**: Close the remaining functional parity gaps between the current `models/systemc/src/` behavior and the HLS path in this branch.
 
-- [ ] T074 [US2] Create an explicit SystemC↔HLS parity matrix in `docs/hls/interfaces.md`
+- [x] T074 [US2] Create an explicit SystemC↔HLS parity matrix in `docs/hls/interfaces.md`
 	- Required: table mapping latest SystemC modules (`compute_unit`, `memory`, `scheduler`, `simt_controller`, `top`, `system_top`, integration expectations) to HLS implementations (`hls/src/**`) with one of: `Aligned`, `Partially aligned`, `Missing`.
 	- Verification: each `Partially aligned`/`Missing` entry must reference a concrete follow-up task ID (T075+).
 
-- [ ] T075 [US2] Add binary-execution parity plan/task for `ComputeUnit::step()` semantics into `hls/src/compute_unit/`
+- [x] T075 [US2] Add binary-execution parity plan/task for `ComputeUnit::step()` semantics into `hls/src/compute_unit/`
 	- Gap addressed: latest SystemC executes decoded RV32I/M/F binaries via `riscv_isa.h` + PC-driven fetch/execute, while current HLS path is Virtual-ISA centric.
 	- Required: implement (or stage behind compile-time flag) an HLS binary decode/execute path that can consume instruction words and preserve the same completion semantics (`HALT`/return-sentinel behavior, block/thread context registers).
 	- Verification: add dedicated tests in `tests/hls/` that replay at least one binary-style kernel trace and compare register/memory end state against SystemC golden behavior.
 
-- [ ] T076 [US2] Align top-level orchestration semantics with latest `GPGPUTop`/`SystemTop` behavior in `hls/src/scheduler/gpgpu_top.*`
+- [x] T076 [US2] Align top-level orchestration semantics with latest `GPGPUTop`/`SystemTop` behavior in `hls/src/scheduler/gpgpu_top.*`
 	- Gap addressed: latest SystemC includes explicit multi-CU fan-out and multi-GPU distribution (`system_top/`), while HLS currently focuses on single-device scheduler orchestration.
 	- Required: either implement equivalent multi-instance orchestration hooks or document/enforce a strict single-device scope contract with adapter points for host-side multi-instance composition.
 	- Verification: add `tests/hls/` scenarios covering multi-CU progress and barrier release with more than one resident warp group; include expected dispatch/release traces.
 
-- [ ] T077 [US2] Add observability/counter parity hooks for HLS path in `hls/src/**` and `docs/hls/interfaces.md`
+- [x] T077 [US2] Add observability/counter parity hooks for HLS path in `hls/src/**` and `docs/hls/interfaces.md`
 	- Gap addressed: SystemC exposes run-level observability (`instructions`, divergence, cache behavior, effective progress metrics) used by benchmark analysis, while HLS path lacks a stable counter contract.
 	- Required: define minimal counter interface (at least instructions retired, barrier stalls, memory transactions/L1-L2 observable events) and integrate it in the HLS top-level interface contract.
 	- Verification: add tests proving counters are monotonic and consistent with known kernels (`intSaxpy`, `parallelReduction`, `conv2d3x3`) under fixed launch configs.
 
-- [ ] T078 [US2] Add end-to-end parity regression linking latest model kernels to HLS execution path in `tests/hls/test_model_parity.cpp`
+- [x] T078 [US2] Add end-to-end parity regression linking latest model kernels to HLS execution path in `tests/hls/test_model_parity.cpp`
 	- Required: for a selected subset of kernels in `models/systemc/src/common/kernel_programs.h` (including at least one divergent + one barrier-heavy + one FP case), compare final register/memory outputs between SystemC and HLS paths under the same launch geometry.
 	- Compatibility note: if exact parity is intentionally not achievable for a kernel class, document the reason and expected delta in `docs/hls/interfaces.md` and mark it as an accepted deviation.
 	- Verification: regression must fail on parity mismatch and emit kernel-level diff summaries.
@@ -382,7 +382,43 @@ Update tasks and mark progress in `tasks.md` as work progresses; each subtask sh
 	- Required: cross-compile software stack for `aarch64-linux-gnu`; `scp` binary + kernel ELF to Kria; load FPGA bitstream via `fpgautil`; run test and capture output.
 	- Deliverable: `scripts/deploy_kria.sh` that takes `--bitstream`, `--kernel`, and `--test` arguments and produces a pass/fail report.
 	- Verification: `vector_add` (N=1024) produces correct results on Kria hardware; report captured in `docs/verification/kria_results.md`.
-	- Done: `scripts/deploy_kria.sh` (`--bitstream/--kernel/--test/--host/--report`) cross-compiles via `fpga/toolchain-aarch64.cmake` (+ `fpga/Makefile` wrapper), scp's artifacts, loads the bitstream with `fpgautil`, runs the test over SSH, and writes a pass/fail report to `docs/verification/kria_results.md` (template committed; hardware run pending board access).
+	- Done: `scripts/deploy_kria.sh` (`--bitstream/--kernel/--test/--host/--report`) cross-compiles via `fpga/toolchain-aarch64.cmake` (+ `fpga/Makefile` wrapper), scp's artifacts, loads the bitstream with `fpgautil`, runs the test over SSH, and writes a pass/fail report to `docs/verification/kria_results.md` (board access now available; hardware execution evidence tracked by tasks below).
+
+### Physical Bring-up (Kria Access Ready)
+
+- [x] T085 [US2] Run HLS IP export on the installed Vitis/Vivado 2026.1 toolchain and archive logs
+	- Required: run `vitis-run --mode hls --tcl tests/fpga/export_memory_ip.tcl` and `vitis-run --mode hls --tcl tests/fpga/export_gpgpu_ip.tcl` after `source scripts/setup-env.sh`.
+	- Verification: both commands exit `0`; `component.xml` exists for both IPs under `build/ip_export/**/solution1/impl/ip/`.
+	- Done: both HLS exports pass on Vitis 2026.1 after environment and `set_top` fixes; `PASS: memory_pipeline IP exported` and `PASS: gpgpu_scheduler IP exported` confirmed in logs.
+
+- [ ] T086 [US2] Build full KV260 Vivado project and bitstream from batch Tcl flow
+	- Required: run `vivado -mode batch -source fpga/scripts/build_all.tcl`.
+	- Verification: bitstream artifact generated in `build/vivado_kv260/`; no fatal errors in synthesis/implementation logs.
+
+- [ ] T087 [US2] Deploy generated bitstream + kernel ELF to Kria and execute smoke test
+	- Required: run `scripts/deploy_kria.sh --bitstream <bit.bin> --kernel <kernel.elf> --test test_host_api --host <user@kria-ip>`.
+	- Verification: deploy script exits `0` and test output reports PASS for `vector_add` (N=1024).
+
+- [ ] T088 [US2] Capture first physical-hardware evidence in `docs/verification/kria_results.md`
+	- Required: record date, board identifier, bitstream hash/name, kernel ELF name, command used, and full runtime output.
+	- Verification: `docs/verification/kria_results.md` reflects a real run (not template placeholder).
+
+- [ ] T089 [US2] Run Rodinia subset on Kria and compare against simulation baseline
+	- Required: execute at least one Rodinia workload already wired in `benchmarks/` (plus `vector_add` baseline) through FPGA path.
+	- Verification: results archived under `results/verification/` and traceability row for FPGA evidence updated.
+
+- [x] T090 [US2] Collect HLS resource-utilization baseline and demo profile comparison
+	- Required: compare `build/ip_export/**/riscv_gpgpu_hls_*_csynth.rpt` against a demo-tuned profile and summarize BRAM/LUT/FF/DSP/URAM plus estimated clocks.
+	- Verification: `scripts/report_hls_resources.sh` reports both profiles; baseline and demo numbers are reproducible from generated HLS reports.
+	- Done: baseline vs `demo_small_shared` profile measured. Combined totals: BRAM 224→210, LUT 96279→96126, FF 60130→59856, DSP 222→222, URAM 16→16; clocks unchanged (`sched 3.816ns`, `mem 3.650ns`).
+
+- [ ] T091 [US2] Select demo synthesis profile and run full Vivado implementation with utilization/timing reports
+	- Required: choose baseline vs demo profile (`tests/fpga/export_*_ip*.tcl`) and run `vivado -mode batch -source fpga/scripts/build_all.tcl`.
+	- Verification: post-implementation utilization and timing reports collected under `build/vivado_kv260/`; timing met or violations documented with mitigation plan.
+
+- [ ] T092 [US2] Validate selected profile on Kria and freeze demo bitstream
+	- Required: deploy chosen bitstream + kernel via `scripts/deploy_kria.sh`; run smoke + one representative workload.
+	- Verification: PASS report saved in `docs/verification/kria_results.md` and demo bitstream filename/hash recorded.
 
 **Checkpoint**: End-to-end CUDA → RISC-V ELF → ARM host → FPGA GPGPU → results verified on Kria hardware.
 

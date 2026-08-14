@@ -46,6 +46,13 @@
 set script_dir [file dirname [file normalize [info script]]]
 set repo_root  [file normalize "$script_dir/../.."]
 
+set tclargs [lindex $argv 0]
+if {[string is integer -strict $tclargs] && $tclargs > 0} {
+    set requested_jobs $tclargs
+} else {
+    set requested_jobs 0
+}
+
 set project_name "riscv_gpgpu_kv260"
 set project_dir  "$repo_root/build/vivado_kv260"
 
@@ -54,6 +61,32 @@ set project_dir  "$repo_root/build/vivado_kv260"
 set part_name "xck26-sfvc784-2LV-c"
 
 set bd_name "gpgpu_system"
+
+# Parallelism knobs for Vivado runs.
+set default_jobs 20
+set max_jobs     32
+set host_jobs    $default_jobs
+
+if {![catch {exec nproc} nproc_out]} {
+    set detected_jobs [string trim $nproc_out]
+    if {[string is integer -strict $detected_jobs] && $detected_jobs > 0} {
+        set host_jobs $detected_jobs
+    }
+}
+
+if {$requested_jobs > 0} {
+    set host_jobs $requested_jobs
+}
+
+if {$host_jobs > $max_jobs} {
+    set host_jobs $max_jobs
+}
+
+if {$host_jobs < 1} {
+    set host_jobs 1
+}
+
+set_param general.maxThreads $host_jobs
 
 set gpgpu_ip_repo \
     "$repo_root/build/ip_export/gpgpu_scheduler/gpgpu_scheduler/solution1/impl/ip"
@@ -64,6 +97,60 @@ set memory_ip_repo \
 set gpgpu_component "$gpgpu_ip_repo/component.xml"
 set memory_component "$memory_ip_repo/component.xml"
 
+set hls_config_file "$repo_root/hls/src/common/hls_config.h"
+set cu_count "unknown"
+if {[file exists $hls_config_file]} {
+    set fh [open $hls_config_file r]
+    set hls_config_text [read $fh]
+    close $fh
+    if {[regexp {#define\s+RISCV_GPGPU_NUM_CUS\s+([0-9]+)} $hls_config_text -> cu_count]} {
+        puts "NUM_CUS from RISCV_GPGPU_NUM_CUS macro: $cu_count"
+    } elseif {[regexp {constexpr\s+int\s+NUM_CUS\s*=\s*([0-9]+)} $hls_config_text -> cu_count]} {
+        puts "NUM_CUS from HLS config: $cu_count"
+    } else {
+        puts "WARNING: NUM_CUS not parsed from $hls_config_file"
+    }
+}
+
+set run_archive_root "$repo_root/build/vivado_kv260_runs"
+file mkdir $run_archive_root
+
+proc archive_run_outputs {archive_root project_dir cu_count label} {
+    set timestamp [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+    set archive_dir "$archive_root/${label}_num_cus_${cu_count}_${timestamp}"
+    file mkdir $archive_dir
+
+    foreach src [list \
+        "$project_dir/implementation_utilization.rpt" \
+        "$project_dir/implementation_timing.rpt" \
+        "$project_dir/implementation_drc.rpt" \
+        "$project_dir/synthesis_utilization.rpt" \
+        "$project_dir/synthesis_timing.rpt"] {
+        if {[file exists $src]} {
+            file copy -force $src $archive_dir
+        }
+    }
+
+    set impl_dir "$project_dir/riscv_gpgpu_kv260.runs/impl_1"
+    if {[file exists $impl_dir]} {
+        foreach rpt [glob -nocomplain "$impl_dir/*.rpt"] {
+            file copy -force $rpt $archive_dir
+        }
+        if {[file exists "$impl_dir/gpgpu_system_wrapper.bit"]} {
+            file copy -force "$impl_dir/gpgpu_system_wrapper.bit" $archive_dir
+        }
+    }
+
+    set metadata "$archive_dir/build_info.txt"
+    set fh [open $metadata w]
+    puts $fh "label=$label"
+    puts $fh "cu_count=$cu_count"
+    puts $fh "timestamp=$timestamp"
+    puts $fh "project_dir=$project_dir"
+    close $fh
+
+    return $archive_dir
+}
 
 puts ""
 puts "======================================================================"
@@ -75,6 +162,7 @@ puts "Device          : AMD Kria K26"
 puts "Family          : Zynq UltraScale+ MPSoC"
 puts "Part            : $part_name"
 puts "Vivado          : [version -short]"
+puts "Parallel jobs   : $host_jobs"
 puts "======================================================================"
 puts ""
 
@@ -123,6 +211,11 @@ puts "STEP 2: Cleaning previous Vivado build"
 puts "---------------------------------------------------------------------"
 
 if {[file exists $project_dir]} {
+    if {[file exists "$project_dir/implementation_utilization.rpt"] || [file exists "$project_dir/implementation_timing.rpt"] || [file exists "$project_dir/implementation_drc.rpt"] || [file exists "$project_dir/riscv_gpgpu_kv260.runs"]} {
+        set archive_dir [archive_run_outputs $run_archive_root $project_dir $cu_count "pre_run"]
+        puts "Archived previous run reports to:"
+        puts "  $archive_dir"
+    }
     puts "Removing previous build:"
     puts "  $project_dir"
     file delete -force $project_dir
@@ -171,12 +264,12 @@ create_bd_design $bd_name
 
 create_bd_cell \
     -type ip \
-    -vlnv riscv_gpgpu:hls:gpgpu_scheduler:1.0 \
+    -vlnv riscv_gpgpu:hls:riscv_gpgpu_hls_gpgpu_scheduler:1.0 \
     gpgpu_scheduler_0
 
 create_bd_cell \
     -type ip \
-    -vlnv riscv_gpgpu:hls:memory_pipeline:1.0 \
+    -vlnv riscv_gpgpu:hls:riscv_gpgpu_hls_memory_pipeline:1.0 \
     memory_pipeline_0
 
 puts "PASS: gpgpu_scheduler instantiated"
@@ -237,8 +330,7 @@ puts "---------------------------------------------------------------------"
 puts "STEP 7: Configuring PS AXI interfaces"
 puts "---------------------------------------------------------------------"
 
-# PS -> PL master.
-# Used by the ARM Cortex-A53 to access accelerator control registers.
+# PS clock: set to 100 MHz so the PLL gets a round reference frequency.
 set_property -dict [list \
     CONFIG.PSU__USE__M_AXI_GP0 {1} \
 ] $ps
@@ -273,12 +365,39 @@ create_bd_cell \
     -vlnv xilinx.com:ip:proc_sys_reset:* \
     rst_pl_clk0
 
-# Accelerator and reset-controller clock.
+# ── PLL: 100 MHz (pl_clk0) → 200 MHz ────────────────────────────────────────
+# Uses PLL primitive (not MMCM) as requested.
+# locked output feeds proc_sys_reset/dcm_locked: the design stays in reset
+# until the PLL has locked and the clock is stable (power-on reset behaviour).
+create_bd_cell \
+    -type ip \
+    -vlnv xilinx.com:ip:clk_wiz:* \
+    clk_wiz_0
+
+set_property -dict [list \
+    CONFIG.PRIMITIVE            {PLL}         \
+    CONFIG.PRIM_IN_FREQ         {96.968727}   \
+    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {200.000} \
+    CONFIG.USE_LOCKED           {true}         \
+    CONFIG.USE_RESET            {false}        \
+] [get_bd_cells clk_wiz_0]
+
+# PLL reference clock from PS.
 connect_bd_net \
     [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
+    [get_bd_pins clk_wiz_0/clk_in1]
+
+# 200 MHz PLL output drives all IP cores and the reset controller.
+connect_bd_net \
+    [get_bd_pins clk_wiz_0/clk_out1] \
     [get_bd_pins gpgpu_scheduler_0/ap_clk] \
     [get_bd_pins memory_pipeline_0/ap_clk] \
     [get_bd_pins rst_pl_clk0/slowest_sync_clk]
+
+# PLL locked → dcm_locked: proc_sys_reset holds all resets while PLL is unlocked.
+connect_bd_net \
+    [get_bd_pins clk_wiz_0/locked] \
+    [get_bd_pins rst_pl_clk0/dcm_locked]
 
 # PS reset.
 connect_bd_net \
@@ -291,16 +410,18 @@ connect_bd_net \
     [get_bd_pins gpgpu_scheduler_0/ap_rst_n] \
     [get_bd_pins memory_pipeline_0/ap_rst_n]
 
-# PS AXI interface clocks.
+# PS AXI interface clocks: run at PLL frequency so there is no CDC between
+# the SmartConnect and the PS ports. PS8 MAXIGP/SAXIHPC min period = 3 ns,
+# so 200 MHz (5 ns) is well within spec.
 connect_bd_net \
-    [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
+    [get_bd_pins clk_wiz_0/clk_out1] \
     [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk]
 
 connect_bd_net \
-    [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
+    [get_bd_pins clk_wiz_0/clk_out1] \
     [get_bd_pins zynq_ultra_ps_e_0/saxihpc0_fpd_aclk]
 
-puts "PASS: Clock/reset network connected"
+puts "PASS: PLL + clock/reset network connected (PLL locked = power-on reset)"
 
 
 # ============================================================================
@@ -402,7 +523,7 @@ puts "STEP 11: Connecting AXI fabric clock/reset"
 puts "---------------------------------------------------------------------"
 
 connect_bd_net \
-    [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] \
+    [get_bd_pins clk_wiz_0/clk_out1] \
     [get_bd_pins smartconnect_control/aclk] \
     [get_bd_pins smartconnect_ddr/aclk]
 
@@ -534,7 +655,7 @@ puts "======================================================================"
 
 reset_run synth_1
 
-launch_runs synth_1 -jobs 8
+launch_runs synth_1 -jobs $host_jobs
 wait_on_run synth_1
 
 set synth_status [get_property STATUS [get_runs synth_1]]
@@ -575,7 +696,7 @@ reset_run impl_1
 
 launch_runs impl_1 \
     -to_step write_bitstream \
-    -jobs 8
+    -jobs $host_jobs
 
 wait_on_run impl_1
 
@@ -711,6 +832,9 @@ puts "  $project_dir/implementation_utilization.rpt"
 puts "  $project_dir/implementation_timing.rpt"
 puts "  $project_dir/implementation_drc.rpt"
 puts ""
+set archive_dir [archive_run_outputs $run_archive_root $project_dir $cu_count "post_run"]
+puts "Archived run reports to:"
+puts "  $archive_dir"
 puts "======================================================================"
 puts " PASS: COMPLETE ZYNQ ULTRASCALE+ MPSOC / KV260 FPGA BUILD"
 puts "======================================================================"

@@ -11,7 +11,7 @@ open_project -reset memory_pipeline
 add_files "$src_dir/memory/memory_pipeline.cpp" \
     -cflags "-I$src_dir -DRISCV_GPGPU_BOARD_KV260"
 
-set_top memory_pipeline
+set_top riscv_gpgpu_hls::memory_pipeline
 
 open_solution -reset solution1
 

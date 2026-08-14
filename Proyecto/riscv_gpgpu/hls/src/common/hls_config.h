@@ -92,14 +92,27 @@ constexpr int L2_SETS_PER_WAY   = L2_LINES_TOTAL / L2_WAYS;              // 512
 // (barrier_arbiter.h) - since the global barrier can't simply be
 // duplicated per-CU the way schedulerCore's own WarpSlot[] correctly is.
 // KV260 is the sole target board (SS14) - this is not a per-board decision.
-constexpr int NUM_CUS                    = 2;
+#ifndef RISCV_GPGPU_NUM_CUS
+#define RISCV_GPGPU_NUM_CUS 8
+#endif
+constexpr int NUM_CUS                    = RISCV_GPGPU_NUM_CUS;
+// When NUM_CUS >= 13, a flat DATAFLOW region would exceed the HLS tool's limit of
+// ~40 backwards channels (barrier_events + status_in + cu_mem_resp each of size
+// NUM_CUS gives 3*13=39 for 13 CUs, and 3*16=48 for 16 CUs, cutting off the
+// higher-index response channels). Hierarchical DATAFLOW splits into
+// CLUSTER_SIZE-CU sub-regions, each well within the limit.
+constexpr int CLUSTER_SIZE               = (NUM_CUS >= 13) ? (NUM_CUS / 2) : NUM_CUS;
+constexpr int NUM_CLUSTERS               = (NUM_CUS >= 13) ? 2 : 1;
 // 48KB -> 16KB (docs/hls/interfaces.md SS16.26) -> 32KB (SS16.35): the
 // 16KB step matched the golden model's real, live-executed default
 // (compute_unit.h:28) and freed real BRAM for the 2-CU question
 // (§16.20/16.25). This step doubles it again for more scratchpad headroom
 // per kernel, now that real BRAM budget is well understood (SS16.27) and
 // comfortably has room - a capability increase, not a fidelity match.
-constexpr int SHARED_MEM_SIZE_BYTES      = 32 * 1024;
+#ifndef RISCV_GPGPU_SHARED_MEM_SIZE_BYTES
+#define RISCV_GPGPU_SHARED_MEM_SIZE_BYTES (32 * 1024)
+#endif
+constexpr int SHARED_MEM_SIZE_BYTES      = RISCV_GPGPU_SHARED_MEM_SIZE_BYTES;
 constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;
 
 // ── On-chip scheduler (docs/hls/interfaces.md SS2.5) ──────────────────────────
@@ -117,7 +130,10 @@ constexpr int SHARED_MEM_WORDS_PER_CU    = SHARED_MEM_SIZE_BYTES / 4;
 // 128->256, without needing a 3rd BRAM primitive). A real, felt increase in
 // resident-warp capacity for free; chosen over adding a 2nd CU, which a
 // real BRAM projection showed likely doesn't fit (~214/144).
-constexpr int MAX_WARPS_PER_CU           = 8;
+#ifndef RISCV_GPGPU_MAX_WARPS_PER_CU
+#define RISCV_GPGPU_MAX_WARPS_PER_CU 8
+#endif
+constexpr int MAX_WARPS_PER_CU           = RISCV_GPGPU_MAX_WARPS_PER_CU;
 
 }  // namespace riscv_gpgpu_hls
 

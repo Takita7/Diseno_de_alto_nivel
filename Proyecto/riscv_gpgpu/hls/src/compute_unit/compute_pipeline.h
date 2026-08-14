@@ -24,33 +24,25 @@
 namespace riscv_gpgpu_hls {
 
 void compute_pipeline(
-    cu_id_t          cu_id,       // s_axilite - fixed per instance (one per CU),
-                                   // not per-dispatch: found while implementing
-                                   // this, an earlier SS2.5.3 draft omitted it
-                                   // from warp_dispatch_t without saying where
-                                   // it should live instead. executeMemOp()
-                                   // still needs it to stamp outgoing mem_req_t.
+    cu_id_t          cu_id,
 
-    hls::stream<warp_dispatch_t>& dispatch_in,   // axis, from this CU's CuDispatchUnit
+    hls::stream<warp_dispatch_t>& dispatch_in,
 
     instr_word_t program[MAX_PROGRAM_LEN],        // ap_memory - this CU's local
                                                    // program store (SS10.8)
     uint32_t     program_len,                     // s_axilite, set once at launch
 
     reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
-                                                   // ap_memory - aliases the owning
-                                                   // CuDispatchUnit::regsArray()
+                                                   // ap_memory - must be a
+                                                   // separately-named variable per
+                                                   // DATAFLOW instance (declared as
+                                                   // cu_regs_0..N in gpgpu_top.cpp)
+                                                   // to prevent HLS from aliasing
+                                                   // instances via a shared array.
 
-    reg_t* initial_regs_ptr,                      // m_axi - docs/hls/interfaces.md
-                                                   // SS16: seeds regs[d.slot_id] from
-                                                   // this DRAM buffer on a slot's
-                                                   // first (fresh_launch) dispatch
-                                                   // only. Sole writer of regs[][] -
-                                                   // moved here from the scheduler
-                                                   // (which used to load it at
-                                                   // launch) because real csynth
-                                                   // (SS15) rejects two DATAFLOW
-                                                   // processes writing one array.
+    hls::stream<reg_seed_t>& reg_seed_in,         // axis - initial register values
+                                                   // from programLoader; drained before
+                                                   // the first dispatch arrives.
 
     hls::stream<mem_req_t>&  mem_req_out,         // axis, via MemArbiter now
     hls::stream<mem_resp_t>& mem_resp_in,         // axis, via MemArbiter now

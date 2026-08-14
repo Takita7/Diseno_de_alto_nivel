@@ -201,3 +201,73 @@ if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE
 else()
     message(STATUS "hls/src/scheduler/gpgpu_top.h and/or compute_pipeline.cpp/memory_pipeline.cpp not found, and/or Vitis HLS headers missing - skipping test_gpgpu_top")
 endif()
+
+# T077: observability counter parity - verifies warp_status_t::instr_count and
+# MemorySubsystem hit/miss counters are non-zero, consistent, and monotonic.
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE
+   AND EXISTS ${HLS_COMPUTE_PIPELINE} AND EXISTS ${HLS_MEMORY_PIPELINE})
+    find_package(Threads REQUIRED)
+    add_executable(test_hls_counters test_hls_counters.cpp
+        ${HLS_COMPUTE_PIPELINE}
+        ${HLS_MEMORY_PIPELINE}
+    )
+    target_include_directories(test_hls_counters PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${CMAKE_SOURCE_DIR}/models/systemc/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_hls_counters PRIVATE
+        GTest::GTest
+        GTest::Main
+        Threads::Threads
+    )
+    add_test(NAME hls_counter_tests COMMAND test_hls_counters)
+else()
+    message(STATUS "compute_pipeline.cpp/memory_pipeline.cpp or Vitis HLS headers missing - skipping test_hls_counters")
+endif()
+
+# T075: binary execution parity - verifies that the HLS decode+execute path
+# correctly handles programs built directly from raw RV32I binary words.
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE AND EXISTS ${HLS_COMPUTE_PIPELINE})
+    find_package(Threads REQUIRED)
+    add_executable(test_hls_binary_execution test_hls_binary_execution.cpp
+        ${HLS_COMPUTE_PIPELINE}
+    )
+    target_include_directories(test_hls_binary_execution PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_hls_binary_execution PRIVATE
+        GTest::GTest
+        GTest::Main
+        Threads::Threads
+    )
+    add_test(NAME hls_binary_execution_tests COMMAND test_hls_binary_execution)
+else()
+    message(STATUS "compute_pipeline.cpp or Vitis HLS headers missing - skipping test_hls_binary_execution")
+endif()
+
+# T078: end-to-end model parity regression - compares HLS compute_pipeline
+# against the lightweight C++ reference executor for divergent, barrier-heavy,
+# and FP kernels from kernel_programs.h.
+if(BUILD_TESTS AND GTest_FOUND AND XILINX_HLS_INCLUDE
+   AND EXISTS ${HLS_COMPUTE_PIPELINE} AND EXISTS ${HLS_MEMORY_PIPELINE})
+    find_package(Threads REQUIRED)
+    add_executable(test_model_parity test_model_parity.cpp
+        ${HLS_COMPUTE_PIPELINE}
+        ${HLS_MEMORY_PIPELINE}
+    )
+    target_include_directories(test_model_parity PRIVATE
+        ${CMAKE_SOURCE_DIR}/hls/src
+        ${CMAKE_SOURCE_DIR}/models/systemc/src
+        ${XILINX_HLS_INCLUDE}
+    )
+    target_link_libraries(test_model_parity PRIVATE
+        GTest::GTest
+        GTest::Main
+        Threads::Threads
+    )
+    add_test(NAME model_parity_tests COMMAND test_model_parity)
+else()
+    message(STATUS "compute_pipeline.cpp/memory_pipeline.cpp or Vitis HLS headers missing - skipping test_model_parity")
+endif()

@@ -80,6 +80,9 @@ TEST(GpgpuTop, SingleWarpKernelRunsToCompletionAutonomously) {
     static hls::stream<warp_status_t>   status_in("status_in");
     static hls::stream<mem_req_t>       mem_req("mem_req");
     static hls::stream<mem_resp_t>      mem_resp("mem_resp");
+
+    // Pre-load program into cu.programArray() (programLoader's role in HW).
+    { auto& p = cu.programArray(); for (size_t i = 0; i < program_len; ++i) p[i] = dram_program[i]; }
     // docs/hls/interfaces.md SS16.37: schedulerCore no longer owns barrier
     // state/busy/done/fault - barrierCore does, reached via these streams.
     // NUM_CUS-sized like the real gpgpu_scheduler wiring, even though this
@@ -104,7 +107,7 @@ TEST(GpgpuTop, SingleWarpKernelRunsToCompletionAutonomously) {
                     barrier_events, barrier_signal);
     });
     std::thread sched_thread([&]() {
-        schedulerCore(cu, cu_id_t(0), dram_program, static_cast<uint32_t>(program_len),
+        schedulerCore(cu, cu_id_t(0), static_cast<uint32_t>(program_len),
                       /*total_warps=*/warp_id_t(1), start,
                       dispatch_out, status_in,
                       barrier_events[0], barrier_signal[0]);
@@ -171,6 +174,12 @@ TEST(GpgpuTop, TwoWarpBarrierKernelDrivenAcrossTwoRealCUs) {
     // of a shared one, unlike the old single-CU shape this replaces).
     static CuDispatchUnit cu0;
     static CuDispatchUnit cu1;
+
+    // Pre-load program into both CU program arrays (programLoader's role in HW).
+    {
+        auto& p0 = cu0.programArray(); auto& p1 = cu1.programArray();
+        for (size_t i = 0; i < program_len; ++i) { p0[i] = dram_program[i]; p1[i] = dram_program[i]; }
+    }
     static hls::stream<warp_dispatch_t> dispatch_out0("dispatch_out0");
     static hls::stream<warp_dispatch_t> dispatch_out1("dispatch_out1");
     static hls::stream<warp_status_t>   status_in0("status_in0");
@@ -196,13 +205,13 @@ TEST(GpgpuTop, TwoWarpBarrierKernelDrivenAcrossTwoRealCUs) {
                     barrier_events, barrier_signal);
     });
     std::thread sched0_thread([&]() {
-        schedulerCore(cu0, cu_id_t(0), dram_program, static_cast<uint32_t>(program_len),
+        schedulerCore(cu0, cu_id_t(0), static_cast<uint32_t>(program_len),
                       /*total_warps=*/warp_id_t(2), start,
                       dispatch_out0, status_in0,
                       barrier_events[0], barrier_signal[0]);
     });
     std::thread sched1_thread([&]() {
-        schedulerCore(cu1, cu_id_t(1), dram_program, static_cast<uint32_t>(program_len),
+        schedulerCore(cu1, cu_id_t(1), static_cast<uint32_t>(program_len),
                       /*total_warps=*/warp_id_t(2), start,
                       dispatch_out1, status_in1,
                       barrier_events[1], barrier_signal[1]);

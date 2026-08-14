@@ -77,12 +77,6 @@ typedef reg_t RegFile[MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD];
 static void executeALU(RegFile regs, const Instruction& instr, thread_mask_t mask) {
     Opcode op = instr.opcode;
     // TEMP: SS16.16 scratch experiment - is the per-lane, per-opcode
-    // hardware duplication (add/sub/and/or/xor/icmp/fmul/fadd all
-    // separately instantiated per lane, per the Bind Op Report) real,
-    // fixable waste, or already-necessary/already-shared under the hood?
-    // Testing by forcing a lower instance count than the natural 32
-    // (one per lane) and observing whether the tool can actually share
-    // (LUT drops, some latency cost) or refuses (already minimal).
 #pragma HLS ALLOCATION operation instances=add limit=8
 #pragma HLS ALLOCATION operation instances=sub limit=8
 EXECUTE_ALU_LANES:
@@ -115,10 +109,12 @@ EXECUTE_ALU_LANES:
 
 // ── Vector (integer + FP) ────────────────────────────────────────────────────
 // Golden reference: ComputeUnit::executeVector() (compute_unit.cpp:151-171).
+// Gated by RISCV_GPGPU_ENABLE_VECTOR_OPS (default OFF): audit confirmed the
+// PTX transpiler never emits these opcodes, so the hardware is dead area for
+// all current PTX-based workloads.  Re-enable with -DRISCV_GPGPU_ENABLE_VECTOR_OPS=1.
 static void executeVector(RegFile regs, const Instruction& instr, thread_mask_t mask) {
+#ifdef RISCV_GPGPU_ENABLE_VECTOR_OPS
     Opcode op = instr.opcode;
-    // TEMP: SS16.16 scratch experiment - same technique as executeALU, same
-    // 8-opcode-per-lane duplication pattern (add/sub/mul/fadd/fsub/fmul).
 #pragma HLS ALLOCATION operation instances=add limit=8
 #pragma HLS ALLOCATION operation instances=sub limit=8
 #pragma HLS ALLOCATION operation instances=mul limit=8
@@ -144,6 +140,9 @@ EXECUTE_VECTOR_LANES:
             default: break;
         }
     }
+#else
+    (void)regs; (void)instr; (void)mask;
+#endif
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -233,6 +232,8 @@ static warp_status_t executeOneWarp(cu_id_t cu_id, const warp_dispatch_t& d,
     // unconditionally here too, not just on a "first call" path.
     simt.initializeWarp(d.active_mask_init);
 
+    ap_uint<32> instr_count = 0;  // T077: instructions retired in this dispatch
+
 EXECUTE_ONE_WARP_DECODE_LOOP:
     for (uint32_t i = d.resume_pc; i < program_len; ++i) {
 #pragma HLS LOOP_TRIPCOUNT max=MAX_PROGRAM_LEN
@@ -246,6 +247,8 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
             break;  // golden: `++total_instructions_; break;` (compute_unit.cpp:83-86) - see file header note 4 on stats
         }
 
+        ++instr_count;  // T077: count every non-HALT instruction that retires
+
         if (op == Opcode::BARRIER) {
             // Golden: records arrival (simt_ctrl_->threadHitBarrier), advances
             // pc past BARRIER, sets STALLED, returns (compute_unit.cpp:88-105).
@@ -254,9 +257,10 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
             // contract) - compute_pipeline's job is still just to report the
             // stall and stop where it is, same as before.
             warp_status_t st;
-            st.code       = WarpStatusCode::STALLED_AT_BARRIER;
-            st.barrier_id = barrier_id_t(instr.imm);
-            st.resume_pc  = ap_uint<16>(i + 1);   // golden: `++ctx.pc` before returning
+            st.code        = WarpStatusCode::STALLED_AT_BARRIER;
+            st.barrier_id  = barrier_id_t(instr.imm);
+            st.resume_pc   = ap_uint<16>(i + 1);   // golden: `++ctx.pc` before returning
+            st.instr_count = instr_count;
             return st;
         }
 
@@ -264,13 +268,16 @@ EXECUTE_ONE_WARP_DECODE_LOOP:
         if      (op == Opcode::VBRANCH) executeBranch(simt, regs, instr, mask);
         else if (op == Opcode::VJOIN)   executeJoin(simt);
         else if (instr.is_memory)       executeMemOp(cu_id, d.warp_id, regs, instr, mask, mem_req_out, mem_resp_in);
+#ifdef RISCV_GPGPU_ENABLE_VECTOR_OPS
         else if (instr.is_vector)       executeVector(regs, instr, mask);
+#endif
         else                            executeALU(regs, instr, mask);
     }
 
     warp_status_t st;
-    st.code       = WarpStatusCode::COMPLETE;
-    st.barrier_id = 0;
+    st.code        = WarpStatusCode::COMPLETE;
+    st.barrier_id  = 0;
+    st.instr_count = instr_count;
     return st;
 }
 
@@ -285,7 +292,7 @@ void compute_pipeline(
 
     reg_t regs[MAX_WARPS_PER_CU][MAX_THREADS_PER_WARP][NUM_REGS_PER_THREAD],
 
-    reg_t* initial_regs_ptr,
+    hls::stream<reg_seed_t>& reg_seed_in,
 
     hls::stream<mem_req_t>&  mem_req_out,
     hls::stream<mem_resp_t>& mem_resp_in,
@@ -297,7 +304,7 @@ void compute_pipeline(
 #pragma HLS INTERFACE axis      port=dispatch_in
 #pragma HLS INTERFACE ap_memory port=program
 #pragma HLS INTERFACE ap_memory port=regs
-#pragma HLS INTERFACE m_axi     port=initial_regs_ptr offset=slave bundle=gmem
+#pragma HLS INTERFACE axis      port=reg_seed_in
     // Lane dimension is now dim=2, not dim=1 - a slot dimension (dim=1) was
     // added in front of it (SS2.5.3). Same reason as T024's original
     // partition (executeALU/executeVector unroll over all 32 lanes, every
@@ -317,33 +324,20 @@ void compute_pipeline(
     // header for why a BARRIER can no longer end the kernel invocation.
     while (true) {
 #pragma HLS PIPELINE off
-        warp_dispatch_t d = dispatch_in.read();   // blocking
-
-        // docs/hls/interfaces.md SS16: seed this slot's regs from the
-        // host's DRAM buffer exactly once, on its first dispatch since
-        // launch - never on a barrier resume (regs already hold live
-        // state then). initial_regs_ptr is global-warp-id-indexed (SS16),
-        // not slot-indexed - different threads/warps get different
-        // tid/address argument values, unlike program[] (broadcast,
-        // SS10.8). Flattened to a single loop (SS16.10/16.11): the 2D
-        // t/r nested-loop form crashed two independent HLS compiler
-        // versions (2023.1 SeqAccessesInfoPass, 2026.1 FlattenLoopNest)
-        // in their own loop-nest analysis passes; this form needs no
-        // such analysis since there's only one loop level.
-        if (d.fresh_launch) {
-            uint64_t base = uint64_t(d.warp_id) * MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD;
-        SEED_INITIAL_REGS:
-            for (int i = 0; i < MAX_THREADS_PER_WARP * NUM_REGS_PER_THREAD; ++i) {
-                regs[d.slot_id][i / NUM_REGS_PER_THREAD][i % NUM_REGS_PER_THREAD] =
-                    initial_regs_ptr[base + i];
-            }
+        // Drain register seeds from programLoader before processing dispatches.
+        // programLoader guarantees all seeds are in the stream before schedulerCore
+        // dispatches the first warp, so this branch is always empty during execution.
+        if (!reg_seed_in.empty()) {
+            reg_seed_t s = reg_seed_in.read();
+            regs[s.slot_id][s.flat_i >> 5][s.flat_i & 31] = s.value;
+        } else if (!dispatch_in.empty()) {
+            warp_dispatch_t d = dispatch_in.read();
+            warp_status_t st = executeOneWarp(cu_id, d, program, program_len,
+                                               regs[d.slot_id],
+                                               mem_req_out, mem_resp_in);
+            st.slot_id = d.slot_id;
+            status_out.write(st);
         }
-
-        warp_status_t st = executeOneWarp(cu_id, d, program, program_len,
-                                           regs[d.slot_id],
-                                           mem_req_out, mem_resp_in);
-        st.slot_id = d.slot_id;
-        status_out.write(st);
     }
 }
 

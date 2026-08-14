@@ -97,5 +97,6 @@ docs/html/
 docs/latex/
 docs/pdf/
 
-# Generated results
-results/
+# Exclude generated results except cu_sweep reports/bitstreams
+results/*
+!results/cu_sweep

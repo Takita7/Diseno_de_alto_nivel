@@ -1,0 +1,383 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date              : Thu Aug  6 17:36:02 2026
+| Host              : david-medina-pc running 64-bit Ubuntu 26.04 LTS
+| Command           : report_timing_summary -file /mnt/alto_nivel/Diseno_de_alto_nivel/Proyecto/riscv_gpgpu/build/vivado_kv260/implementation_timing.rpt
+| Design            : gpgpu_system_wrapper
+| Device            : xck26-sfvc784
+| Speed File        : -2LV  PRODUCTION 1.31 12-08-2025
+| Design State      : Routed
+| Temperature Grade : C
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Summary Report
+
+------------------------------------------------------------------------------------------------
+| Timer Settings
+| --------------
+------------------------------------------------------------------------------------------------
+
+  Enable Multi Corner Analysis               :  Yes
+  Enable Pessimism Removal                   :  Yes
+  Pessimism Removal Resolution               :  Nearest Common Node
+  Enable Input Delay Default Clock           :  No
+  Enable Preset / Clear Arcs                 :  No
+  Disable Flight Delays                      :  No
+  Ignore I/O Paths                           :  No
+  Timing Early Launch at Borrowing Latches   :  No
+  Borrow Time for Max Delay Exceptions       :  Yes
+  Merge Timing Exceptions                    :  Yes
+  Inter-SLR Compensation                     :  Conservative
+
+  Corner  Analyze    Analyze    
+  Name    Max Paths  Min Paths  
+  ------  ---------  ---------  
+  Slow    Yes        Yes        
+  Fast    Yes        Yes        
+
+
+------------------------------------------------------------------------------------------------
+| Report Methodology
+| ------------------
+------------------------------------------------------------------------------------------------
+
+Rule      Severity          Description                                         Violations  
+--------  ----------------  --------------------------------------------------  ----------  
+TIMING-2  Critical Warning  Invalid primary clock source pin                    1           
+TIMING-4  Critical Warning  Invalid primary clock redefinition on a clock tree  1           
+CLKC-58   Advisory          PLLE4 with global clock driver has no LOC           1           
+
+Note: This report is based on the most recent report_methodology run and may not be up-to-date. Run report_methodology on the current design for the latest report.
+
+
+
+check_timing report
+
+Table of Contents
+-----------------
+1. checking no_clock (0)
+2. checking constant_clock (0)
+3. checking pulse_width_clock (0)
+4. checking unconstrained_internal_endpoints (0)
+5. checking no_input_delay (0)
+6. checking no_output_delay (0)
+7. checking multiple_clock (0)
+8. checking generated_clocks (0)
+9. checking loops (0)
+10. checking partial_input_delay (0)
+11. checking partial_output_delay (0)
+12. checking latch_loops (0)
+
+1. checking no_clock (0)
+------------------------
+ There are 0 register/latch pins with no clock.
+
+
+2. checking constant_clock (0)
+------------------------------
+ There are 0 register/latch pins with constant_clock.
+
+
+3. checking pulse_width_clock (0)
+---------------------------------
+ There are 0 register/latch pins which need pulse_width check
+
+
+4. checking unconstrained_internal_endpoints (0)
+------------------------------------------------
+ There are 0 pins that are not constrained for maximum delay.
+
+ There are 0 pins that are not constrained for maximum delay due to constant clock.
+
+
+5. checking no_input_delay (0)
+------------------------------
+ There are 0 input ports with no input delay specified.
+
+ There are 0 input ports with no input delay but user has a false path constraint.
+
+
+6. checking no_output_delay (0)
+-------------------------------
+ There are 0 ports with no output delay specified.
+
+ There are 0 ports with no output delay but user has a false path constraint
+
+ There are 0 ports with no output delay but with a timing clock defined on it or propagating through it
+
+
+7. checking multiple_clock (0)
+------------------------------
+ There are 0 register/latch pins with multiple clocks.
+
+
+8. checking generated_clocks (0)
+--------------------------------
+ There are 0 generated clocks that are not connected to a clock source.
+
+
+9. checking loops (0)
+---------------------
+ There are 0 combinational loops in the design.
+
+
+10. checking partial_input_delay (0)
+------------------------------------
+ There are 0 input ports with partial input delay specified.
+
+
+11. checking partial_output_delay (0)
+-------------------------------------
+ There are 0 ports with partial output delay specified.
+
+
+12. checking latch_loops (0)
+----------------------------
+ There are 0 combinational latch loops in the design through latch input
+
+
+
+------------------------------------------------------------------------------------------------
+| Design Timing Summary
+| ---------------------
+------------------------------------------------------------------------------------------------
+
+    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+    -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+      1.105        0.000                      0                47110        0.010        0.000                      0                47110        1.078        0.000                       0                 15458  
+
+
+All user specified timing constraints are met.
+
+
+------------------------------------------------------------------------------------------------
+| Clock Summary
+| -------------
+------------------------------------------------------------------------------------------------
+
+Clock                                  Waveform(ns)         Period(ns)      Frequency(MHz)
+-----                                  ------------         ----------      --------------
+clk_pl_0                               {0.000 5.156}        10.312          96.974          
+gpgpu_system_i/clk_wiz_0/inst/clk_in1  {0.000 5.156}        10.313          96.965          
+  clk_out1_gpgpu_system_clk_wiz_0_0    {0.000 2.578}        5.156           193.930         
+
+
+------------------------------------------------------------------------------------------------
+| Intra Clock Table
+| -----------------
+------------------------------------------------------------------------------------------------
+
+Clock                                      WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints  
+-----                                      -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------  
+gpgpu_system_i/clk_wiz_0/inst/clk_in1                                                                                                                                                    1.547        0.000                       0                     1  
+  clk_out1_gpgpu_system_clk_wiz_0_0          1.105        0.000                      0                47110        0.010        0.000                      0                47110        1.078        0.000                       0                 15457  
+
+
+------------------------------------------------------------------------------------------------
+| Inter Clock Table
+| -----------------
+------------------------------------------------------------------------------------------------
+
+From Clock    To Clock          WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints  
+----------    --------          -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------  
+
+
+------------------------------------------------------------------------------------------------
+| Other Path Groups Table
+| -----------------------
+------------------------------------------------------------------------------------------------
+
+Path Group    From Clock    To Clock          WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints  
+----------    ----------    --------          -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------  
+
+
+------------------------------------------------------------------------------------------------
+| Timing Details
+| --------------
+------------------------------------------------------------------------------------------------
+
+
+---------------------------------------------------------------------------------------------------
+From Clock:  gpgpu_system_i/clk_wiz_0/inst/clk_in1
+  To Clock:  gpgpu_system_i/clk_wiz_0/inst/clk_in1
+
+Setup :           NA  Failing Endpoints,  Worst Slack           NA  ,  Total Violation           NA
+Hold  :           NA  Failing Endpoints,  Worst Slack           NA  ,  Total Violation           NA
+PW    :            0  Failing Endpoints,  Worst Slack        1.547ns,  Total Violation        0.000ns
+---------------------------------------------------------------------------------------------------
+
+
+Pulse Width Checks
+--------------------------------------------------------------------------------------
+Clock Name:         gpgpu_system_i/clk_wiz_0/inst/clk_in1
+Waveform(ns):       { 0.000 5.156 }
+Period(ns):         10.313
+Sources:            { gpgpu_system_i/clk_wiz_0/inst/clk_in1 }
+
+Check Type        Corner  Lib Pin          Reference Pin  Required(ns)  Actual(ns)  Slack(ns)  Location  Pin
+Min Period        n/a     PLLE4_ADV/CLKIN  n/a            1.071         10.313      9.242      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+Max Period        n/a     PLLE4_ADV/CLKIN  n/a            14.286        10.313      3.973      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+Low Pulse Width   Slow    PLLE4_ADV/CLKIN  n/a            3.610         5.156       1.547      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+High Pulse Width  Slow    PLLE4_ADV/CLKIN  n/a            3.610         5.156       1.547      PLL_X0Y7  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKIN
+
+
+
+---------------------------------------------------------------------------------------------------
+From Clock:  clk_out1_gpgpu_system_clk_wiz_0_0
+  To Clock:  clk_out1_gpgpu_system_clk_wiz_0_0
+
+Setup :            0  Failing Endpoints,  Worst Slack        1.105ns,  Total Violation        0.000ns
+Hold  :            0  Failing Endpoints,  Worst Slack        0.010ns,  Total Violation        0.000ns
+PW    :            0  Failing Endpoints,  Worst Slack        1.078ns,  Total Violation        0.000ns
+---------------------------------------------------------------------------------------------------
+
+
+Max Delay Paths
+--------------------------------------------------------------------------------------
+Slack (MET) :             1.105ns  (required time - arrival time)
+  Source:                 gpgpu_system_i/smartconnect_control/inst/sc_ul/inst/gen_axi_full_nxm.sasd_inst/gen_read.ar_addr_reg[0]/C
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Destination:            gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata_reg[1]/D
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Path Group:             clk_out1_gpgpu_system_clk_wiz_0_0
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            5.156ns  (clk_out1_gpgpu_system_clk_wiz_0_0 rise@5.156ns - clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns)
+  Data Path Delay:        3.649ns  (logic 0.267ns (7.318%)  route 3.382ns (92.682%))
+  Logic Levels:           1  (LUT4=1)
+  Clock Path Skew:        -0.373ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    4.840ns = ( 9.997 - 5.156 ) 
+    Source Clock Delay      (SCD):    5.077ns
+    Clock Pessimism Removal (CPR):    -0.136ns
+  Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.131ns
+    Phase Error              (PE):    0.000ns
+  Clock Net Delay (Source):      2.789ns (routing 1.483ns, distribution 1.306ns)
+  Clock Net Delay (Destination): 2.294ns (routing 1.361ns, distribution 0.933ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.719     1.719    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.147     1.866 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.378     2.244    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.044     2.288 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y0 (CLOCK_ROOT)    net (fo=15455, routed)       2.789     5.077    gpgpu_system_i/smartconnect_control/inst/sc_ul/inst/gen_axi_full_nxm.sasd_inst/aclk
+    SLICE_X3Y107         FDRE                                         r  gpgpu_system_i/smartconnect_control/inst/sc_ul/inst/gen_axi_full_nxm.sasd_inst/gen_read.ar_addr_reg[0]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X3Y107         FDRE (Prop_DFF2_SLICEL_C_Q)
+                                                      0.115     5.192 f  gpgpu_system_i/smartconnect_control/inst/sc_ul/inst/gen_axi_full_nxm.sasd_inst/gen_read.ar_addr_reg[0]/Q
+                         net (fo=77, routed)          3.315     8.507    gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/s_axi_control_r_ARADDR[0]
+    SLICE_X27Y56         LUT4 (Prop_D6LUT_SLICEL_I3_O)
+                                                      0.152     8.659 r  gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata[1]_i_1__0/O
+                         net (fo=1, routed)           0.067     8.726    gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata[1]_i_1__0_n_3
+    SLICE_X27Y56         FDRE                                         r  gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata_reg[1]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      5.156     5.156 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     5.156 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.560     6.716    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.615     7.332 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.332     7.663    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.039     7.702 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y0 (CLOCK_ROOT)    net (fo=15455, routed)       2.294     9.997    gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/ap_clk
+    SLICE_X27Y56         FDRE                                         r  gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata_reg[1]/C
+                         clock pessimism             -0.136     9.861    <hidden>
+                         clock uncertainty           -0.074     9.786    <hidden>
+    SLICE_X27Y56         FDRE (Setup_DFF_SLICEL_C_D)
+                                                      0.044     9.830    gpgpu_system_i/gpgpu_scheduler_0/inst/control_r_s_axi_U/rdata_reg[1]
+  -------------------------------------------------------------------
+                         required time                          9.830    <hidden>
+                         arrival time                          -8.726    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  1.105    <hidden>
+
+
+
+
+
+Min Delay Paths
+--------------------------------------------------------------------------------------
+Slack (MET) :             0.010ns  (arrival time - required time)
+  Source:                 gpgpu_system_i/smartconnect_ddr/inst/m00_nodes/m00_aw_node/inst/inst_mi_handler/gen_normal_area.inst_fifo_node_payld/gen_xpm_memory_fifo.inst_fifo/gen_mem_rep[0].inst_xpm_memory/xpm_memory_base_inst/gen_rd_b.gen_rd_b_synth_template.gen_rf_narrow_reg.doutb_reg_reg[104]/C
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Destination:            gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/skid_buffer_reg[1067]/D
+                            (rising edge-triggered cell FDRE clocked by clk_out1_gpgpu_system_clk_wiz_0_0  {rise@0.000ns fall@2.578ns period=5.156ns})
+  Path Group:             clk_out1_gpgpu_system_clk_wiz_0_0
+  Path Type:              Hold (Min at Slow Process Corner)
+  Requirement:            0.000ns  (clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns - clk_out1_gpgpu_system_clk_wiz_0_0 rise@0.000ns)
+  Data Path Delay:        0.310ns  (logic 0.115ns (37.097%)  route 0.195ns (62.903%))
+  Logic Levels:           0  
+  Clock Path Skew:        0.198ns (DCD - SCD - CPR)
+    Destination Clock Delay (DCD):    5.098ns
+    Source Clock Delay      (SCD):    5.036ns
+    Clock Pessimism Removal (CPR):    -0.136ns
+  Clock Net Delay (Source):      2.490ns (routing 1.361ns, distribution 1.129ns)
+  Clock Net Delay (Destination): 2.810ns (routing 1.483ns, distribution 1.327ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.560     1.560    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.615     2.175 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.332     2.507    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.039     2.546 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y0 (CLOCK_ROOT)    net (fo=15455, routed)       2.490     5.036    gpgpu_system_i/smartconnect_ddr/inst/m00_nodes/m00_aw_node/inst/inst_mi_handler/gen_normal_area.inst_fifo_node_payld/gen_xpm_memory_fifo.inst_fifo/gen_mem_rep[0].inst_xpm_memory/xpm_memory_base_inst/clka
+    SLICE_X1Y57          FDRE                                         r  gpgpu_system_i/smartconnect_ddr/inst/m00_nodes/m00_aw_node/inst/inst_mi_handler/gen_normal_area.inst_fifo_node_payld/gen_xpm_memory_fifo.inst_fifo/gen_mem_rep[0].inst_xpm_memory/xpm_memory_base_inst/gen_rd_b.gen_rd_b_synth_template.gen_rf_narrow_reg.doutb_reg_reg[104]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X1Y57          FDRE (Prop_DFF2_SLICEM_C_Q)
+                                                      0.115     5.151 r  gpgpu_system_i/smartconnect_ddr/inst/m00_nodes/m00_aw_node/inst/inst_mi_handler/gen_normal_area.inst_fifo_node_payld/gen_xpm_memory_fifo.inst_fifo/gen_mem_rep[0].inst_xpm_memory/xpm_memory_base_inst/gen_rd_b.gen_rd_b_synth_template.gen_rf_narrow_reg.doutb_reg_reg[104]/Q
+                         net (fo=2, routed)           0.195     5.346    gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/D[6]
+    SLICE_X1Y61          FDRE                                         r  gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/skid_buffer_reg[1067]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_out1_gpgpu_system_clk_wiz_0_0 rise edge)
+                                                      0.000     0.000 r  <hidden>
+    BUFG_PS_X0Y87        BUFG_PS                      0.000     0.000 r  gpgpu_system_i/zynq_ultra_ps_e_0/inst/buffer_pl_clk_0.PL_CLK_0_BUFG/O
+                         net (fo=1, routed)           1.719     1.719    gpgpu_system_i/clk_wiz_0/inst/clk_in1
+    PLL_X0Y7             PLLE4_ADV (Prop_PLL_CLKIN_CLKOUT0)
+                                                      0.147     1.866 r  gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0
+                         net (fo=1, routed)           0.378     2.244    gpgpu_system_i/clk_wiz_0/inst/clk_out1_gpgpu_system_clk_wiz_0_0
+    BUFGCE_X0Y73         BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.044     2.288 r  gpgpu_system_i/clk_wiz_0/inst/clkout1_buf/O
+    X1Y0 (CLOCK_ROOT)    net (fo=15455, routed)       2.810     5.098    gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/aclk
+    SLICE_X1Y61          FDRE                                         r  gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/skid_buffer_reg[1067]/C
+                         clock pessimism              0.136     5.234    <hidden>
+    SLICE_X1Y61          FDRE (Hold_EFF2_SLICEM_C_D)
+                                                      0.102     5.336    gpgpu_system_i/smartconnect_ddr/inst/m00_exit_pipeline/m00_exit/inst/aw_reg/skid_buffer_reg[1067]
+  -------------------------------------------------------------------
+                         required time                         -5.336    <hidden>
+                         arrival time                           5.346    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  0.010    <hidden>
+
+
+
+
+
+Pulse Width Checks
+--------------------------------------------------------------------------------------
+Clock Name:         clk_out1_gpgpu_system_clk_wiz_0_0
+Waveform(ns):       { 0.000 2.578 }
+Period(ns):         5.156
+Sources:            { gpgpu_system_i/clk_wiz_0/inst/plle4_adv_inst/CLKOUT0 }
+
+Check Type        Corner  Lib Pin          Reference Pin  Required(ns)  Actual(ns)  Slack(ns)  Location  Pin
+Min Period        n/a     PS8/MAXIGP0ACLK  n/a            3.000         5.156       2.156      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+Low Pulse Width   Slow    PS8/MAXIGP0ACLK  n/a            1.500         2.578       1.078      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+High Pulse Width  Slow    PS8/MAXIGP0ACLK  n/a            1.500         2.578       1.078      PS8_X0Y0  gpgpu_system_i/zynq_ultra_ps_e_0/inst/PS8_i/MAXIGP0ACLK
+
+
+

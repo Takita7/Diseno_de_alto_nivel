@@ -31,6 +31,7 @@
 
 namespace riscv_gpgpu_hls {
 
+template<int N>
 class MemArbiter {
 public:
     // One arbitration step: round-robin scan starting just past the last
@@ -38,14 +39,14 @@ public:
     // mem_req_out untouched (cu_id is already set by the sending
     // compute_pipeline instance - nothing here needs to tag it). No-op,
     // returns false, if every input stream is currently empty.
-    bool arbitrateOnce(hls::stream<mem_req_t> req_in[NUM_CUS],
+    bool arbitrateOnce(hls::stream<mem_req_t> req_in[N],
                         hls::stream<mem_req_t>& mem_req_out) {
     ARBITRATE_SCAN:
-        for (int i = 0; i < NUM_CUS; ++i) {
-            int idx = (next_cu_ + i) % NUM_CUS;
+        for (int i = 0; i < N; ++i) {
+            int idx = (next_cu_ + i) % N;
             if (!req_in[idx].empty()) {
                 mem_req_out.write(req_in[idx].read());
-                next_cu_ = (idx + 1) % NUM_CUS;
+                next_cu_ = (idx + 1) % N;
                 return true;
             }
         }
@@ -54,36 +55,51 @@ public:
 
     // Response routing: read one response from memory_pipeline's resp_out
     // (if any) and forward it to the matching CU's response stream, keyed
-    // by cu_id. Correct without reordering logic given the two properties
-    // above. No-op, returns false, if mem_resp_in is currently empty.
+    // by (cu_id % N) to support both flat (base=0) and cluster-relative
+    // (base=CLUSTER_SIZE) addressing. No-op, returns false, if mem_resp_in
+    // is currently empty.
     bool routeResponse(hls::stream<mem_resp_t>& mem_resp_in,
-                        hls::stream<mem_resp_t> resp_out[NUM_CUS]) {
+                        hls::stream<mem_resp_t> resp_out[N]) {
         if (mem_resp_in.empty()) return false;
         mem_resp_t resp = mem_resp_in.read();
-        resp_out[resp.cu_id].write(resp);
+        resp_out[int(resp.cu_id) % N].write(resp);
         return true;
     }
 
 private:
-    int next_cu_ = 0;   // round-robin pointer over [0, NUM_CUS)
+    int next_cu_ = 0;   // round-robin pointer over [0, N)
 };
+
+// Backward-compat alias: existing tests use MemArbiter directly.
+using MemArbiterFlat = MemArbiter<NUM_CUS>;
 
 // Free-running top-level kernel - same persistent-hardware model
 // memory_pipeline (docs/hls/interfaces.md SS3.3) already uses. Services
 // both directions every pass without blocking on either (both steps are
 // internally non-blocking, per their empty() guards above).
+template<int N>
+inline void mem_arbiter_n(
+    hls::stream<mem_req_t>  req_in[N],
+    hls::stream<mem_resp_t> resp_out[N],
+    hls::stream<mem_req_t>&  mem_req_out,
+    hls::stream<mem_resp_t>& mem_resp_in
+) {
+    static MemArbiter<N> arb;
+    while (true) {
+#pragma HLS PIPELINE II=1
+        arb.arbitrateOnce(req_in, mem_req_out);
+        arb.routeResponse(mem_resp_in, resp_out);
+    }
+}
+
+// Convenience wrapper keeping the existing call sites unchanged.
 inline void mem_arbiter(
     hls::stream<mem_req_t>  req_in[NUM_CUS],
     hls::stream<mem_resp_t> resp_out[NUM_CUS],
     hls::stream<mem_req_t>&  mem_req_out,
     hls::stream<mem_resp_t>& mem_resp_in
 ) {
-    static MemArbiter arb;
-    while (true) {
-#pragma HLS PIPELINE II=1
-        arb.arbitrateOnce(req_in, mem_req_out);
-        arb.routeResponse(mem_resp_in, resp_out);
-    }
+    mem_arbiter_n<NUM_CUS>(req_in, resp_out, mem_req_out, mem_resp_in);
 }
 
 }  // namespace riscv_gpgpu_hls

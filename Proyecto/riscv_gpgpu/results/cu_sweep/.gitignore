@@ -1,0 +1,7 @@
+# Ignorar árboles de build completos (pesados)
+complete_run/
+
+# Mantener reportes, bitstreams y análisis
+!*.rpt
+!*.bit
+!ANALYSIS.md

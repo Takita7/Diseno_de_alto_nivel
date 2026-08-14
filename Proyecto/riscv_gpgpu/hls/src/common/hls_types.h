@@ -157,17 +157,25 @@ typedef ap_uint<4> slot_id_t;
 enum class WarpStatusCode : uint8_t { COMPLETE = 0, STALLED_AT_BARRIER = 1 };
 
 struct warp_status_t {
-    WarpStatusCode code       = WarpStatusCode::COMPLETE;
-    barrier_id_t   barrier_id = 0;   // meaningful only if code == STALLED_AT_BARRIER
-    slot_id_t      slot_id    = 0;   // NEW (SS2.5.3) - which CuDispatchUnit slot this
-                                      // result belongs to
-    ap_uint<16>    resume_pc  = 0;   // NEW, found while implementing step 5 - the old
-                                      // host-orchestrated design never needed this field
-                                      // because the host tracked instruction-stream
-                                      // position itself; compute_pipeline now reads a
-                                      // shared program[] array by an internal index, so
-                                      // it must report where to resume. Meaningful only
-                                      // if code == STALLED_AT_BARRIER.
+    WarpStatusCode code        = WarpStatusCode::COMPLETE;
+    barrier_id_t   barrier_id  = 0;   // meaningful only if code == STALLED_AT_BARRIER
+    slot_id_t      slot_id     = 0;   // which CuDispatchUnit slot this result belongs to
+    ap_uint<16>    resume_pc   = 0;   // meaningful only if code == STALLED_AT_BARRIER
+    ap_uint<32>    instr_count = 0;   // T077: instructions retired in this dispatch
+                                       // (all non-HALT ops that committed); accumulate
+                                       // across barrier stalls for per-warp total
+};
+
+// T077: kernel-level performance counter snapshot exposed at the top-level
+// interface contract (docs/hls/interfaces.md §15). Filled by the scheduler
+// after the last warp_status_t COMPLETE is received for a kernel launch;
+// memory-side fields sourced from MemorySubsystem::getL{1,2}Cache{Hits,Misses}().
+struct perf_counters_t {
+    ap_uint<32> instructions_retired = 0;  // sum of warp_status_t::instr_count
+    ap_uint<32> barrier_stalls       = 0;  // count of STALLED_AT_BARRIER statuses
+    ap_uint<32> mem_transactions     = 0;  // LW+SW requests issued (one per active lane)
+    ap_uint<32> l1_hits              = 0;  // sourced from MemorySubsystem::getL1CacheHits()
+    ap_uint<32> l2_hits              = 0;  // sourced from MemorySubsystem::getL2CacheHits()
 };
 
 // ── On-chip scheduler types (docs/hls/interfaces.md SS2.5.3) ────────────────
@@ -202,6 +210,17 @@ struct WarpSlot {
     bool          fresh      = false;
 };
 
+// programLoader -> compute_pipeline: one register word per message.
+// programLoader is the sole reader of initial_regs_ptr (DRAM); compute_pipeline
+// is the sole writer of regs[][] (BRAM). Streams decouple them so that each
+// compute_pipeline[c] has its own exclusive AXI path via programLoader, satisfying
+// DATAFLOW's one-process-per-AXI-port rule for any NUM_CUS.
+struct reg_seed_t {
+    slot_id_t   slot_id;  // CU-local slot index
+    ap_uint<10> flat_i;   // thread*NUM_REGS_PER_THREAD + reg_idx (0..1023)
+    reg_t       value;
+};
+
 // CuDispatchUnit -> compute_pipeline (docs/hls/interfaces.md SS2.5.3).
 // Supersedes compute_pipeline's old per-invocation scalar arguments
 // (cu_id/warp_id/active_mask_init, SS2.2) with one stream-carried struct.
@@ -210,13 +229,9 @@ struct warp_dispatch_t {
     warp_id_t     warp_id           = 0;
     thread_mask_t active_mask_init  = 0;
     ap_uint<16>   resume_pc         = 0;   // 0 for a fresh warp, else past the BARRIER
-    // docs/hls/interfaces.md SS16: true exactly once per warp, on its
-    // first dispatch after launch - tells compute_pipeline to seed
-    // regs[slot_id] from initial_regs_ptr (indexed by warp_id) before
-    // executing. Needed so regs_ has exactly one writer (compute_pipeline
-    // itself) for real Vitis HLS DATAFLOW legality (SS15) - the scheduler
-    // used to load initial regs at launch time, which real csynth
-    // rejected as a second writer.
+    // Kept for backward ABI compatibility; compute_pipeline no longer reads
+    // this field — register seeding now happens via reg_seed_t streams from
+    // programLoader before the first dispatch arrives.
     bool          fresh_launch      = false;
 };
 
