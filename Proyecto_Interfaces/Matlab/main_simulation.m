@@ -211,13 +211,3 @@ if enableChannelClassification && enableVisualization
     bluetoothChannelStats = classificationStatistics(...
         coexistenceViz, centralNode, peripheralNode);
 end
-
-%% -------------------------------------------------------------------------
-%  FIN DEL SCRIPT
-%
-%  PRÓXIMOS PASOS (Fases siguientes):
-%    - enableWLANInterference = false  -> baseline sin interferencia
-%    - enableChannelClassification = false -> con interferencia, sin AFH
-%    - enableWLANInterference = true + enableChannelClassification = true -> con AFH
-%    - Extraer métricas de BER desde peripheralStats.PHY
-% -------------------------------------------------------------------------
