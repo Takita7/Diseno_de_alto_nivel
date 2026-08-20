@@ -108,6 +108,14 @@ fprintf('%-35s %8.2f dB\n',  'SIR total (ambos WLAN):',         SIR_total_dB);
 fprintf('\nSIR negativo indica que la interferencia supera a la señal útil\n');
 fprintf('→ explica el PER de 30%% sin AFH en los canales afectados.\n\n');
 
+% Mínimo Eb/N0 teórico para GFSK BR con BER ≤ 0.1%
+% Referencia: Proakis, Digital Communications, GFSK con BT=0.5
+EbN0_min_dB = 10;       % dB — valor teórico conocido para GFSK BER=0.1%
+EbN0_op_dB  = SNR_dB;   % 53 dB — nuestro SNR operacional
+margen_dB   = EbN0_op_dB - EbN0_min_dB;  % ~43 dB de margen
+
+fprintf('Margen de desempeño: %.1f dB sobre el SNR mínimo para BER = 0.1%%\n', margen_dB);
+
 %% -------------------------------------------------------------------------
 %  FIGURA 1: PLAN DE FRECUENCIAS 2.4 GHz
 %  Muestra el solapamiento entre canales Bluetooth y WLAN
